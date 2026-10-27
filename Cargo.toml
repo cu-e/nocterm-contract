@@ -43,6 +43,7 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 webpki-roots = "1"
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
 zeroize = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]
@@ -61,3 +62,10 @@ too_many_lines = "warn"
 cognitive_complexity = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
+
+# Argon2id at 64 MiB is too slow unoptimized for the key-derivation tests.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

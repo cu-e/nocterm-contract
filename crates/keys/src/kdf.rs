@@ -1,9 +1,6 @@
 use std::fmt;
 use std::str::FromStr;
 
-use argon2::{Algorithm, Argon2, Params, Version};
-use hkdf::Hkdf;
-use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{KeyError, random_bytes};
@@ -28,6 +25,9 @@ pub enum KdfParseError {
     /// Weaker than the minimum the client accepts.
     #[error("KDF parameters are weaker than the minimum (m=65536, t=3, p=4)")]
     TooWeak,
+    /// The salt is shorter than 16 or longer than 64 bytes.
+    #[error("the KDF salt must be 16 to 64 bytes")]
+    BadSalt,
 }
 
 impl KdfParams {
@@ -89,10 +89,7 @@ impl FromStr for KdfParams {
     }
 }
 
-/// The 128-bit secret key that never leaves the user's devices and Emergency Kit.
-///
-/// Combined with the passphrase it makes the unlock key, so a copy of the hub's database
-/// cannot be attacked by guessing passphrases alone.
+/// A 128-bit random secret in the `NK1-…` text form.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SecretKey([u8; 16]);
 
@@ -191,51 +188,6 @@ impl fmt::Debug for SecretKey {
     }
 }
 
-/// Key derived from the passphrase and the secret key; it opens the account key.
-#[derive(Zeroize, ZeroizeOnDrop)]
-pub struct UnlockKey(pub(crate) [u8; 32]);
-
-impl UnlockKey {
-    /// Two-secret key derivation: `Argon2id(passphrase, salt) XOR HKDF(secret key, salt)`.
-    pub fn derive(
-        passphrase: &str,
-        secret_key: &SecretKey,
-        salt: &[u8],
-        params: KdfParams,
-    ) -> Result<Self, KeyError> {
-        let params = params.check()?;
-        let argon = Params::new(
-            params.memory_kib,
-            params.iterations,
-            params.parallelism,
-            Some(32),
-        )
-        .map_err(KeyError::Argon2)?;
-        let mut from_passphrase = Zeroizing::new([0u8; 32]);
-        Argon2::new(Algorithm::Argon2id, Version::V0x13, argon)
-            .hash_password_into(passphrase.as_bytes(), salt, from_passphrase.as_mut())
-            .map_err(KeyError::Argon2)?;
-        let mut from_secret = Zeroizing::new([0u8; 32]);
-        Hkdf::<Sha256>::new(Some(salt), &secret_key.0)
-            .expand(b"nocterm/v1/2skd", from_secret.as_mut())
-            .map_err(KeyError::Expand)?;
-        let mut key = [0u8; 32];
-        for (out, (a, b)) in key
-            .iter_mut()
-            .zip(from_passphrase.iter().zip(from_secret.iter()))
-        {
-            *out = a ^ b;
-        }
-        Ok(Self(key))
-    }
-}
-
-impl fmt::Debug for UnlockKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("UnlockKey(…)")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,17 +217,5 @@ mod tests {
         typo[i] = if typo[i] == 'A' { 'B' } else { 'A' };
         let typo: String = typo.into_iter().collect();
         assert!(SecretKey::parse(&typo).is_err());
-    }
-
-    #[test]
-    fn the_unlock_key_needs_both_secrets() {
-        let secret = SecretKey::parse(&SecretKey([1; 16]).display()).unwrap();
-        let other = SecretKey([2; 16]);
-        let salt = [9u8; 16];
-        let a = UnlockKey::derive("correct horse", &secret, &salt, KdfParams::MINIMUM).unwrap();
-        let b = UnlockKey::derive("correct horse", &other, &salt, KdfParams::MINIMUM).unwrap();
-        let c = UnlockKey::derive("wrong horse", &secret, &salt, KdfParams::MINIMUM).unwrap();
-        assert_ne!(a.0, b.0);
-        assert_ne!(a.0, c.0);
     }
 }

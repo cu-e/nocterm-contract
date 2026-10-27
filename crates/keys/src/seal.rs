@@ -242,11 +242,9 @@ impl fmt::Debug for CollectionKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KdfParams, SecretKey};
 
     fn unlock() -> UnlockKey {
-        let secret = SecretKey::generate().unwrap();
-        UnlockKey::derive("passphrase", &secret, &[3; 16], KdfParams::MINIMUM).unwrap()
+        UnlockKey([3; 32])
     }
 
     #[test]

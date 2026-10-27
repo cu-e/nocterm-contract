@@ -18,11 +18,13 @@
 
 mod device;
 mod kdf;
+mod login;
 mod random;
 mod seal;
 
 pub use device::DeviceKey;
-pub use kdf::{KdfParams, KdfParseError, SecretKey, SecretKeyParseError, UnlockKey};
+pub use kdf::{KdfParams, KdfParseError, SecretKey, SecretKeyParseError};
+pub use login::{LoginError, LoginSecrets, MIN_PASSWORD_CHARS, UnlockKdf, UnlockKey};
 pub use nocterm_hub_model::pop::{SignatureError, verify as verify_signature};
 pub use random::{random_bytes, random_token};
 pub use seal::{AccountKey, CollectionKey, OpenError, SealError};
