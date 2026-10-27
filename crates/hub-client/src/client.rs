@@ -232,7 +232,7 @@ impl HubClient {
         let username = username.to_owned();
         tokio::task::spawn_blocking(move || LoginSecrets::derive(&password, &hub_id, &username))
             .await
-            .map_err(|_| ClientError::DerivationInterrupted)?
+            .map_err(ClientError::DerivationInterrupted)?
             .map_err(ClientError::Login)
     }
 

@@ -42,9 +42,10 @@ pub enum ClientError {
     /// The password or user name cannot be used to derive the login secrets.
     #[error(transparent)]
     Login(LoginError),
-    /// The key derivation was cut short (the runtime shut down or the task failed).
+    /// The key derivation was cut short: the runtime shut down or the task panicked. The
+    /// source tells which.
     #[error("the key derivation was interrupted")]
-    DerivationInterrupted,
+    DerivationInterrupted(#[source] tokio::task::JoinError),
     #[error("sign-in through the identity provider failed")]
     Oidc(#[from] OidcError),
     #[error("terminal link failed")]
@@ -227,5 +228,28 @@ impl LinkError {
                 message: frame.message.clone(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn an_interrupted_derivation_keeps_the_cause_of_the_interruption() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        task.abort();
+        let cause = task.await.unwrap_err();
+        assert!(cause.is_cancelled());
+
+        let err = ClientError::DerivationInterrupted(cause);
+
+        let source = err.source().expect("the join error is the source");
+        let join = source
+            .downcast_ref::<tokio::task::JoinError>()
+            .expect("a join error");
+        assert!(join.is_cancelled());
     }
 }
