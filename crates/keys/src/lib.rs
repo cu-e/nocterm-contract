@@ -31,7 +31,7 @@ mod sealed;
 
 pub use device::DeviceKey;
 pub use kdf::{KdfParams, KdfParseError};
-pub use login::{LoginError, LoginSecrets, MIN_PASSWORD_CHARS, UnlockKdf, UnlockKey};
+pub use login::{LoginError, LoginSecrets, MIN_PASSWORD_CHARS, UnlockKdf, UnlockKey, UnlockSource};
 pub use nocterm_hub_model::pop::{SignatureError, verify as verify_signature};
 pub use random::{random_bytes, random_token};
 pub use recovery::{RecoveryKey, RecoveryKeyParseError};

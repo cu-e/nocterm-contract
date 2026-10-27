@@ -31,7 +31,7 @@ pub mod terminal;
 pub use client::{DeviceInfo, HubClient, Signed, SignedIn};
 pub use connect::{ConnectError, EndpointError, HubEndpoint, Trust, parse_fingerprint};
 pub use error::{ClientError, LinkError, OidcError, StatusCause, StatusCode};
-pub use keyset::{Keyset, KeysetError, NewKeyset};
+pub use keyset::{Keyset, KeysetError, NewKeyset, UnlockMethod};
 pub use probe::{Probe, ProbeError};
 pub use relay::{
     MAX_FRAME, QUEUE_DEPTH, RelayConn, RelayError, RelayReader, RelayTarget, RelayWriter,

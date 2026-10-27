@@ -240,7 +240,7 @@ mod tests {
     fn a_recovery_wrap_does_not_open_as_an_unlock_wrap() {
         let key = RecoveryKey::generate().unwrap();
         let sealed = key.wrap(&account_key(), "acc-1").unwrap();
-        let unlock = crate::UnlockKey([9; 32]);
+        let unlock = crate::UnlockKey([9; 32], crate::UnlockSource::VaultPassword);
         assert_eq!(
             AccountKey::open(&unlock, "acc-1", &sealed).unwrap_err(),
             OpenError::Malformed

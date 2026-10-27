@@ -180,6 +180,7 @@ impl StoreService for Store {
             public_key: r.public_key,
             sealed_private_key: r.sealed_private_key,
             recovery_wrapped_account_key: r.recovery_wrapped_account_key,
+            unlock_kind: r.unlock_kind,
         };
         *slot = Some(stored.clone());
         Ok(Response::new(stored))

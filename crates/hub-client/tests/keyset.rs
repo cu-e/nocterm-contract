@@ -4,7 +4,7 @@
 
 mod support;
 
-use nocterm_hub_client::KeysetError;
+use nocterm_hub_client::{KeysetError, UnlockMethod};
 use nocterm_keys::{CollectionKey, KdfParams, UnlockKdf, UnlockKey};
 use support::FakeHub;
 
@@ -114,5 +114,38 @@ async fn a_grant_is_sealed_to_the_recipient_for_one_collection() {
         alice
             .open_granted_collection_key("col-1", &grants[0].sealed_key)
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn the_stored_keyset_tells_the_client_which_password_to_ask_for() {
+    let hub = FakeHub::start(false).await;
+    let client = hub.signed_in_client().await;
+    assert_eq!(client.unlock_method().await.unwrap(), None);
+
+    let secrets =
+        nocterm_keys::LoginSecrets::derive("correct horse battery", "hub", "alice").unwrap();
+    client
+        .create_keyset("acc-1", secrets.unlock(), secrets.kdf())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        client.unlock_method().await.unwrap(),
+        Some(UnlockMethod::LoginPassword)
+    );
+    // Signing in through SSO afterwards, the client derives a vault key: refused as the wrong
+    // source, not reported as a wrong password.
+    let (vault, _) = unlock("correct horse battery");
+    assert!(matches!(
+        client.open_keyset("acc-1", &vault).await,
+        Err(KeysetError::WrongUnlockSource { .. })
+    ));
+    assert!(
+        client
+            .open_keyset("acc-1", secrets.unlock())
+            .await
+            .unwrap()
+            .is_some()
     );
 }

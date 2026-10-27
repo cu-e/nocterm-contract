@@ -276,7 +276,7 @@ mod tests {
     use super::*;
 
     fn unlock() -> UnlockKey {
-        UnlockKey([3; 32])
+        UnlockKey([3; 32], crate::UnlockSource::VaultPassword)
     }
 
     #[test]

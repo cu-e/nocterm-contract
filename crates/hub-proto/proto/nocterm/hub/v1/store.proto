@@ -37,6 +37,20 @@ service StoreService {
 
 message GetAccountKeysetRequest {}
 
+// Where the unlock key that wraps the account key comes from. The client reads it to choose
+// how to derive the key; a password for the wrong source cannot open the keyset.
+enum UnlockKind {
+  // A keyset written before this field existed; the client cannot tell and reports it.
+  UNLOCK_KIND_UNSPECIFIED = 0;
+  // Derived from the account's login password (`login-v1`): the salt comes from the hub's
+  // identifier and the user name, the parameters are fixed. The client ignores `kdf` and
+  // `salt` of the keyset.
+  UNLOCK_KIND_LOGIN_PASSWORD = 1;
+  // Derived from a separate vault password with the `kdf` and `salt` of the keyset (accounts
+  // that sign in through an identity provider, or that keep a vault password of their own).
+  UNLOCK_KIND_VAULT_PASSWORD = 2;
+}
+
 message AccountKeyset {
   // 0 when the account has no keyset yet.
   uint64 version = 1;
@@ -52,6 +66,8 @@ message AccountKeyset {
   bytes sealed_private_key = 7;
   // The account key sealed by the recovery key.
   bytes recovery_wrapped_account_key = 8;
+  // How the unlock key of `wrapped_account_key` is derived.
+  UnlockKind unlock_kind = 9;
 }
 
 message PutAccountKeysetRequest {
@@ -63,6 +79,8 @@ message PutAccountKeysetRequest {
   bytes public_key = 5;
   bytes sealed_private_key = 6;
   bytes recovery_wrapped_account_key = 7;
+  // How the unlock key of `wrapped_account_key` was derived; the hub stores it as given.
+  UnlockKind unlock_kind = 8;
 }
 
 message Collection {

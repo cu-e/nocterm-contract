@@ -49,24 +49,41 @@ pub enum LoginError {
     Key(#[from] KeyError),
 }
 
+/// Which password an unlock key comes from. A keyset records it, so a client never has to
+/// guess which password and derivation open an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnlockSource {
+    /// The login password, through `login-v1` ([`LoginSecrets`]): fixed parameters and a salt
+    /// bound to the hub and the user name.
+    LoginPassword,
+    /// A separate vault password with the parameters and salt stored in the keyset
+    /// ([`UnlockKey::from_vault_password`]).
+    VaultPassword,
+}
+
 /// How an unlock key is derived: public Argon2id parameters and the salt, as stored in the
-/// account keyset on the hub.
+/// account keyset on the hub, and which password they apply to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockKdf {
+    source: UnlockSource,
     params: KdfParams,
     salt: Vec<u8>,
 }
 
 impl UnlockKdf {
-    /// Parameters and salt read from a keyset; weak or excessive parameters and odd salts are
-    /// refused, so a hostile hub can neither downgrade the derivation nor make the client
-    /// allocate or compute without bound.
+    /// The derivation of a vault password from the parameters and salt of a keyset; weak or
+    /// excessive parameters and odd salts are refused, so a hostile hub can neither downgrade
+    /// the derivation nor make the client allocate or compute without bound.
     pub fn new(params: KdfParams, salt: Vec<u8>) -> Result<Self, KdfParseError> {
         let params = params.check()?;
         if !(MIN_SALT_LEN..=MAX_SALT_LEN).contains(&salt.len()) {
             return Err(KdfParseError::BadSalt);
         }
-        Ok(Self { params, salt })
+        Ok(Self {
+            source: UnlockSource::VaultPassword,
+            params,
+            salt,
+        })
     }
 
     /// The description (`argon2id;m=…;t=…;p=…`) and salt of a keyset as the hub sent them.
@@ -78,6 +95,7 @@ impl UnlockKdf {
     /// through an identity provider and set a password for their vault).
     pub fn random() -> Result<Self, KeyError> {
         Ok(Self {
+            source: UnlockSource::VaultPassword,
             params: KdfParams::MINIMUM,
             salt: random_bytes::<VAULT_SALT_LEN>()?.to_vec(),
         })
@@ -98,9 +116,15 @@ impl UnlockKdf {
             hash.update(part.as_bytes());
         }
         Ok(Self {
+            source: UnlockSource::LoginPassword,
             params: KdfParams::MINIMUM,
             salt: hash.finalize().to_vec(),
         })
+    }
+
+    /// Which password this derivation applies to.
+    pub fn source(&self) -> UnlockSource {
+        self.source
     }
 
     /// The Argon2id parameters.
@@ -153,16 +177,27 @@ fn check_password(password: &str) -> Result<(), LoginError> {
 
 /// The key that opens the account key; it exists only while a vault is unlocked.
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct UnlockKey(pub(crate) [u8; 32]);
+pub struct UnlockKey(
+    pub(crate) [u8; 32],
+    #[zeroize(skip)] pub(crate) UnlockSource,
+);
 
 impl UnlockKey {
+    /// Which password this key was derived from.
+    pub fn source(&self) -> UnlockSource {
+        self.1
+    }
+
     /// The unlock key of a vault password that is not the account's login password.
     ///
     /// Uses its own HKDF label, so it never equals the key a login password would give.
     pub fn from_vault_password(password: &str, kdf: &UnlockKdf) -> Result<Self, LoginError> {
         check_password(password)?;
         let master = kdf.master(password)?;
-        Ok(Self(*expand(&master, VAULT_UNLOCK_INFO)?))
+        Ok(Self(
+            *expand(&master, VAULT_UNLOCK_INFO)?,
+            UnlockSource::VaultPassword,
+        ))
     }
 }
 
@@ -195,7 +230,7 @@ impl LoginSecrets {
         let unlock = expand(&master, UNLOCK_INFO)?;
         Ok(Self {
             auth: Zeroizing::new(hex::encode(&auth[..])),
-            unlock: UnlockKey(*unlock),
+            unlock: UnlockKey(*unlock, UnlockSource::LoginPassword),
             kdf,
         })
     }
@@ -365,6 +400,22 @@ mod tests {
         let debug = format!("{secrets:?} {:?}", secrets.unlock());
         assert!(!debug.contains(secrets.auth()));
         assert!(!debug.contains("e2ac"));
+    }
+
+    #[test]
+    fn a_key_remembers_which_password_it_comes_from() {
+        let login = LoginSecrets::derive(PASSWORD, "hub-0001", "alice").unwrap();
+        assert_eq!(login.unlock().source(), UnlockSource::LoginPassword);
+        assert_eq!(login.kdf().source(), UnlockSource::LoginPassword);
+
+        let kdf = UnlockKdf::new(KdfParams::MINIMUM, vec![3; 16]).unwrap();
+        let vault = UnlockKey::from_vault_password(PASSWORD, &kdf).unwrap();
+        assert_eq!(kdf.source(), UnlockSource::VaultPassword);
+        assert_eq!(vault.source(), UnlockSource::VaultPassword);
+        assert_eq!(
+            UnlockKdf::random().unwrap().source(),
+            UnlockSource::VaultPassword
+        );
     }
 
     #[test]

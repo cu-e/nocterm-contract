@@ -8,7 +8,7 @@
 use nocterm_hub_proto::v1;
 use nocterm_keys::{
     AccountKey, AccountKeyPair, CollectionKey, KdfParseError, KeyError, OpenError, PublicKey,
-    PublicKeyError, RecoveryKey, SealError, UnlockKdf, UnlockKey,
+    PublicKeyError, RecoveryKey, SealError, UnlockKdf, UnlockKey, UnlockSource,
 };
 
 use crate::{ClientError, HubClient, StatusCode};
@@ -23,9 +23,25 @@ pub enum KeysetError {
     /// The account already has a keyset (another device created it first); open that one.
     #[error("the account already has a keyset")]
     AlreadyExists,
-    /// The hub's keyset has no key pair or no recovery key (created by an older version).
+    /// The hub's keyset has no key pair, no recovery key or no record of how its unlock key is
+    /// derived (created by an older version).
     #[error("the keyset on the hub is incomplete")]
     Incomplete,
+    /// The keyset records a way of deriving the unlock key that this client does not know.
+    #[error("the keyset uses an unlock derivation this client does not know ({kind})")]
+    UnsupportedUnlock {
+        /// The value of `unlock_kind` as the hub sent it.
+        kind: i32,
+    },
+    /// The unlock key comes from the other password than the one the keyset records: the
+    /// login password where the vault password is needed, or the reverse.
+    #[error("the keyset needs the {stored:?} but the unlock key comes from the {given:?}")]
+    WrongUnlockSource {
+        /// The source the keyset records.
+        stored: UnlockSource,
+        /// The source of the key that was offered.
+        given: UnlockSource,
+    },
     /// The unlock key does not open the account key: wrong vault password.
     #[error("the unlock key does not open the account key")]
     WrongUnlockKey,
@@ -47,6 +63,53 @@ pub enum KeysetError {
     /// A public key from the hub is not 32 bytes.
     #[error(transparent)]
     PublicKey(#[from] PublicKeyError),
+}
+
+/// How the unlock key of a stored keyset is derived, read from the keyset itself.
+///
+/// The client picks the derivation by this record, never by how the user happened to sign in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnlockMethod {
+    /// From the login password: `LoginSecrets::derive(password, hub_id, username)`. The `kdf`
+    /// and `salt` of the keyset are not used.
+    LoginPassword,
+    /// From a separate vault password: `UnlockKey::from_vault_password(password, &kdf)` with
+    /// the stored parameters and salt, already checked.
+    VaultPassword(UnlockKdf),
+}
+
+impl UnlockMethod {
+    /// The method a keyset records. Errors are [`KeysetError::Incomplete`] for a keyset that
+    /// records none, [`KeysetError::UnsupportedUnlock`] for a value this client does not know,
+    /// and [`KeysetError::Kdf`] for stored parameters it refuses.
+    pub fn of(record: &v1::AccountKeyset) -> Result<Self, KeysetError> {
+        match v1::UnlockKind::try_from(record.unlock_kind) {
+            Ok(v1::UnlockKind::LoginPassword) => Ok(Self::LoginPassword),
+            Ok(v1::UnlockKind::VaultPassword) => Ok(Self::VaultPassword(UnlockKdf::parse(
+                &record.kdf,
+                &record.salt,
+            )?)),
+            Ok(v1::UnlockKind::Unspecified) => Err(KeysetError::Incomplete),
+            Err(_) => Err(KeysetError::UnsupportedUnlock {
+                kind: record.unlock_kind,
+            }),
+        }
+    }
+
+    /// The source an unlock key must come from to open the keyset.
+    pub fn source(&self) -> UnlockSource {
+        match self {
+            Self::LoginPassword => UnlockSource::LoginPassword,
+            Self::VaultPassword(_) => UnlockSource::VaultPassword,
+        }
+    }
+}
+
+fn kind_of(source: UnlockSource) -> v1::UnlockKind {
+    match source {
+        UnlockSource::LoginPassword => v1::UnlockKind::LoginPassword,
+        UnlockSource::VaultPassword => v1::UnlockKind::VaultPassword,
+    }
 }
 
 /// The open keys of an account.
@@ -157,6 +220,12 @@ impl Keyset {
         kdf: &UnlockKdf,
         recovery: &RecoveryKey,
     ) -> Result<v1::PutAccountKeysetRequest, KeysetError> {
+        if unlock.source() != kdf.source() {
+            return Err(KeysetError::WrongUnlockSource {
+                stored: kdf.source(),
+                given: unlock.source(),
+            });
+        }
         Ok(v1::PutAccountKeysetRequest {
             expected_version,
             kdf: kdf.description(),
@@ -165,6 +234,7 @@ impl Keyset {
             public_key: pair.public_key().to_bytes().to_vec(),
             sealed_private_key: pair.seal(account_key, account_id)?,
             recovery_wrapped_account_key: recovery.wrap(account_key, account_id)?,
+            unlock_kind: kind_of(unlock.source()).into(),
         })
     }
 
@@ -193,12 +263,21 @@ impl Keyset {
         })
     }
 
-    /// Opens a keyset with the unlock key derived from the password.
+    /// Opens a keyset with the unlock key derived from the password. The key must come from
+    /// the source the keyset records ([`UnlockMethod::of`]); another source is
+    /// [`KeysetError::WrongUnlockSource`], not a wrong password.
     pub fn open(
         record: &v1::AccountKeyset,
         account_id: &str,
         unlock: &UnlockKey,
     ) -> Result<Self, KeysetError> {
+        let method = UnlockMethod::of(record)?;
+        if method.source() != unlock.source() {
+            return Err(KeysetError::WrongUnlockSource {
+                stored: method.source(),
+                given: unlock.source(),
+            });
+        }
         let account_key = AccountKey::open(unlock, account_id, &record.wrapped_account_key)
             .map_err(|err| match err {
                 OpenError::Rejected => KeysetError::WrongUnlockKey,
@@ -243,6 +322,15 @@ impl HubClient {
                 } => Ok(None),
                 other => Err(other),
             },
+        }
+    }
+
+    /// How the unlock key of the account's keyset is derived; `None` before the first device
+    /// created it. Read it before asking the user for a password.
+    pub async fn unlock_method(&self) -> Result<Option<UnlockMethod>, KeysetError> {
+        match self.keyset_record().await? {
+            Some(record) => UnlockMethod::of(&record).map(Some),
+            None => Ok(None),
         }
     }
 
@@ -346,7 +434,7 @@ impl HubClient {
 
 #[cfg(test)]
 mod tests {
-    use nocterm_keys::KdfParams;
+    use nocterm_keys::{KdfParams, LoginSecrets};
 
     use super::*;
 
@@ -373,6 +461,7 @@ mod tests {
             public_key: request.public_key.clone(),
             sealed_private_key: request.sealed_private_key.clone(),
             recovery_wrapped_account_key: request.recovery_wrapped_account_key.clone(),
+            unlock_kind: request.unlock_kind,
         }
     }
 
@@ -498,6 +587,87 @@ mod tests {
         assert!(matches!(
             owner.keyset.open_own_collection_key("vault", &forged),
             Err(OpenError::Malformed)
+        ));
+    }
+
+    #[test]
+    fn the_keyset_records_which_password_derives_the_unlock_key() {
+        let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
+        assert_eq!(request.unlock_kind, v1::UnlockKind::VaultPassword as i32);
+        assert!(matches!(
+            UnlockMethod::of(&stored(&request, 1)),
+            Ok(UnlockMethod::VaultPassword(found)) if found == kdf()
+        ));
+
+        let login = LoginSecrets::derive("correct horse battery", "hub", "alice").unwrap();
+        let (_, request) = Keyset::build("acc-1", login.unlock(), login.kdf()).unwrap();
+        assert_eq!(request.unlock_kind, v1::UnlockKind::LoginPassword as i32);
+        assert_eq!(
+            UnlockMethod::of(&stored(&request, 1)).unwrap(),
+            UnlockMethod::LoginPassword
+        );
+    }
+
+    #[test]
+    fn a_key_from_the_other_password_is_told_apart_from_a_wrong_password() {
+        let login = LoginSecrets::derive("correct horse battery", "hub", "alice").unwrap();
+        let (_, request) = Keyset::build("acc-1", login.unlock(), login.kdf()).unwrap();
+        let record = stored(&request, 1);
+
+        // An account made with the login password, later signing in through SSO: the client
+        // asks for a vault password and gets a key the keyset was never wrapped with.
+        let err = Keyset::open(&record, "acc-1", &unlock()).unwrap_err();
+        assert!(matches!(
+            err,
+            KeysetError::WrongUnlockSource {
+                stored: UnlockSource::LoginPassword,
+                given: UnlockSource::VaultPassword,
+            }
+        ));
+        assert!(Keyset::open(&record, "acc-1", login.unlock()).is_ok());
+
+        let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
+        let err = Keyset::open(&stored(&request, 1), "acc-1", login.unlock()).unwrap_err();
+        assert!(matches!(
+            err,
+            KeysetError::WrongUnlockSource {
+                stored: UnlockSource::VaultPassword,
+                given: UnlockSource::LoginPassword,
+            }
+        ));
+    }
+
+    #[test]
+    fn a_keyset_must_be_written_with_the_derivation_of_its_unlock_key() {
+        let login = LoginSecrets::derive("correct horse battery", "hub", "alice").unwrap();
+        let err = Keyset::build("acc-1", login.unlock(), &kdf()).unwrap_err();
+        assert!(matches!(err, KeysetError::WrongUnlockSource { .. }));
+    }
+
+    #[test]
+    fn a_keyset_without_or_with_an_unknown_unlock_kind_is_not_guessed() {
+        let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
+        let mut record = stored(&request, 1);
+        record.unlock_kind = v1::UnlockKind::Unspecified.into();
+        assert!(matches!(
+            UnlockMethod::of(&record),
+            Err(KeysetError::Incomplete)
+        ));
+        record.unlock_kind = 99;
+        assert!(matches!(
+            UnlockMethod::of(&record),
+            Err(KeysetError::UnsupportedUnlock { kind: 99 })
+        ));
+    }
+
+    #[test]
+    fn stored_vault_parameters_are_checked_when_the_method_is_read() {
+        let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
+        let mut record = stored(&request, 1);
+        record.kdf = "argon2id;m=4294967295;t=4294967295;p=4".into();
+        assert!(matches!(
+            UnlockMethod::of(&record),
+            Err(KeysetError::Kdf(KdfParseError::TooStrong))
         ));
     }
 }
