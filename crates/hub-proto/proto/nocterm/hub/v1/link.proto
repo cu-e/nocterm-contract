@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+// The Link: one long-lived bidirectional stream per device that multiplexes terminal
+// channels. The same frames travel over gRPC (`LinkService.Open`) and over WebSocket
+// (`/v1/link`, one binary message per frame) for browsers and HTTP/2-hostile proxies.
+//
+// Channels are anchored at the owner of the resource (the node). The hub authenticates,
+// routes and buffers in transit; it never acknowledges output or input on the owner's
+// behalf, so a hub restart loses nothing: the client reopens each channel with its offset.
+service LinkService {
+  rpc Open(stream LinkUp) returns (stream LinkDown);
+}
+
+message LinkUp {
+  oneof frame {
+    LinkHello hello = 1;
+    ChannelOpen open = 2;
+    ChannelInput input = 3;
+    ChannelResize resize = 4;
+    ChannelClose close = 5;
+    Ping ping = 6;
+  }
+}
+
+message LinkDown {
+  oneof frame {
+    LinkReady ready = 1;
+    ChannelOpened opened = 2;
+    ChannelOutput output = 3;
+    ChannelApplied applied = 4;
+    ChannelClosed closed = 5;
+    Pong pong = 6;
+    LinkError error = 7;
+  }
+}
+
+// First frame of every Link. Authenticates the device without relying on HTTP headers.
+message LinkHello {
+  string access_token = 1;
+  string device_id = 2;
+  int64 signed_at_ms = 3;
+  string nonce = 4;
+  // Signature over `pop::request_message(hub_id, "/v1/link", token, nonce, signed_at_ms)`.
+  bytes proof = 5;
+  uint32 protocol_version = 6;
+}
+
+message LinkReady {
+  string link_id = 1;
+  // Interval at which the client should ping.
+  uint32 heartbeat_ms = 2;
+}
+
+message ChannelOpen {
+  // Client-chosen channel number, unique within the Link.
+  uint32 channel = 1;
+  string session_id = 2;
+  // Attachment to continue; empty asks for a new one.
+  string attach_id = 3;
+  // Next output offset the client expects; absent asks for a snapshot.
+  optional uint64 resume_from = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+  // Whether this attachment may type and resize.
+  bool write = 7;
+}
+
+message ChannelOpened {
+  uint32 channel = 1;
+  string attach_id = 2;
+  // Highest input sequence number already applied for this attachment.
+  uint64 last_applied_input_seq = 3;
+  oneof restore {
+    TailRestore tail = 4;
+    SnapshotRestore snapshot = 5;
+  }
+}
+
+// Missed output follows as ordinary output frames starting at `from`.
+message TailRestore {
+  uint64 from = 1;
+}
+
+// The client resets its emulator and feeds `screen`; output continues at `at`.
+// `screen` starts with a full reset (RIS) so it is safe on a dirty emulator, and it must not
+// be recorded or treated as user-visible activity.
+message SnapshotRestore {
+  uint64 at = 1;
+  bytes screen = 2;
+}
+
+message ChannelOutput {
+  uint32 channel = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message ChannelInput {
+  uint32 channel = 1;
+  uint64 seq = 2;
+  bytes data = 3;
+}
+
+message ChannelApplied {
+  uint32 channel = 1;
+  uint64 seq = 2;
+}
+
+message ChannelResize {
+  uint32 channel = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message ChannelClose {
+  uint32 channel = 1;
+}
+
+enum CloseReason {
+  CLOSE_REASON_UNSPECIFIED = 0;
+  // The client closed the channel.
+  CLOSE_REASON_CLIENT = 1;
+  // The session's process exited.
+  CLOSE_REASON_EXITED = 2;
+  // The node lost the session.
+  CLOSE_REASON_LOST = 3;
+  // The node that owns the session disconnected; reopen later.
+  CLOSE_REASON_NODE_OFFLINE = 4;
+  // The client could not keep up; reopen with the last offset.
+  CLOSE_REASON_LAGGING = 5;
+  CLOSE_REASON_FORBIDDEN = 6;
+  CLOSE_REASON_NOT_FOUND = 7;
+  CLOSE_REASON_PROTOCOL = 8;
+}
+
+message ChannelClosed {
+  uint32 channel = 1;
+  CloseReason reason = 2;
+  string message = 3;
+  int32 exit_code = 4;
+}
+
+message Ping {
+  uint64 id = 1;
+}
+
+message Pong {
+  uint64 id = 1;
+}
+
+message LinkError {
+  string code = 1;
+  string message = 2;
+}

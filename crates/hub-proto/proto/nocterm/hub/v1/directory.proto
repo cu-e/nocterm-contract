@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+import "nocterm/hub/v1/common.proto";
+
+// Accounts, devices, organizations and membership. Requires an access token.
+service DirectoryService {
+  rpc WhoAmI(Empty) returns (Me);
+  rpc ListDevices(Empty) returns (DeviceList);
+  // Revokes one of the caller's devices: its tokens stop working and its Links close.
+  rpc RevokeDevice(RevokeDeviceRequest) returns (Empty);
+  rpc CreateOrg(CreateOrgRequest) returns (Org);
+  rpc ListOrgs(Empty) returns (OrgList);
+  rpc ListMembers(OrgRef) returns (MemberList);
+  rpc CreateInvite(CreateInviteRequest) returns (Invite);
+  // Lets an existing account (for example one created by OIDC) join with an invite.
+  rpc AcceptInvite(AcceptInviteRequest) returns (Member);
+  rpc SetMemberRole(SetMemberRoleRequest) returns (Member);
+  rpc RemoveMember(RemoveMemberRequest) returns (Empty);
+}
+
+message Me {
+  string account_id = 1;
+  string username = 2;
+  string display_name = 3;
+  string device_id = 4;
+  repeated Membership memberships = 5;
+}
+
+message Membership {
+  Org org = 1;
+  Role role = 2;
+  // Permissions for rendering only; the hub checks every request itself.
+  repeated string effective_permissions = 3;
+}
+
+message Device {
+  string device_id = 1;
+  string name = 2;
+  string platform = 3;
+  Assurance assurance = 4;
+  int64 created_at_ms = 5;
+  int64 last_seen_at_ms = 6;
+  bool revoked = 7;
+  bool current = 8;
+}
+
+message DeviceList {
+  repeated Device devices = 1;
+}
+
+message RevokeDeviceRequest {
+  string device_id = 1;
+}
+
+message Org {
+  string org_id = 1;
+  string name = 2;
+  int64 created_at_ms = 3;
+}
+
+message OrgList {
+  repeated Org orgs = 1;
+}
+
+message CreateOrgRequest {
+  string name = 1;
+}
+
+message Member {
+  string account_id = 1;
+  string username = 2;
+  string display_name = 3;
+  Role role = 4;
+  int64 joined_at_ms = 5;
+}
+
+message MemberList {
+  repeated Member members = 1;
+}
+
+message CreateInviteRequest {
+  string org_id = 1;
+  Role role = 2;
+  // Lifetime of the invite; the hub caps it.
+  int64 ttl_seconds = 3;
+}
+
+message Invite {
+  string code = 1;
+  string org_id = 2;
+  Role role = 3;
+  int64 expires_at_ms = 4;
+}
+
+message AcceptInviteRequest {
+  string invite_code = 1;
+}
+
+message SetMemberRoleRequest {
+  string org_id = 1;
+  string account_id = 2;
+  Role role = 3;
+}
+
+message RemoveMemberRequest {
+  string org_id = 1;
+  string account_id = 2;
+}

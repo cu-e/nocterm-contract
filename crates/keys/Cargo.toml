@@ -1,0 +1,24 @@
+[package]
+name = "nocterm-keys"
+description = "Client-side keys of the Nocterm hub: device signing keys and end-to-end encryption of collections."
+license = "Apache-2.0 OR MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nocterm-hub-model.workspace = true
+hex.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

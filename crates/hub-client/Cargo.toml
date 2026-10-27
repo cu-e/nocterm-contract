@@ -1,0 +1,33 @@
+[package]
+name = "nocterm-hub-client"
+description = "Client of a Nocterm hub: pinned TLS, signed requests, sign-in and resumable terminals."
+license = "Apache-2.0 OR MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nocterm-hub-grpc.workspace = true
+nocterm-hub-model.workspace = true
+nocterm-hub-proto.workspace = true
+nocterm-keys.workspace = true
+nocterm-link.workspace = true
+base64.workspace = true
+hex.workspace = true
+hyper-util.workspace = true
+rustls.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tower.workspace = true
+tracing.workspace = true
+webpki-roots.workspace = true
+
+[lints]
+workspace = true

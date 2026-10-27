@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+// Shared messages of the Nocterm hub protocol, version 1.
+//
+// Compatibility rules (checked against proto/baseline in CI): never reuse or renumber a
+// field, never change a field's type, add fields and enum values only.
+package nocterm.hub.v1;
+
+message Empty {}
+
+// Role of an account inside an organization.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_GUEST = 1;
+  ROLE_MEMBER = 2;
+  ROLE_ADMIN = 3;
+  ROLE_OWNER = 4;
+}
+
+// How a device protects its keys at rest.
+enum Assurance {
+  ASSURANCE_UNSPECIFIED = 0;
+  ASSURANCE_SOFTWARE = 1;
+  ASSURANCE_HARDWARE = 2;
+}
+
+// Machine-readable reason attached to errors (in the `x-nocterm-error` trailer).
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UPGRADE_REQUIRED = 1;
+  ERROR_CODE_TOKEN_EXPIRED = 2;
+  ERROR_CODE_DEVICE_REVOKED = 3;
+  ERROR_CODE_CONFLICT = 4;
+  ERROR_CODE_NODE_UNAVAILABLE = 5;
+  ERROR_CODE_SESSION_LOST = 6;
+}
+
+message OrgRef {
+  string org_id = 1;
+}

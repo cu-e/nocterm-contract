@@ -1,0 +1,159 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+// End-to-end encrypted collections. The hub stores and versions opaque ciphertext; it never
+// holds a key that opens it. Names of collections are encrypted too.
+//
+// Change feeds: every collection is a stream with a head version. Each accepted write
+// advances the head by exactly one inside the same transaction (no gaps, commit order).
+// `WatchChanges` only hints that a head moved; clients read changes with `ListChanges`.
+service StoreService {
+  // Key material of the calling account, wrapped by a key only the user can derive.
+  rpc GetAccountKeyset(GetAccountKeysetRequest) returns (AccountKeyset);
+  rpc PutAccountKeyset(PutAccountKeysetRequest) returns (AccountKeyset);
+
+  rpc CreateCollection(CreateCollectionRequest) returns (Collection);
+  rpc ListCollections(ListCollectionsRequest) returns (CollectionList);
+  rpc DeleteCollection(DeleteCollectionRequest) returns (Collection);
+  // Collection key wrapped for the calling account.
+  rpc GetCollectionKey(GetCollectionKeyRequest) returns (CollectionKey);
+
+  rpc PutObject(PutObjectRequest) returns (ObjectVersion);
+  rpc DeleteObject(DeleteObjectRequest) returns (ObjectVersion);
+  rpc GetObject(GetObjectRequest) returns (StoredObject);
+  rpc ListChanges(ListChangesRequest) returns (ChangeBatch);
+  rpc WatchChanges(WatchChangesRequest) returns (stream ChangeHint);
+}
+
+message GetAccountKeysetRequest {}
+
+message AccountKeyset {
+  // 0 when the account has no keyset yet.
+  uint64 version = 1;
+  // Public KDF description, for example "argon2id;m=65536;t=3;p=4".
+  string kdf = 2;
+  bytes salt = 3;
+  // Account key wrapped by the user's unlock key (sealed by the client).
+  bytes wrapped_account_key = 4;
+  int64 updated_at_ms = 5;
+}
+
+message PutAccountKeysetRequest {
+  // Version the client last saw; 0 creates the keyset.
+  uint64 expected_version = 1;
+  string kdf = 2;
+  bytes salt = 3;
+  bytes wrapped_account_key = 4;
+}
+
+message Collection {
+  string collection_id = 1;
+  // Empty for personal collections.
+  string org_id = 2;
+  bool personal = 3;
+  // Client-defined type, for example "vault" or "profiles".
+  string kind = 4;
+  bytes sealed_name = 5;
+  uint64 head = 6;
+  int64 created_at_ms = 7;
+  bool deleted = 8;
+}
+
+message CreateCollectionRequest {
+  // Empty creates a personal collection of the caller.
+  string org_id = 1;
+  string kind = 2;
+  bytes sealed_name = 3;
+  // Collection key wrapped for the creator.
+  bytes wrapped_key = 4;
+  // Client-chosen identifier so the client can bind it into encrypted data beforehand.
+  string collection_id = 5;
+}
+
+message ListCollectionsRequest {
+  // Empty lists the caller's personal collections and those of every org they belong to.
+  string org_id = 1;
+  string kind = 2;
+}
+
+message CollectionList {
+  repeated Collection collections = 1;
+}
+
+message DeleteCollectionRequest {
+  string collection_id = 1;
+}
+
+message GetCollectionKeyRequest {
+  string collection_id = 1;
+}
+
+message CollectionKey {
+  string collection_id = 1;
+  uint64 key_version = 2;
+  bytes wrapped_key = 3;
+}
+
+message PutObjectRequest {
+  string collection_id = 1;
+  string object_id = 2;
+  // 0 creates the object; otherwise the current version, or the write fails with CONFLICT.
+  uint64 expected_version = 3;
+  string kind = 4;
+  bytes ciphertext = 5;
+}
+
+message DeleteObjectRequest {
+  string collection_id = 1;
+  string object_id = 2;
+  uint64 expected_version = 3;
+}
+
+message GetObjectRequest {
+  string collection_id = 1;
+  string object_id = 2;
+}
+
+message ObjectVersion {
+  string collection_id = 1;
+  string object_id = 2;
+  uint64 version = 3;
+  // Head of the collection stream after the write.
+  uint64 stream_version = 4;
+}
+
+message StoredObject {
+  string collection_id = 1;
+  string object_id = 2;
+  uint64 version = 3;
+  string kind = 4;
+  // Empty for a deleted object (tombstone).
+  bytes ciphertext = 5;
+  bool deleted = 6;
+  int64 updated_at_ms = 7;
+  string updated_by_device = 8;
+  uint64 stream_version = 9;
+}
+
+message ListChangesRequest {
+  string collection_id = 1;
+  // Stream version the client has; changes after it are returned.
+  uint64 after = 2;
+  uint32 limit = 3;
+}
+
+message ChangeBatch {
+  repeated StoredObject changes = 1;
+  uint64 head = 2;
+  bool more = 3;
+}
+
+message WatchChangesRequest {
+  repeated string collection_ids = 1;
+}
+
+message ChangeHint {
+  string collection_id = 1;
+  uint64 head = 2;
+}

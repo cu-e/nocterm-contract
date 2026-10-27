@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+// Append-only, hash-chained audit log per organization.
+service AuditService {
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (AuditEventList);
+  // Recomputes the chain and reports the first event that does not match.
+  rpc VerifyAuditChain(VerifyAuditChainRequest) returns (AuditChainReport);
+}
+
+message ListAuditEventsRequest {
+  string org_id = 1;
+  // Return events with a sequence number below this one; 0 starts at the newest.
+  uint64 before_seq = 2;
+  uint32 limit = 3;
+}
+
+message AuditEvent {
+  uint64 seq = 1;
+  int64 at_ms = 2;
+  string actor = 3;
+  string action = 4;
+  string target = 5;
+  string detail = 6;
+  bytes hash = 7;
+}
+
+message AuditEventList {
+  repeated AuditEvent events = 1;
+}
+
+message VerifyAuditChainRequest {
+  string org_id = 1;
+}
+
+message AuditChainReport {
+  bool ok = 1;
+  uint64 events_checked = 2;
+  // First sequence number whose hash does not match; 0 when the chain is intact.
+  uint64 first_bad_seq = 3;
+  bytes head_hash = 4;
+}

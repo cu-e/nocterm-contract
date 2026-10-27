@@ -1,0 +1,200 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+import "nocterm/hub/v1/link.proto";
+import "nocterm/hub/v1/sessions.proto";
+
+// Administration of nodes. Requires an access token with the right permission.
+service FleetService {
+  rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (EnrollmentToken);
+  rpc ListNodes(ListNodesRequest) returns (NodeList);
+  rpc RemoveNode(RemoveNodeRequest) returns (NodeInfo);
+}
+
+// Called by nodes. Nodes always connect out to the hub, so they work behind NAT.
+service NodeService {
+  // Redeems a one-time enrollment token and registers the node's Ed25519 identity key.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  // Long-lived control and data stream. The first frame must be `NodeHello`.
+  rpc Connect(stream NodeUp) returns (stream NodeDown);
+}
+
+message CreateEnrollmentTokenRequest {
+  string org_id = 1;
+  string node_name = 2;
+  int64 ttl_seconds = 3;
+}
+
+message EnrollmentToken {
+  string token = 1;
+  string org_id = 2;
+  int64 expires_at_ms = 3;
+}
+
+message ListNodesRequest {
+  string org_id = 1;
+}
+
+message NodeInfo {
+  string node_id = 1;
+  string org_id = 2;
+  string name = 3;
+  bool online = 4;
+  int64 created_at_ms = 5;
+  int64 last_seen_at_ms = 6;
+  string version = 7;
+  string hostname = 8;
+  uint32 sessions = 9;
+  bool removed = 10;
+}
+
+message NodeList {
+  repeated NodeInfo nodes = 1;
+}
+
+message RemoveNodeRequest {
+  string node_id = 1;
+}
+
+message EnrollRequest {
+  string enrollment_token = 1;
+  string name = 2;
+  bytes identity_public_key = 3;
+  // Signature over `pop::enroll_message`.
+  bytes proof = 4;
+}
+
+message EnrollResponse {
+  string node_id = 1;
+  string org_id = 2;
+  string hub_id = 3;
+}
+
+message NodeUp {
+  oneof frame {
+    NodeHello hello = 1;
+    SessionStarted started = 2;
+    SessionExited exited = 3;
+    RouteAttached attached = 4;
+    RouteOutput output = 5;
+    RouteApplied applied = 6;
+    RouteDetached detached = 7;
+    Pong pong = 8;
+  }
+}
+
+message NodeDown {
+  oneof frame {
+    NodeReady ready = 1;
+    StartSession start = 2;
+    StopSession stop = 3;
+    RouteAttach attach = 4;
+    RouteInput input = 5;
+    RouteResize resize = 6;
+    RouteDetach detach = 7;
+    Ping ping = 8;
+  }
+}
+
+message NodeHello {
+  string node_id = 1;
+  int64 signed_at_ms = 2;
+  string nonce = 3;
+  // Signature by the node identity key over `pop::node_message`.
+  bytes proof = 4;
+  string version = 5;
+  string hostname = 6;
+  // Sessions still alive on the node (after a hub restart or reconnect).
+  repeated LiveSession live_sessions = 7;
+}
+
+message LiveSession {
+  string session_id = 1;
+}
+
+message NodeReady {
+  uint32 heartbeat_ms = 1;
+  // Sessions the hub no longer knows (closed while the node was away): the node stops them.
+  repeated string stop_sessions = 2;
+}
+
+message StartSession {
+  uint64 request_id = 1;
+  string session_id = 2;
+  SessionSpec spec = 3;
+  uint32 cols = 4;
+  uint32 rows = 5;
+}
+
+message StopSession {
+  string session_id = 1;
+}
+
+message SessionStarted {
+  uint64 request_id = 1;
+  string session_id = 2;
+  bool ok = 3;
+  string error = 4;
+}
+
+message SessionExited {
+  string session_id = 1;
+  int32 exit_code = 2;
+  string message = 3;
+}
+
+// Routes are hub-chosen numbers for one attachment carried over this node connection.
+message RouteAttach {
+  uint64 route = 1;
+  string session_id = 2;
+  string attach_id = 3;
+  optional uint64 resume_from = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+  bool write = 7;
+}
+
+message RouteAttached {
+  uint64 route = 1;
+  string attach_id = 2;
+  uint64 last_applied_input_seq = 3;
+  oneof restore {
+    TailRestore tail = 4;
+    SnapshotRestore snapshot = 5;
+  }
+}
+
+message RouteInput {
+  uint64 route = 1;
+  uint64 seq = 2;
+  bytes data = 3;
+}
+
+message RouteResize {
+  uint64 route = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message RouteDetach {
+  uint64 route = 1;
+}
+
+message RouteOutput {
+  uint64 route = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message RouteApplied {
+  uint64 route = 1;
+  uint64 seq = 2;
+}
+
+message RouteDetached {
+  uint64 route = 1;
+  CloseReason reason = 2;
+  string message = 3;
+  int32 exit_code = 4;
+}

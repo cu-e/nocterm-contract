@@ -1,0 +1,15 @@
+[package]
+name = "nocterm-link"
+description = "Pure state machines of the Nocterm Link: output rings, resume points and exactly-once input."
+license = "Apache-2.0 OR MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

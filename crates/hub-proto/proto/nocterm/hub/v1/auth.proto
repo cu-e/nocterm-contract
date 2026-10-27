@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+import "nocterm/hub/v1/common.proto";
+
+// Sign-in and device registration. Every method here is callable without an access token.
+//
+// Flow: a login method (password, invite, bootstrap or OIDC) yields a short-lived grant;
+// the device redeems it with `CompleteLogin`, proving possession of its Ed25519 signing key.
+// The hub then binds access and refresh tokens to that key: every later request carries a
+// fresh signature by the same key (see nocterm-hub-model `pop`).
+service AuthService {
+  // Public description of the hub: identity, version and available login methods.
+  rpc GetHubInfo(Empty) returns (HubInfo);
+  // Creates the first owner account and the default organization. Requires the setup token
+  // the hub printed (and wrote to its data directory) on first start. Works once.
+  rpc Bootstrap(BootstrapRequest) returns (LoginGrant);
+  // Local account with password.
+  rpc PasswordLogin(PasswordLoginRequest) returns (LoginGrant);
+  // Creates a local account from an invitation.
+  rpc RedeemInvite(RedeemInviteRequest) returns (LoginGrant);
+  // Starts a federated login: returns the identity provider URL to open in a browser.
+  // The browser returns to the client's loopback `redirect_uri` with a hub code and `iss`.
+  rpc StartOidcLogin(StartOidcLoginRequest) returns (StartOidcLoginResponse);
+  // Redeems a grant and registers (or re-binds) the calling device.
+  rpc CompleteLogin(CompleteLoginRequest) returns (Tokens);
+  // Rotates the refresh token. Reusing a rotated token revokes the device.
+  rpc Refresh(RefreshRequest) returns (Tokens);
+}
+
+message HubInfo {
+  string hub_id = 1;
+  string name = 2;
+  string version = 3;
+  uint32 protocol_version = 4;
+  bool bootstrapped = 5;
+  bool password_login = 6;
+  repeated OidcProvider oidc_providers = 7;
+  // Issuer identifier the client checks in authorization responses (RFC 9207).
+  string issuer = 8;
+}
+
+message OidcProvider {
+  string id = 1;
+  string display_name = 2;
+}
+
+message BootstrapRequest {
+  string setup_token = 1;
+  string username = 2;
+  string password = 3;
+  string display_name = 4;
+  string org_name = 5;
+}
+
+message PasswordLoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message RedeemInviteRequest {
+  string invite_code = 1;
+  string username = 2;
+  string password = 3;
+  string display_name = 4;
+}
+
+// One-time grant, valid for a few minutes, redeemed by `CompleteLogin`.
+message LoginGrant {
+  string grant = 1;
+  int64 expires_at_ms = 2;
+}
+
+message StartOidcLoginRequest {
+  string provider_id = 1;
+  // Loopback redirect of the client, for example http://127.0.0.1:53111/cb/<nonce>.
+  string redirect_uri = 2;
+  // PKCE S256 challenge of the client (RFC 7636).
+  string code_challenge = 3;
+  // Opaque client state echoed back in the redirect.
+  string state = 4;
+}
+
+message StartOidcLoginResponse {
+  string authorize_url = 1;
+  int64 expires_at_ms = 2;
+}
+
+message DeviceRegistration {
+  // Empty registers a new device; otherwise the device must already belong to the account
+  // and keep the same signing key.
+  string device_id = 1;
+  string name = 2;
+  string platform = 3;
+  // Ed25519 public key, 32 bytes.
+  bytes signing_public_key = 4;
+  Assurance assurance = 5;
+}
+
+message OidcCodeGrant {
+  string code = 1;
+  string code_verifier = 2;
+  string redirect_uri = 3;
+}
+
+message CompleteLoginRequest {
+  oneof grant {
+    // Grant from Bootstrap, PasswordLogin or RedeemInvite.
+    string login_grant = 1;
+    OidcCodeGrant oidc = 2;
+  }
+  DeviceRegistration device = 3;
+  // Signature by the device key over `pop::login_message`.
+  bytes proof = 4;
+  int64 signed_at_ms = 5;
+}
+
+message Tokens {
+  string access_token = 1;
+  int64 access_expires_at_ms = 2;
+  string refresh_token = 3;
+  int64 refresh_expires_at_ms = 4;
+  string account_id = 5;
+  string device_id = 6;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+  string device_id = 2;
+  // Signature by the device key over `pop::refresh_message`.
+  bytes proof = 3;
+  int64 signed_at_ms = 4;
+}

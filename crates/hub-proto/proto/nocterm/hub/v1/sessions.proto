@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+// Persistent terminal sessions that run on nodes and outlive client connections.
+service SessionService {
+  rpc CreateSession(CreateSessionRequest) returns (SessionInfo);
+  rpc ListSessions(ListSessionsRequest) returns (SessionList);
+  rpc GetSession(SessionRef) returns (SessionInfo);
+  // Terminates the process on the node.
+  rpc CloseSession(SessionRef) returns (SessionInfo);
+}
+
+message SessionSpec {
+  oneof kind {
+    // The node's login shell (or `program` when set).
+    ShellSpec shell = 1;
+    // An arbitrary program, for example `ssh user@host`.
+    CommandSpec command = 2;
+  }
+  string title = 3;
+  string working_directory = 4;
+  map<string, string> env = 5;
+}
+
+message ShellSpec {
+  string program = 1;
+}
+
+message CommandSpec {
+  string program = 1;
+  repeated string args = 2;
+}
+
+message CreateSessionRequest {
+  string org_id = 1;
+  // Empty lets the hub pick an online node of the organization.
+  string node_id = 2;
+  SessionSpec spec = 3;
+  uint32 cols = 4;
+  uint32 rows = 5;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_STARTING = 1;
+  SESSION_STATE_RUNNING = 2;
+  SESSION_STATE_EXITED = 3;
+  // The node lost the process (for example the node restarted).
+  SESSION_STATE_LOST = 4;
+}
+
+message SessionInfo {
+  string session_id = 1;
+  string org_id = 2;
+  string node_id = 3;
+  string node_name = 4;
+  string owner_account_id = 5;
+  string title = 6;
+  SessionState state = 7;
+  int64 created_at_ms = 8;
+  int64 ended_at_ms = 9;
+  int32 exit_code = 10;
+  // Whether the node that owns the session is connected right now.
+  bool node_online = 11;
+}
+
+message SessionRef {
+  string session_id = 1;
+}
+
+message ListSessionsRequest {
+  string org_id = 1;
+  // Include exited and lost sessions.
+  bool include_ended = 2;
+}
+
+message SessionList {
+  repeated SessionInfo sessions = 1;
+}
