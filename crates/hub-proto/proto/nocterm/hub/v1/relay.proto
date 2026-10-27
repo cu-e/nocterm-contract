@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+import "nocterm/hub/v1/common.proto";
+
+// A byte stream to a TCP endpoint, opened by the hub or by one of its nodes on the caller's
+// behalf. It carries the first hop of an SSH route: the hub sees the target address, when
+// the stream opened and how much it carried, never what is inside. Needs an access token.
+service RelayService {
+  // The first frame of the request stream must be `open`. The hub answers `opened` once the
+  // connection is established, or `closed` with the reason it was refused.
+  //
+  // Data frames carry at most 32 KiB. Each direction ends with its own close frame (a
+  // half-close); a request stream that ends without `close` is an abort.
+  rpc Open(stream RelayUp) returns (stream RelayDown);
+}
+
+message RelayUp {
+  oneof frame {
+    RelayOpen open = 1;
+    // Bytes for the target.
+    bytes data = 2;
+    // The caller sends no more bytes; the target may still answer.
+    RelayClose close = 3;
+  }
+}
+
+message RelayDown {
+  oneof frame {
+    RelayOpened opened = 1;
+    // Bytes from the target.
+    bytes data = 2;
+    // The target (or the hub) ends the stream; nothing follows.
+    RelayClosed closed = 3;
+  }
+}
+
+message RelayOpen {
+  string host = 1;
+  uint32 port = 2;
+  // Node that dials the target from inside its network. Empty: the hub dials.
+  string node = 3;
+}
+
+message RelayClose {}
+
+message RelayOpened {
+  // The address the hub or node connected to, as an IP literal.
+  string peer_ip = 1;
+}
+
+message RelayClosed {
+  // Unspecified for an ordinary end of the stream. Otherwise why it ended: RELAY_DENIED
+  // (the egress policy or the account's rights refuse the target), RELAY_LIMIT (a limit of
+  // the hub is reached), NODE_UNAVAILABLE (the node is offline or refused).
+  ErrorCode code = 1;
+  // Human-readable detail, for display only.
+  string message = 2;
+}

@@ -25,4 +25,9 @@ pub use permission::{Assurance, Permission, Role, RoleParseError};
 ///
 /// A hub accepts clients with the same major version and rejects others with
 /// `UpgradeRequired`.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Version 2: the sign-in secret is derived from the password on the device (the hub no longer
+/// sees the password), the keyset carries a public key, and relays exist. A new service that
+/// leaves every existing message alone does not change the version; a client reads
+/// `UNIMPLEMENTED` from it as "this hub does not offer it".
+pub const PROTOCOL_VERSION: u32 = 2;

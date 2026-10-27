@@ -12,6 +12,7 @@ const FILES: &[&str] = &[
     "nocterm/hub/v1/store.proto",
     "nocterm/hub/v1/sessions.proto",
     "nocterm/hub/v1/link.proto",
+    "nocterm/hub/v1/relay.proto",
     "nocterm/hub/v1/fleet.proto",
     "nocterm/hub/v1/audit.proto",
 ];

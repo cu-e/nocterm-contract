@@ -62,6 +62,7 @@ mod tests {
             "StoreService",
             "SessionService",
             "LinkService",
+            "RelayService",
             "FleetService",
             "NodeService",
             "AuditService",

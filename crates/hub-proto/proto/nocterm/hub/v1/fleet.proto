@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nocterm.hub.v1;
 
+import "nocterm/hub/v1/common.proto";
 import "nocterm/hub/v1/link.proto";
 import "nocterm/hub/v1/sessions.proto";
 
@@ -18,6 +19,11 @@ service NodeService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   // Long-lived control and data stream. The first frame must be `NodeHello`.
   rpc Connect(stream NodeUp) returns (stream NodeDown);
+  // One byte stream to a TCP target, opened by the node after a `tunnel_request`. The
+  // `tunnel_id` of the first frame is an unguessable single-use capability the hub issued
+  // over the authenticated `Connect` stream. Each tunnel is its own HTTP/2 stream, so flow
+  // control is per tunnel. Data frames carry at most 32 KiB.
+  rpc Tunnel(stream TunnelUp) returns (stream TunnelDown);
 }
 
 message CreateEnrollmentTokenRequest {
@@ -94,8 +100,52 @@ message NodeDown {
     RouteResize resize = 6;
     RouteDetach detach = 7;
     Ping ping = 8;
+    // A relay asks the node to dial a target inside its network.
+    TunnelRequest tunnel_request = 9;
   }
 }
+
+message TunnelRequest {
+  string tunnel_id = 1;
+  string host = 2;
+  uint32 port = 3;
+}
+
+message TunnelUp {
+  oneof frame {
+    // First frame: the node connected to the target.
+    TunnelAccept accept = 1;
+    // First frame: the node did not connect (its own egress policy or a network error).
+    TunnelRefuse refuse = 2;
+    // Bytes from the target.
+    bytes data = 3;
+    // The target sends no more bytes.
+    TunnelClose close = 4;
+  }
+}
+
+message TunnelDown {
+  oneof frame {
+    // Bytes for the target.
+    bytes data = 1;
+    // The caller sends no more bytes.
+    TunnelClose close = 2;
+  }
+}
+
+message TunnelAccept {
+  string tunnel_id = 1;
+  // The address the node connected to, as an IP literal.
+  string peer_ip = 2;
+}
+
+message TunnelRefuse {
+  string tunnel_id = 1;
+  ErrorCode code = 2;
+  string message = 3;
+}
+
+message TunnelClose {}
 
 message NodeHello {
   string node_id = 1;

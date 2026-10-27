@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-// Shared messages of the Nocterm hub protocol, version 1.
+// Shared messages of the Nocterm hub protocol (package v1, protocol version 2).
 //
 // Compatibility rules (checked against proto/baseline in CI): never reuse or renumber a
 // field, never change a field's type, add fields and enum values only.
@@ -33,6 +33,10 @@ enum ErrorCode {
   ERROR_CODE_CONFLICT = 4;
   ERROR_CODE_NODE_UNAVAILABLE = 5;
   ERROR_CODE_SESSION_LOST = 6;
+  // The egress policy or the account's rights refuse a relay target.
+  ERROR_CODE_RELAY_DENIED = 7;
+  // A relay limit of the hub (streams per account, rate) is reached.
+  ERROR_CODE_RELAY_LIMIT = 8;
 }
 
 message OrgRef {
