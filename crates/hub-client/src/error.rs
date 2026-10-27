@@ -4,7 +4,7 @@ use std::fmt;
 
 use nocterm_hub_grpc::metadata;
 use nocterm_hub_proto::v1::ErrorCode;
-use nocterm_keys::KeyError;
+use nocterm_keys::{KeyError, LoginError};
 
 use crate::ConnectError;
 
@@ -39,6 +39,12 @@ pub enum ClientError {
     /// The operating system provided no randomness for a nonce.
     #[error("no randomness for a request nonce")]
     Randomness(#[source] KeyError),
+    /// The password or user name cannot be used to derive the login secrets.
+    #[error(transparent)]
+    Login(LoginError),
+    /// The key derivation was cut short (the runtime shut down or the task failed).
+    #[error("the key derivation was interrupted")]
+    DerivationInterrupted,
     #[error("sign-in through the identity provider failed")]
     Oidc(#[from] OidcError),
     #[error("terminal link failed")]
@@ -183,6 +189,18 @@ impl From<tonic::Status> for ClientError {
 }
 
 impl ClientError {
+    /// Whether the hub refused a conditional write because the stored version moved
+    /// ([`ErrorCode::Conflict`]).
+    pub fn is_conflict(&self) -> bool {
+        matches!(
+            self,
+            Self::Status {
+                hub_code: Some(ErrorCode::Conflict),
+                ..
+            }
+        )
+    }
+
     /// The current version of an object after a [`ErrorCode::Conflict`] on a conditional
     /// write, so the caller can pull and retry.
     pub fn conflict_version(&self) -> Option<u64> {

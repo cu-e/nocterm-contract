@@ -13,10 +13,11 @@ use nocterm_hub_grpc::session_service_client::SessionServiceClient;
 use nocterm_hub_grpc::store_service_client::StoreServiceClient;
 use nocterm_hub_model::PROTOCOL_VERSION;
 use nocterm_hub_model::pop::{login_message, refresh_message, request_message};
-use nocterm_hub_proto::v1::{self, complete_login_request};
-use nocterm_keys::DeviceKey;
+use nocterm_hub_proto::v1::{self, LoginGrant, complete_login_request};
+use nocterm_keys::{DeviceKey, LoginSecrets};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
+use zeroize::Zeroizing;
 
 use crate::signer::{Credentials, Session, Signer, now_ms};
 use crate::store::SessionStore;
@@ -57,6 +58,18 @@ impl DeviceInfo {
             (app, device) => format!("{app} on {device}"),
         }
     }
+}
+
+/// A device signed in with a password: its tokens and the secrets derived from the password.
+///
+/// The hub never sees the password, only `secrets.auth()`. Keep `secrets.unlock()` just as
+/// long as the account key must be opened, then drop it.
+#[derive(Debug)]
+pub struct SignedIn {
+    /// Tokens to persist next to the device key.
+    pub session: Session,
+    /// What the password derives on this hub for this user.
+    pub secrets: LoginSecrets,
 }
 
 /// A connection to a hub on behalf of one device key.
@@ -115,7 +128,7 @@ impl HubClient {
         AuthServiceClient::new(self.channel.clone())
     }
 
-    fn signed(&self) -> Signed {
+    pub(crate) fn signed(&self) -> Signed {
         InterceptedService::new(
             self.channel.clone(),
             Signer::new(Arc::clone(&self.credentials)),
@@ -208,50 +221,87 @@ impl HubClient {
         Ok(session)
     }
 
-    /// Creates the hub's first owner with the setup token and signs this device in.
-    pub async fn bootstrap(
+    /// Derives the login secrets of `username` from `password` off the calling thread (the
+    /// derivation takes 64 MiB and a few hundred milliseconds).
+    async fn derive_secrets(
         &self,
-        request: v1::BootstrapRequest,
-        device: &DeviceInfo,
-    ) -> Result<Session, ClientError> {
-        let grant = self.auth().bootstrap(request).await?.into_inner();
-        self.complete_login(
-            complete_login_request::Grant::LoginGrant(grant.grant),
-            device,
-        )
-        .await
+        password: Zeroizing<String>,
+        username: &str,
+    ) -> Result<LoginSecrets, ClientError> {
+        let hub_id = self.info.hub_id.clone();
+        let username = username.to_owned();
+        tokio::task::spawn_blocking(move || LoginSecrets::derive(&password, &hub_id, &username))
+            .await
+            .map_err(|_| ClientError::DerivationInterrupted)?
+            .map_err(ClientError::Login)
     }
 
+    async fn redeem(
+        &self,
+        grant: LoginGrant,
+        secrets: LoginSecrets,
+        device: &DeviceInfo,
+    ) -> Result<SignedIn, ClientError> {
+        let session = self
+            .complete_login(
+                complete_login_request::Grant::LoginGrant(grant.grant),
+                device,
+            )
+            .await?;
+        Ok(SignedIn { session, secrets })
+    }
+
+    /// Creates the hub's first owner with the setup token and signs this device in.
+    ///
+    /// `request.password` is the password the user typed. It is replaced by the derived
+    /// login value before anything is sent, and the user name is trimmed.
+    pub async fn bootstrap(
+        &self,
+        mut request: v1::BootstrapRequest,
+        device: &DeviceInfo,
+    ) -> Result<SignedIn, ClientError> {
+        let password = Zeroizing::new(std::mem::take(&mut request.password));
+        request.username = request.username.trim().to_owned();
+        let secrets = self.derive_secrets(password, &request.username).await?;
+        request.password = secrets.auth().to_owned();
+        let grant = self.auth().bootstrap(request).await?.into_inner();
+        self.redeem(grant, secrets, device).await
+    }
+
+    /// Signs in with the account's password; the hub receives only the derived login value.
     pub async fn password_login(
         &self,
         username: &str,
         password: &str,
         device: &DeviceInfo,
-    ) -> Result<Session, ClientError> {
+    ) -> Result<SignedIn, ClientError> {
+        let username = username.trim();
+        let secrets = self
+            .derive_secrets(Zeroizing::new(password.to_owned()), username)
+            .await?;
         let request = v1::PasswordLoginRequest {
             username: username.to_owned(),
-            password: password.to_owned(),
+            password: secrets.auth().to_owned(),
         };
         let grant = self.auth().password_login(request).await?.into_inner();
-        self.complete_login(
-            complete_login_request::Grant::LoginGrant(grant.grant),
-            device,
-        )
-        .await
+        self.redeem(grant, secrets, device).await
     }
 
     /// Creates a local account from an invite and signs this device in.
+    ///
+    /// `request.password` is the password the user typed; like [`HubClient::bootstrap`], it
+    /// is replaced by the derived login value before anything is sent.
     pub async fn redeem_invite(
         &self,
-        request: v1::RedeemInviteRequest,
+        mut request: v1::RedeemInviteRequest,
         device: &DeviceInfo,
-    ) -> Result<Session, ClientError> {
+    ) -> Result<SignedIn, ClientError> {
+        let password = Zeroizing::new(std::mem::take(&mut request.password));
+        request.username = request.username.trim().to_owned();
+        let secrets = self.derive_secrets(password, &request.username).await?;
+        request.password = secrets.auth().to_owned();
         let grant = self.auth().redeem_invite(request).await?.into_inner();
-        self.complete_login(
-            complete_login_request::Grant::LoginGrant(grant.grant),
-            device,
-        )
-        .await
+        self.redeem(grant, secrets, device).await
     }
 
     /// Keeps the tokens in `store` and rotates them in turn with other processes using it.

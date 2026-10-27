@@ -2,8 +2,10 @@
 //!
 //! Owns: connection setup (certificate pinning, public CAs, plaintext), probing a hub's
 //! certificate before trusting it, device proof of possession on every call,
-//! password/invite/bootstrap and OIDC loopback sign-in, token refresh, a resumable terminal
-//! driver over the Link, and typed errors ([`ClientError`]) for all of them.
+//! password/invite/bootstrap and OIDC loopback sign-in (the password never leaves the device:
+//! the hub gets a value derived from it), token refresh, the account keyset (create, open with
+//! the unlock or the recovery key, grant collection keys), relayed byte streams, a resumable
+//! terminal driver over the Link, and typed errors ([`ClientError`]) for all of them.
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
 //! provide a [`SessionStore`] for tokens), how a device is named (callers pass a
 //! [`DeviceInfo`]), terminal rendering, or vault encryption (`nocterm-keys`).
@@ -18,15 +20,21 @@
 mod client;
 mod connect;
 mod error;
+mod keyset;
 mod oidc;
 mod probe;
+mod relay;
 mod signer;
 mod store;
 pub mod terminal;
 
-pub use client::{DeviceInfo, HubClient, Signed};
+pub use client::{DeviceInfo, HubClient, Signed, SignedIn};
 pub use connect::{ConnectError, EndpointError, HubEndpoint, Trust, parse_fingerprint};
 pub use error::{ClientError, LinkError, OidcError, StatusCause, StatusCode};
+pub use keyset::{Keyset, KeysetError, NewKeyset};
 pub use probe::{Probe, ProbeError};
+pub use relay::{
+    MAX_FRAME, QUEUE_DEPTH, RelayConn, RelayError, RelayReader, RelayTarget, RelayWriter,
+};
 pub use signer::{Session, Signer, now_ms};
 pub use store::SessionStore;

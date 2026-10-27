@@ -28,6 +28,11 @@ tonic.workspace = true
 tower.workspace = true
 tracing.workspace = true
 webpki-roots.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["router"] }
 
 [lints]
 workspace = true
