@@ -42,7 +42,7 @@ The password never leaves the device. Sign-in derives, with Argon2id (64 MiB, 3 
 over a salt bound to the hub and the user name, one master secret and splits it with HKDF-SHA256
 under separate labels:
 
-- `auth`, sent to the hub in place of the password (the hub hashes it once more);
+- `auth`, sent to the hub in place of the password;
 - `unlock`, which stays on the device and opens the account key.
 
 Accounts that sign in through an identity provider derive `unlock` from a separate vault password
