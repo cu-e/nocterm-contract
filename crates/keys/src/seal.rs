@@ -6,18 +6,23 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{KeyError, UnlockKey, random_bytes};
 
-const FORMAT_VERSION: u8 = 1;
-const NONCE_LEN: usize = 24;
+pub(crate) const FORMAT_VERSION: u8 = 1;
+pub(crate) const NONCE_LEN: usize = 24;
 const HEADER_LEN: usize = 2 + NONCE_LEN;
 
 /// What a sealed value is, bound into its associated data and header.
+///
+/// Numbers and labels are part of the stored format: never reuse or change them.
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum Purpose {
+pub(crate) enum Purpose {
     AccountKey = 1,
     CollectionKey = 2,
     CollectionName = 3,
     Object = 4,
+    AccountPrivateKey = 5,
+    RecoveredAccountKey = 6,
+    CollectionGrant = 7,
 }
 
 impl Purpose {
@@ -27,6 +32,9 @@ impl Purpose {
             Purpose::CollectionKey => b"collection-key",
             Purpose::CollectionName => b"collection-name",
             Purpose::Object => b"object",
+            Purpose::AccountPrivateKey => b"account-private-key",
+            Purpose::RecoveredAccountKey => b"recovery-account-key",
+            Purpose::CollectionGrant => b"collection-grant",
         }
     }
 }
@@ -40,6 +48,9 @@ pub enum SealError {
     /// The cipher rejected the input (too large).
     #[error("encryption failed")]
     Encrypt,
+    /// The recipient's public key is not a usable X25519 key (a small-order point).
+    #[error("the recipient's public key is not usable")]
+    UnusableRecipientKey,
 }
 
 /// A sealed value could not be opened.
@@ -53,7 +64,8 @@ pub enum OpenError {
     Rejected,
 }
 
-fn aad(purpose: Purpose, context: &[&str]) -> Vec<u8> {
+/// `nocterm/v1/<purpose>` followed by each context part with a 4-byte length prefix.
+pub(crate) fn aad(purpose: Purpose, context: &[&str]) -> Vec<u8> {
     let mut aad = Vec::with_capacity(64);
     aad.extend_from_slice(b"nocterm/v1/");
     aad.extend_from_slice(purpose.label());
@@ -65,34 +77,65 @@ fn aad(purpose: Purpose, context: &[&str]) -> Vec<u8> {
     aad
 }
 
-fn seal(
+/// Encrypts `plaintext` and authenticates `purpose` and `context` along with it.
+pub(crate) fn encrypt(
     key: &[u8; 32],
     purpose: Purpose,
     context: &[&str],
+    nonce: &[u8; NONCE_LEN],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, SealError> {
-    let nonce_bytes = random_bytes::<NONCE_LEN>()?;
-    let cipher = XChaCha20Poly1305::new(key.into());
     let aad = aad(purpose, context);
-    let nonce = XNonce::from(nonce_bytes);
-    let ciphertext = cipher
+    XChaCha20Poly1305::new(key.into())
         .encrypt(
-            &nonce,
+            &XNonce::from(*nonce),
             Payload {
                 msg: plaintext,
                 aad: &aad,
             },
         )
-        .map_err(|_| SealError::Encrypt)?;
+        .map_err(|_| SealError::Encrypt)
+}
+
+/// Decrypts what [`encrypt`] made; any change to key, nonce, purpose or context is rejected.
+pub(crate) fn decrypt(
+    key: &[u8; 32],
+    purpose: Purpose,
+    context: &[&str],
+    nonce: &[u8; NONCE_LEN],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, OpenError> {
+    let aad = aad(purpose, context);
+    XChaCha20Poly1305::new(key.into())
+        .decrypt(
+            &XNonce::from(*nonce),
+            Payload {
+                msg: ciphertext,
+                aad: &aad,
+            },
+        )
+        .map(Zeroizing::new)
+        .map_err(|_| OpenError::Rejected)
+}
+
+/// `version ‖ purpose ‖ nonce ‖ ciphertext` with a fresh random nonce.
+pub(crate) fn seal(
+    key: &[u8; 32],
+    purpose: Purpose,
+    context: &[&str],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, SealError> {
+    let nonce = random_bytes::<NONCE_LEN>()?;
+    let ciphertext = encrypt(key, purpose, context, &nonce, plaintext)?;
     let mut sealed = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     sealed.push(FORMAT_VERSION);
     sealed.push(purpose as u8);
-    sealed.extend_from_slice(&nonce_bytes);
+    sealed.extend_from_slice(&nonce);
     sealed.extend_from_slice(&ciphertext);
     Ok(sealed)
 }
 
-fn open(
+pub(crate) fn open(
     key: &[u8; 32],
     purpose: Purpose,
     context: &[&str],
@@ -101,21 +144,18 @@ fn open(
     if sealed.len() < HEADER_LEN || sealed[0] != FORMAT_VERSION || sealed[1] != purpose as u8 {
         return Err(OpenError::Malformed);
     }
-    let nonce_bytes: [u8; NONCE_LEN] = sealed[2..HEADER_LEN]
+    let nonce: [u8; NONCE_LEN] = sealed[2..HEADER_LEN]
         .try_into()
         .map_err(|_| OpenError::Malformed)?;
-    let cipher = XChaCha20Poly1305::new(key.into());
-    let aad = aad(purpose, context);
-    cipher
-        .decrypt(
-            &XNonce::from(nonce_bytes),
-            Payload {
-                msg: &sealed[HEADER_LEN..],
-                aad: &aad,
-            },
-        )
-        .map(Zeroizing::new)
-        .map_err(|_| OpenError::Rejected)
+    decrypt(key, purpose, context, &nonce, &sealed[HEADER_LEN..])
+}
+
+/// The purpose byte of a sealed value, for choosing how to open it.
+pub(crate) fn purpose_of(sealed: &[u8]) -> Option<u8> {
+    match sealed {
+        [FORMAT_VERSION, purpose, ..] => Some(*purpose),
+        _ => None,
+    }
 }
 
 fn key_from(bytes: &[u8]) -> Result<[u8; 32], OpenError> {
@@ -124,7 +164,7 @@ fn key_from(bytes: &[u8]) -> Result<[u8; 32], OpenError> {
 
 /// Root key of an account's encrypted data, sealed by the unlock key.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct AccountKey([u8; 32]);
+pub struct AccountKey(pub(crate) [u8; 32]);
 
 impl AccountKey {
     /// A fresh random account key.
@@ -152,7 +192,7 @@ impl fmt::Debug for AccountKey {
 
 /// Key of one collection: it seals the collection's name and objects.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct CollectionKey([u8; 32]);
+pub struct CollectionKey(pub(crate) [u8; 32]);
 
 impl CollectionKey {
     /// A fresh random collection key.
