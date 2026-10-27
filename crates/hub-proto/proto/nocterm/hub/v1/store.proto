@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package nocterm.hub.v1;
 
+import "nocterm/hub/v1/common.proto";
+
 // End-to-end encrypted collections. The hub stores and versions opaque ciphertext; it never
 // holds a key that opens it. Names of collections are encrypted too.
 //
@@ -16,8 +18,15 @@ service StoreService {
   rpc CreateCollection(CreateCollectionRequest) returns (Collection);
   rpc ListCollections(ListCollectionsRequest) returns (CollectionList);
   rpc DeleteCollection(DeleteCollectionRequest) returns (Collection);
-  // Collection key wrapped for the calling account.
+  // Collection key wrapped for the calling account: sealed by the account's own key for the
+  // creator, or sealed to its public key when another account granted it.
   rpc GetCollectionKey(GetCollectionKeyRequest) returns (CollectionKey);
+  // Stores a collection key sealed to another member's public key. Allowed to a holder of the
+  // key who is an admin of the collection's organization; the recipient must be a member.
+  rpc GrantCollectionKey(GrantCollectionKeyRequest) returns (Empty);
+  // Members of the collection's organization (the owner for a personal collection) with the
+  // public key they published and whether they already hold the collection key.
+  rpc ListCollectionMembers(ListCollectionMembersRequest) returns (CollectionMemberList);
 
   rpc PutObject(PutObjectRequest) returns (ObjectVersion);
   rpc DeleteObject(DeleteObjectRequest) returns (ObjectVersion);
@@ -37,6 +46,12 @@ message AccountKeyset {
   // Account key wrapped by the user's unlock key (sealed by the client).
   bytes wrapped_account_key = 4;
   int64 updated_at_ms = 5;
+  // X25519 public key of the account, published so others can grant it collection keys.
+  bytes public_key = 6;
+  // The matching private key, sealed by the account key.
+  bytes sealed_private_key = 7;
+  // The account key sealed by the recovery key.
+  bytes recovery_wrapped_account_key = 8;
 }
 
 message PutAccountKeysetRequest {
@@ -45,6 +60,9 @@ message PutAccountKeysetRequest {
   string kdf = 2;
   bytes salt = 3;
   bytes wrapped_account_key = 4;
+  bytes public_key = 5;
+  bytes sealed_private_key = 6;
+  bytes recovery_wrapped_account_key = 7;
 }
 
 message Collection {
@@ -93,6 +111,34 @@ message CollectionKey {
   string collection_id = 1;
   uint64 key_version = 2;
   bytes wrapped_key = 3;
+}
+
+message GrantCollectionKeyRequest {
+  string collection_id = 1;
+  // The member who receives the key.
+  string account_id = 2;
+  // The collection key sealed to the recipient's public key, bound to this collection and
+  // this account.
+  bytes sealed_key = 3;
+}
+
+message ListCollectionMembersRequest {
+  string collection_id = 1;
+}
+
+message CollectionMember {
+  string account_id = 1;
+  string username = 2;
+  string display_name = 3;
+  Role role = 4;
+  // Empty until the account has created its keyset.
+  bytes public_key = 5;
+  // Whether the account holds a key envelope of this collection.
+  bool has_key = 6;
+}
+
+message CollectionMemberList {
+  repeated CollectionMember members = 1;
 }
 
 message PutObjectRequest {
