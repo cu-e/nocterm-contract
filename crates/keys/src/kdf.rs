@@ -14,6 +14,7 @@ pub struct KdfParams {
 
 /// KDF description that cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum KdfParseError {
     /// Not of the form `argon2id;m=…;t=…;p=…`.
     #[error("malformed KDF description `{0}`")]
@@ -21,6 +22,10 @@ pub enum KdfParseError {
     /// Weaker than the minimum the client accepts.
     #[error("KDF parameters are weaker than the minimum (m=65536, t=3, p=4)")]
     TooWeak,
+    /// Stronger than the maximum the client accepts: a hub could otherwise make the client
+    /// allocate gigabytes or compute for hours.
+    #[error("KDF parameters exceed the maximum (m=1048576, t=16, p=16)")]
+    TooStrong,
     /// The salt is shorter than 16 or longer than 64 bytes.
     #[error("the KDF salt must be 16 to 64 bytes")]
     BadSalt,
@@ -34,14 +39,30 @@ impl KdfParams {
         parallelism: 4,
     };
 
-    /// Rejects parameters weaker than [`KdfParams::MINIMUM`].
+    /// Strongest parameters a client accepts from a hub (1 GiB, 16 passes, 16 lanes). The
+    /// parameters of a keyset are data the hub sends; without an upper bound a hostile hub
+    /// could crash the client with an allocation it cannot satisfy or keep it computing.
+    pub const MAXIMUM: KdfParams = KdfParams {
+        memory_kib: 1024 * 1024,
+        iterations: 16,
+        parallelism: 16,
+    };
+
+    /// Rejects parameters weaker than [`KdfParams::MINIMUM`] or stronger than
+    /// [`KdfParams::MAXIMUM`].
     pub fn check(self) -> Result<Self, KdfParseError> {
-        let min = Self::MINIMUM;
+        let (min, max) = (Self::MINIMUM, Self::MAXIMUM);
         if self.memory_kib < min.memory_kib
             || self.iterations < min.iterations
             || self.parallelism < min.parallelism
         {
             return Err(KdfParseError::TooWeak);
+        }
+        if self.memory_kib > max.memory_kib
+            || self.iterations > max.iterations
+            || self.parallelism > max.parallelism
+        {
+            return Err(KdfParseError::TooStrong);
         }
         Ok(self)
     }
@@ -99,5 +120,27 @@ mod tests {
             Err(KdfParseError::TooWeak)
         );
         assert!("scrypt;m=1;t=1;p=1".parse::<KdfParams>().is_err());
+    }
+
+    #[test]
+    fn parameters_beyond_the_maximum_are_refused_in_every_dimension() {
+        let max = KdfParams::MAXIMUM;
+        assert_eq!(max.check(), Ok(max));
+        for text in [
+            "argon2id;m=4294967295;t=4294967295;p=4",
+            "argon2id;m=1048577;t=3;p=4",
+            "argon2id;m=65536;t=17;p=4",
+            "argon2id;m=65536;t=3;p=17",
+        ] {
+            assert_eq!(
+                text.parse::<KdfParams>(),
+                Err(KdfParseError::TooStrong),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            "argon2id;m=1048576;t=16;p=16".parse::<KdfParams>(),
+            Ok(KdfParams::MAXIMUM)
+        );
     }
 }

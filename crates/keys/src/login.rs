@@ -58,8 +58,9 @@ pub struct UnlockKdf {
 }
 
 impl UnlockKdf {
-    /// Parameters and salt read from a keyset; weak parameters and odd salts are refused, so
-    /// a hostile hub cannot downgrade the derivation.
+    /// Parameters and salt read from a keyset; weak or excessive parameters and odd salts are
+    /// refused, so a hostile hub can neither downgrade the derivation nor make the client
+    /// allocate or compute without bound.
     pub fn new(params: KdfParams, salt: Vec<u8>) -> Result<Self, KdfParseError> {
         let params = params.check()?;
         if !(MIN_SALT_LEN..=MAX_SALT_LEN).contains(&salt.len()) {
@@ -332,6 +333,18 @@ mod tests {
         assert_eq!(
             UnlockKdf::new(weak, vec![0; 16]),
             Err(KdfParseError::TooWeak)
+        );
+        let heavy = KdfParams {
+            memory_kib: u32::MAX,
+            ..KdfParams::MINIMUM
+        };
+        assert_eq!(
+            UnlockKdf::new(heavy, vec![0; 16]),
+            Err(KdfParseError::TooStrong)
+        );
+        assert_eq!(
+            UnlockKdf::parse("argon2id;m=4294967295;t=4294967295;p=4", &[7; 16]),
+            Err(KdfParseError::TooStrong)
         );
         assert_eq!(
             UnlockKdf::new(KdfParams::MINIMUM, vec![0; 15]),

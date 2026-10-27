@@ -11,8 +11,9 @@
 //! - the hub never receives a key that opens user data: only sealed keys and ciphertext;
 //! - every sealed value binds its purpose and owner identifiers as associated data, so a
 //!   ciphertext moved to another object, collection or account fails to open;
-//! - KDF parameters weaker than [`KdfParams::MINIMUM`] are rejected, so a hostile hub cannot
-//!   downgrade them;
+//! - KDF parameters outside [`KdfParams::MINIMUM`]..=[`KdfParams::MAXIMUM`] are rejected, so a
+//!   hostile hub can neither downgrade them nor make the client allocate or compute without
+//!   bound;
 //! - the unlock key and the master key behind it never leave the device: the hub gets only the
 //!   independent `auth` output, and each HKDF output has its own `info` label;
 //! - the recovery key is 128 random bits shown once and used only through HKDF;
