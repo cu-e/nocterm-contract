@@ -112,7 +112,7 @@ async fn a_grant_is_sealed_to_the_recipient_for_one_collection() {
     assert!(CollectionKey::open_from(&bob, "col-2", "bob", &grants[0].sealed_key).is_err());
     assert!(
         alice
-            .open_collection_key("col-1", &grants[0].sealed_key)
+            .open_granted_collection_key("col-1", &grants[0].sealed_key)
             .is_err()
     );
 }

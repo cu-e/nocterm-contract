@@ -150,14 +150,6 @@ pub(crate) fn open(
     decrypt(key, purpose, context, &nonce, &sealed[HEADER_LEN..])
 }
 
-/// The purpose byte of a sealed value, for choosing how to open it.
-pub(crate) fn purpose_of(sealed: &[u8]) -> Option<u8> {
-    match sealed {
-        [FORMAT_VERSION, purpose, ..] => Some(*purpose),
-        _ => None,
-    }
-}
-
 fn key_from(bytes: &[u8]) -> Result<[u8; 32], OpenError> {
     bytes.try_into().map_err(|_| OpenError::Malformed)
 }

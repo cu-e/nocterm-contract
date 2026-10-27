@@ -93,20 +93,31 @@ impl Keyset {
         self.pair.public_key()
     }
 
-    /// Opens the key envelope the hub returned for this account: one it sealed for itself or
-    /// one granted by another member.
-    pub fn open_collection_key(
+    /// Opens the envelope of a collection this account created and sealed for itself
+    /// ([`Keyset::seal_collection_key`]).
+    ///
+    /// Use it for every personal collection (`org_id` empty) and for any collection the
+    /// account itself created. A grant is refused here with [`OpenError::Malformed`]: the hub
+    /// chooses what it returns, and a grant can be made by anyone who knows the public key, so
+    /// accepting one in place of the account's own envelope would let the hub choose the key
+    /// of a personal collection.
+    pub fn open_own_collection_key(
         &self,
         collection_id: &str,
         sealed: &[u8],
     ) -> Result<CollectionKey, OpenError> {
-        CollectionKey::open_envelope(
-            &self.account_key,
-            &self.pair,
-            collection_id,
-            &self.account_id,
-            sealed,
-        )
+        CollectionKey::open(&self.account_key, collection_id, sealed)
+    }
+
+    /// Opens a key another member granted to this account for an organization collection.
+    ///
+    /// An envelope the account sealed for itself is refused with [`OpenError::Malformed`].
+    pub fn open_granted_collection_key(
+        &self,
+        collection_id: &str,
+        sealed: &[u8],
+    ) -> Result<CollectionKey, OpenError> {
+        CollectionKey::open_from(&self.pair, collection_id, &self.account_id, sealed)
     }
 
     /// Seals a collection key this account created, for `CreateCollection`.
@@ -441,20 +452,52 @@ mod tests {
     }
 
     #[test]
-    fn collection_keys_open_whether_created_by_the_account_or_granted_to_it() {
+    fn the_caller_chooses_how_an_envelope_opens_and_a_wrong_kind_is_an_error() {
         let (alice, _) = Keyset::build("alice", &unlock(), &kdf()).unwrap();
         let (bob, _) = Keyset::build("bob", &unlock(), &kdf()).unwrap();
         let key = CollectionKey::generate().unwrap();
 
         let own = alice.keyset.seal_collection_key(&key, "col").unwrap();
-        assert!(alice.keyset.open_collection_key("col", &own).is_ok());
+        assert!(alice.keyset.open_own_collection_key("col", &own).is_ok());
+        assert!(matches!(
+            alice.keyset.open_granted_collection_key("col", &own),
+            Err(OpenError::Malformed)
+        ));
 
         let grant = key.seal_to(&bob.keyset.public_key(), "col", "bob").unwrap();
-        let opened = bob.keyset.open_collection_key("col", &grant).unwrap();
+        let opened = bob
+            .keyset
+            .open_granted_collection_key("col", &grant)
+            .unwrap();
         let name = key.seal_name("col", "Servers").unwrap();
         assert_eq!(opened.open_name("col", &name).unwrap(), "Servers");
 
-        assert!(alice.keyset.open_collection_key("col", &grant).is_err());
-        assert!(bob.keyset.open_collection_key("other", &grant).is_err());
+        assert!(
+            alice
+                .keyset
+                .open_granted_collection_key("col", &grant)
+                .is_err()
+        );
+        assert!(
+            bob.keyset
+                .open_granted_collection_key("other", &grant)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_hub_cannot_put_a_grant_in_place_of_the_owners_own_envelope() {
+        let (owner, _) = Keyset::build("owner", &unlock(), &kdf()).unwrap();
+        let chosen_by_hub = CollectionKey::generate().unwrap();
+        // Anyone who knows the published public key can make this; the hub answers
+        // `GetCollectionKey` of the personal collection `vault` with it.
+        let forged = chosen_by_hub
+            .seal_to(&owner.keyset.public_key(), "vault", "owner")
+            .unwrap();
+
+        assert!(matches!(
+            owner.keyset.open_own_collection_key("vault", &forged),
+            Err(OpenError::Malformed)
+        ));
     }
 }

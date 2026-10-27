@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::{SharedSecret, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::seal::{FORMAT_VERSION, NONCE_LEN, Purpose, decrypt, encrypt, open, purpose_of, seal};
+use crate::seal::{FORMAT_VERSION, NONCE_LEN, Purpose, decrypt, encrypt, open, seal};
 use crate::{AccountKey, CollectionKey, KeyError, OpenError, SealError, random_bytes};
 
 const KEY_LEN: usize = 32;
@@ -214,28 +214,6 @@ impl CollectionKey {
         Ok(sealed)
     }
 
-    /// Opens the key envelope the hub returns for this account: a key the account sealed for
-    /// itself ([`CollectionKey::seal_for`], the creator's) or a grant made to it
-    /// ([`CollectionKey::seal_to`]). The two are told apart by the purpose byte, and anything
-    /// else is [`OpenError::Malformed`].
-    pub fn open_envelope(
-        account: &AccountKey,
-        pair: &AccountKeyPair,
-        collection_id: &str,
-        account_id: &str,
-        sealed: &[u8],
-    ) -> Result<Self, OpenError> {
-        match purpose_of(sealed) {
-            Some(p) if p == Purpose::CollectionKey as u8 => {
-                Self::open(account, collection_id, sealed)
-            }
-            Some(p) if p == Purpose::CollectionGrant as u8 => {
-                Self::open_from(pair, collection_id, account_id, sealed)
-            }
-            _ => Err(OpenError::Malformed),
-        }
-    }
-
     /// Opens a grant made by [`CollectionKey::seal_to`] for this account.
     ///
     /// Fails with [`OpenError::Rejected`] for another recipient's key, another collection or
@@ -410,25 +388,29 @@ mod tests {
     }
 
     #[test]
-    fn an_envelope_is_opened_whether_it_was_sealed_by_the_owner_or_granted() {
+    fn an_own_envelope_and_a_grant_each_open_only_by_their_own_method() {
         let account = AccountKey(seed(1));
         let own = collection().seal_for(&account, "col-1").unwrap();
         let granted = hex::decode(GRANT).unwrap();
-        for sealed in [own, granted] {
-            let key =
-                CollectionKey::open_envelope(&account, &recipient(), "col-1", "acc-2", &sealed)
-                    .unwrap();
-            assert_eq!(key.0, collection().0);
-        }
+
         assert_eq!(
-            CollectionKey::open_envelope(&account, &recipient(), "col-1", "acc-2", b"junk")
-                .unwrap_err(),
+            CollectionKey::open(&account, "col-1", &own).unwrap().0,
+            collection().0
+        );
+        assert_eq!(
+            CollectionKey::open_from(&recipient(), "col-1", "acc-2", &granted)
+                .unwrap()
+                .0,
+            collection().0
+        );
+        // The kind is the caller's choice, not the hub's: a value of the other kind is an
+        // error whatever its purpose byte says.
+        assert_eq!(
+            CollectionKey::open(&account, "col-1", &granted).unwrap_err(),
             OpenError::Malformed
         );
-        let name = collection().seal_name("col-1", "x").unwrap();
         assert_eq!(
-            CollectionKey::open_envelope(&account, &recipient(), "col-1", "acc-2", &name)
-                .unwrap_err(),
+            CollectionKey::open_from(&recipient(), "col-1", "acc-2", &own).unwrap_err(),
             OpenError::Malformed
         );
     }
