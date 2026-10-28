@@ -46,18 +46,50 @@ under separate labels:
 - `unlock`, which stays on the device and opens the account key.
 
 Accounts that sign in through an identity provider derive `unlock` from a separate vault password
-with a random salt. The account key is generated once; it wraps the account's X25519 private key
-and the keys of its collections. A collection key reaches another member sealed to that member's
-public key and bound to the collection and account. A recovery key (shown once, 128 bits) wraps a
-copy of the account key so a forgotten password does not lose the data. All sealed values are
-XChaCha20-Poly1305 with the purpose and context in the authenticated data; secrets are zeroized
-and never printed.
+with a random salt. The keyset records which of the two applies (`unlock_kind`), and the client
+chooses the derivation from that record. The account key is generated once; it wraps the
+account's X25519 private key and the keys of its collections. A recovery key (shown once, 128
+bits) wraps a copy of the account key so a forgotten password does not lose the data. All sealed
+values are XChaCha20-Poly1305 with the purpose and context in the authenticated data; secrets are
+zeroized and never printed. The KDF parameters a hub sends must lie between 64 MiB / 3 passes /
+4 lanes and 1 GiB / 16 passes / 16 lanes.
+
+### What the password protects
+
+The hub sees `auth` in clear on every sign-in and uses it as a verifier. A hub, or anyone who
+reads its database or traffic, can therefore test password guesses offline at the cost of one
+Argon2id run per guess, and a found password yields `unlock`. There is no second stage: against
+the hub, the vault is exactly as strong as the password. Use a long password or passphrase; the
+minimum length only catches mistakes. The recovery key does not depend on the password. The
+hub identifier is reported by the hub itself, so the separation between hubs holds for honest
+hubs only.
+
+### Collection keys and trust in other accounts
+
+A personal collection is sealed by the account's own key; a hub cannot substitute it, and the
+client opens it only with `Keyset::open_own_collection_key`. An organization collection reaches
+a member as a grant: an authenticated box from the granter's static X25519 key and a fresh
+ephemeral key to the recipient's public key, with the collection, the recipient and the
+granter's key fingerprint in the authenticated data. A grant opens only under the key of the
+granter the recipient expects, so the hub cannot make one, and it cannot move one to another
+collection or recipient. A grant is not a signature: only the recipient can check it.
+
+Which key belongs to which account is decided by the client: trust on first use with a
+fingerprint. The first time a key is met, a person compares its full fingerprint out of band and
+the client pins it (`PinnedKeys`); a different key for the account afterwards is an error.
+A hub that substitutes a key when it is first met, and is not noticed, controls that account's
+grants from then on, so confirm the fingerprint. After the first pin the hub cannot swap the
+key, neither of a granter nor of a recipient: `HubClient::grant` and
+`Keyset::open_granted_collection_key` accept only a pinned `TrustedKey`.
 
 ## Relays
 
 `RelayService.Open` carries a byte stream from the client to a TCP target through the hub, and
 `NodeService.Tunnel` carries it from the hub to a fleet node. Frames are at most 32 KiB and each
 stream is buffered by 16 frames, so a slow reader slows its writer instead of growing memory.
+The caller's `close` is a half-close; the hub's `closed` ends the whole relay, and the writer
+then refuses to send. Empty data frames are never sent and are skipped when received, so the end
+of the bytes is always explicit.
 
 ## Development
 

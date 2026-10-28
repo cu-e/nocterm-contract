@@ -16,7 +16,9 @@
 //!   hostile hub can neither downgrade them nor make the client allocate or compute without
 //!   bound;
 //! - the unlock key and the master key behind it never leave the device: the hub gets only the
-//!   independent `auth` output, and each HKDF output has its own `info` label;
+//!   independent `auth` output, and each HKDF output has its own `info` label. `auth` still lets
+//!   the hub test password guesses offline, so the unlock key is as strong against the hub as
+//!   the password is: see [`LoginSecrets`];
 //! - a grant opens only under the public key of the account that made it, and that key is one the
 //!   client pinned: the hub can swap a key only before the first pin;
 //! - the recovery key is 128 random bits shown once and used only through HKDF;

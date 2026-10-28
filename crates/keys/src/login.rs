@@ -7,10 +7,25 @@
 //! unlock = HKDF-SHA256(ikm = master, info = "nocterm-login-v1/unlock")        // opens the account key
 //! ```
 //!
-//! The hub hashes `auth` as if it were the password, so it can verify a sign-in but cannot
-//! derive `unlock` from it: the two outputs of HKDF are independent and `master` never leaves
-//! the device. The parameters are fixed by the `login-v1` label; raising them needs a
-//! `login-v2` label and a way for the client to learn it before signing in.
+//! What this does and does not protect:
+//!
+//! - The hub never sees the password or `master`. `auth` and `unlock` are independent HKDF
+//!   outputs, so `auth` does not reveal `unlock`.
+//! - `auth` is a verifier for `master`. The hub receives it in clear on every sign-in, so a
+//!   hub (or anyone who reads its database or traffic) can test password guesses offline at the
+//!   price of one Argon2id run (64 MiB, 3 passes) per guess, and a found password gives
+//!   `unlock`. There is no second derivation stage: against the hub, `unlock` is exactly as
+//!   strong as the password. Use a long password or passphrase; the 8 characters of
+//!   [`MIN_PASSWORD_CHARS`] stop mistakes, not a determined hub. The recovery key
+//!   ([`crate::RecoveryKey`]) is independent of the password and is the stronger way back in.
+//! - `auth` passes through buffers this crate cannot wipe (the request message and the
+//!   transport); it is zeroized only where this crate holds it.
+//! - `hub_id` is what the hub reports about itself. A different hub gives unrelated secrets
+//!   only if it reports a different identifier; a hostile hub can claim another's, so the
+//!   separation holds against honest hubs, not against a hub that copies an identifier.
+//!
+//! The parameters are fixed by the `login-v1` label; raising them needs a `login-v2` label and
+//! a way for the client to learn it before signing in.
 
 use std::fmt;
 
