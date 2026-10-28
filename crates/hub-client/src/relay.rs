@@ -5,9 +5,16 @@
 //! to be sent, and a slow reader stops the hub through the HTTP/2 window, so neither side
 //! buffers without limit. Dropping a [`RelayWriter`] without [`RelayWriter::finish`] aborts
 //! the stream; `finish` is the half-close that lets the target answer.
+//!
+//! The end of the bytes is explicit: an empty frame is never sent and is skipped when
+//! received, so a chunk of zero bytes never reads as end-of-file. The hub's `closed` ends the
+//! whole relay; once the reader has seen it, the writer refuses to send
+//! ([`RelayError::AlreadyClosed`]).
 
 use std::net::IpAddr;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use nocterm_hub_grpc::relay_service_client::RelayServiceClient;
@@ -62,6 +69,10 @@ pub enum RelayError {
     /// The stream ended without a `closed` frame, or the writer lost its stream.
     #[error("the relay stream ended unexpectedly")]
     Interrupted,
+    /// The relay has ended (the hub sent `closed` or the stream failed): nothing more can be
+    /// written, and bytes sent after the end would be lost.
+    #[error("the relay has ended; nothing more can be sent")]
+    AlreadyClosed,
 }
 
 impl From<ClientError> for RelayError {
@@ -103,17 +114,32 @@ impl RelayConn {
 }
 
 /// The sending half of a relay.
+///
+/// Writing takes `&mut self` and the half is neither `Clone` nor shareable behind `&`, so the
+/// frames of two writes can never be interleaved in the byte stream. To write from several
+/// tasks, put one task in front of the writer and send it the buffers through a channel.
 #[derive(Debug)]
 pub struct RelayWriter {
     up: mpsc::Sender<v1::RelayUp>,
+    ended: Arc<AtomicBool>,
 }
 
 impl RelayWriter {
+    fn new(up: mpsc::Sender<v1::RelayUp>, ended: Arc<AtomicBool>) -> Self {
+        Self { up, ended }
+    }
+
     /// Queues `data` for the target, split into frames of at most [`MAX_FRAME`] bytes. Waits
     /// while [`QUEUE_DEPTH`] frames are already waiting, which is how a slow target slows the
-    /// sender down.
-    pub async fn send(&self, data: &[u8]) -> Result<(), RelayError> {
+    /// sender down. Empty `data` sends nothing.
+    ///
+    /// If the future is dropped before it completes, an unknown prefix of `data` was queued:
+    /// treat the stream as broken (drop the writer to abort it).
+    pub async fn send(&mut self, data: &[u8]) -> Result<(), RelayError> {
         for chunk in data.chunks(MAX_FRAME) {
+            if self.ended.load(Ordering::Acquire) {
+                return Err(RelayError::AlreadyClosed);
+            }
             self.up
                 .send(frame(relay_up::Frame::Data(chunk.to_vec())))
                 .await
@@ -122,8 +148,12 @@ impl RelayWriter {
         Ok(())
     }
 
-    /// Half-closes: the target receives end-of-file but may still answer.
+    /// Half-closes: the target receives end-of-file but may still answer. After the relay has
+    /// ended there is nothing to close and this does nothing.
     pub async fn finish(self) -> Result<(), RelayError> {
+        if self.ended.load(Ordering::Acquire) {
+            return Ok(());
+        }
         self.up
             .send(frame(relay_up::Frame::Close(v1::RelayClose {})))
             .await
@@ -131,18 +161,25 @@ impl RelayWriter {
     }
 }
 
-/// The receiving half of a relay: a stream of byte chunks that ends with `None` when the
-/// target closed cleanly.
+/// The receiving half of a relay: a stream of non-empty byte chunks that ends with `None` when
+/// the target closed cleanly.
 #[derive(Debug)]
 pub struct RelayReader {
     down: Streaming<v1::RelayDown>,
     done: bool,
+    ended: Arc<AtomicBool>,
 }
 
 impl RelayReader {
-    /// The next chunk from the target; `Ok(None)` after a clean close.
+    /// The next chunk from the target; `Ok(None)` after a clean close. A chunk is never empty.
     pub async fn recv(&mut self) -> Result<Option<Vec<u8>>, RelayError> {
         tokio_stream::StreamExt::next(self).await.transpose()
+    }
+
+    /// The relay is over; tell the writer.
+    fn end(&mut self) {
+        self.done = true;
+        self.ended.store(true, Ordering::Release);
     }
 }
 
@@ -150,27 +187,41 @@ impl Stream for RelayReader {
     type Item = Result<Vec<u8>, RelayError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-        let item = match Pin::new(&mut self.down).poll_next(cx) {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(item) => item,
-        };
-        self.done = true;
-        match item {
-            Some(Ok(v1::RelayDown {
-                frame: Some(relay_down::Frame::Data(data)),
-            })) => {
-                self.done = false;
-                Poll::Ready(Some(Ok(data)))
+        loop {
+            if self.done {
+                return Poll::Ready(None);
             }
-            Some(Ok(v1::RelayDown {
-                frame: Some(relay_down::Frame::Closed(closed)),
-            })) => Poll::Ready(closed_error(&closed).map(Err)),
-            Some(Ok(_)) => Poll::Ready(Some(Err(RelayError::UnexpectedFrame))),
-            Some(Err(status)) => Poll::Ready(Some(Err(status.into()))),
-            None => Poll::Ready(Some(Err(RelayError::Interrupted))),
+            let item = match Pin::new(&mut self.down).poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(item) => item,
+            };
+            return match item {
+                // An empty frame is not the end of the stream: skip it.
+                Some(Ok(v1::RelayDown {
+                    frame: Some(relay_down::Frame::Data(data)),
+                })) if data.is_empty() => continue,
+                Some(Ok(v1::RelayDown {
+                    frame: Some(relay_down::Frame::Data(data)),
+                })) => Poll::Ready(Some(Ok(data))),
+                Some(Ok(v1::RelayDown {
+                    frame: Some(relay_down::Frame::Closed(closed)),
+                })) => {
+                    self.end();
+                    Poll::Ready(closed_error(&closed).map(Err))
+                }
+                Some(Ok(_)) => {
+                    self.end();
+                    Poll::Ready(Some(Err(RelayError::UnexpectedFrame)))
+                }
+                Some(Err(status)) => {
+                    self.end();
+                    Poll::Ready(Some(Err(status.into())))
+                }
+                None => {
+                    self.end();
+                    Poll::Ready(Some(Err(RelayError::Interrupted)))
+                }
+            };
         }
     }
 }
@@ -222,10 +273,75 @@ impl HubClient {
             Some(_) => return Err(RelayError::UnexpectedFrame),
             None => return Err(RelayError::Interrupted),
         };
+        let ended = Arc::new(AtomicBool::new(false));
         Ok(RelayConn {
             peer_ip,
-            writer: RelayWriter { up },
-            reader: RelayReader { down, done: false },
+            writer: RelayWriter::new(up, Arc::clone(&ended)),
+            reader: RelayReader {
+                down,
+                done: false,
+                ended,
+            },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn writer() -> (RelayWriter, mpsc::Receiver<v1::RelayUp>) {
+        let (up, rx) = mpsc::channel(QUEUE_DEPTH);
+        (RelayWriter::new(up, Arc::default()), rx)
+    }
+
+    #[tokio::test]
+    async fn the_send_queue_is_bounded_and_resumes_when_the_hub_reads() {
+        let (mut writer, mut hub) = writer();
+        writer
+            .send(&vec![1; QUEUE_DEPTH * MAX_FRAME])
+            .await
+            .expect("a full queue of frames fits");
+
+        let blocked = tokio::time::timeout(Duration::from_millis(100), writer.send(b"x")).await;
+        assert!(blocked.is_err(), "the 17th frame must wait for the reader");
+
+        assert!(hub.recv().await.is_some());
+        tokio::time::timeout(Duration::from_secs(5), writer.send(b"x"))
+            .await
+            .expect("room again")
+            .expect("sent");
+    }
+
+    #[tokio::test]
+    async fn dropping_the_writer_ends_the_stream_without_a_close_frame() {
+        let (mut writer, mut hub) = writer();
+        writer.send(b"partial").await.expect("sent");
+        drop(writer);
+
+        assert!(matches!(
+            hub.recv().await,
+            Some(v1::RelayUp {
+                frame: Some(relay_up::Frame::Data(_))
+            })
+        ));
+        assert!(hub.recv().await.is_none(), "no close frame, only the end");
+    }
+
+    #[tokio::test]
+    async fn finishing_sends_the_close_frame_and_empty_writes_send_nothing() {
+        let (mut writer, mut hub) = writer();
+        writer.send(b"").await.expect("nothing to send");
+        writer.finish().await.expect("closed");
+
+        assert!(matches!(
+            hub.recv().await,
+            Some(v1::RelayUp {
+                frame: Some(relay_up::Frame::Close(_))
+            })
+        ));
+        assert!(hub.recv().await.is_none());
     }
 }

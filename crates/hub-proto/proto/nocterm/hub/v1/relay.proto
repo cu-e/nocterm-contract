@@ -11,17 +11,27 @@ service RelayService {
   // The first frame of the request stream must be `open`. The hub answers `opened` once the
   // connection is established, or `closed` with the reason it was refused.
   //
-  // Data frames carry at most 32 KiB. Each direction ends with its own close frame (a
-  // half-close); a request stream that ends without `close` is an abort.
+  // Data frames carry 1 to 32 KiB. An empty `data` frame is not sent and is ignored when
+  // received: the end of the bytes is only ever `close` or `closed`, never a short read.
+  //
+  // The two directions end differently:
+  //   * The caller's `close` is a half-close. The target receives end-of-file and may still
+  //     answer; the relay lives on until `closed`. A request stream that ends without `close`
+  //     is an abort: the hub drops the connection to the target.
+  //   * `closed` from the hub ends the whole relay, whether the target closed its side
+  //     (code unspecified) or the relay failed (any other code). Nothing follows it and the
+  //     hub discards any `data` or `close` that arrives afterwards, so a caller that has seen
+  //     `closed` stops writing. A target that closes only its own direction while the caller
+  //     may still write is not representable: it ends the relay.
   rpc Open(stream RelayUp) returns (stream RelayDown);
 }
 
 message RelayUp {
   oneof frame {
     RelayOpen open = 1;
-    // Bytes for the target.
+    // Bytes for the target; never empty.
     bytes data = 2;
-    // The caller sends no more bytes; the target may still answer.
+    // The caller sends no more bytes (half-close); the target may still answer until `closed`.
     RelayClose close = 3;
   }
 }
@@ -29,9 +39,9 @@ message RelayUp {
 message RelayDown {
   oneof frame {
     RelayOpened opened = 1;
-    // Bytes from the target.
+    // Bytes from the target; never empty (an empty frame is ignored by the receiver).
     bytes data = 2;
-    // The target (or the hub) ends the stream; nothing follows.
+    // Ends the whole relay, in both directions; nothing follows.
     RelayClosed closed = 3;
   }
 }

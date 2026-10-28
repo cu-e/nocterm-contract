@@ -16,7 +16,7 @@ use nocterm_hub_model::PROTOCOL_VERSION;
 use nocterm_hub_proto::v1::{self, ErrorCode, relay_down, relay_up};
 use nocterm_keys::DeviceKey;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::Server;
@@ -40,6 +40,20 @@ pub struct Seen {
     pub grants: Mutex<Vec<v1::GrantCollectionKeyRequest>>,
     /// Sizes of the data frames the relay received, in order.
     pub relayed_frame_sizes: Mutex<Vec<usize>>,
+    /// The `open` frames of relays, in order.
+    pub relay_opens: Mutex<Vec<v1::RelayOpen>>,
+    /// How each relay's request stream ended, in order.
+    pub relay_ends: Mutex<Vec<RelayEnd>>,
+    relay_ended: Notify,
+}
+
+/// How the caller ended a relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayEnd {
+    /// With a `close` frame: a half-close.
+    Closed,
+    /// The request stream ended without `close`: an abort.
+    Aborted,
 }
 
 impl Seen {
@@ -60,6 +74,28 @@ impl Seen {
     }
     pub fn relayed_frame_sizes(&self) -> Vec<usize> {
         lock(&self.relayed_frame_sizes).clone()
+    }
+    pub fn relay_opens(&self) -> Vec<v1::RelayOpen> {
+        lock(&self.relay_opens).clone()
+    }
+
+    /// Waits for the first relay to end and says how.
+    pub async fn first_relay_end(&self) -> RelayEnd {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(end) = lock(&self.relay_ends).first().copied() {
+                    return end;
+                }
+                self.relay_ended.notified().await;
+            }
+        })
+        .await
+        .expect("the relay ended")
+    }
+
+    fn relay_ended(&self, end: RelayEnd) {
+        lock(&self.relay_ends).push(end);
+        self.relay_ended.notify_one();
     }
 }
 
@@ -244,13 +280,23 @@ impl StoreService for Store {
     }
 }
 
-/// Echoes data back. A target named `denied.test` is refused with `RELAY_DENIED`; after the
-/// caller half-closes, the target says `bye` and ends the stream.
+/// Echoes data back. Targets by name: `denied.test` is refused with `RELAY_DENIED`;
+/// `stall.test` is opened and then never read; `empty.test` answers with empty data frames
+/// around `x` and closes; `hangup.test` is opened and closed at once. After the caller
+/// half-closes an echo target, it says `bye` and ends the stream.
 struct Relay(Arc<Seen>);
 
 #[allow(clippy::unnecessary_wraps)]
 fn down(frame: relay_down::Frame) -> Result<v1::RelayDown, Status> {
     Ok(v1::RelayDown { frame: Some(frame) })
+}
+
+fn data(bytes: &[u8]) -> Result<v1::RelayDown, Status> {
+    down(relay_down::Frame::Data(bytes.to_vec()))
+}
+
+fn closed() -> Result<v1::RelayDown, Status> {
+    down(relay_down::Frame::Closed(v1::RelayClosed::default()))
 }
 
 #[tonic::async_trait]
@@ -265,6 +311,7 @@ impl RelayService for Relay {
         else {
             return Err(Status::invalid_argument("the first frame must be open"));
         };
+        lock(&self.0.relay_opens).push(open.clone());
         let (tx, rx) = mpsc::channel(16);
         let seen = Arc::clone(&self.0);
         tokio::spawn(async move {
@@ -281,23 +328,36 @@ impl RelayService for Relay {
                 peer_ip: "192.0.2.7".into(),
             };
             let _ = tx.send(down(relay_down::Frame::Opened(opened))).await;
+            match open.host.as_str() {
+                "stall.test" => std::future::pending::<()>().await,
+                "empty.test" => {
+                    for frame in [data(b""), data(b"x"), data(b""), closed()] {
+                        let _ = tx.send(frame).await;
+                    }
+                    return;
+                }
+                "hangup.test" => {
+                    let _ = tx.send(closed()).await;
+                    return;
+                }
+                _ => {}
+            }
             while let Some(Ok(frame)) = up.next().await {
                 match frame.frame {
-                    Some(relay_up::Frame::Data(data)) => {
-                        lock(&seen.relayed_frame_sizes).push(data.len());
-                        let _ = tx.send(down(relay_down::Frame::Data(data))).await;
+                    Some(relay_up::Frame::Data(bytes)) => {
+                        lock(&seen.relayed_frame_sizes).push(bytes.len());
+                        let _ = tx.send(data(&bytes)).await;
                     }
                     Some(relay_up::Frame::Close(_)) => {
-                        let _ = tx
-                            .send(down(relay_down::Frame::Data(b"bye".to_vec())))
-                            .await;
-                        let closed = relay_down::Frame::Closed(v1::RelayClosed::default());
-                        let _ = tx.send(down(closed)).await;
+                        seen.relay_ended(RelayEnd::Closed);
+                        let _ = tx.send(data(b"bye")).await;
+                        let _ = tx.send(closed()).await;
                         return;
                     }
                     _ => {}
                 }
             }
+            seen.relay_ended(RelayEnd::Aborted);
         });
         Ok(Response::new(ReceiverStream::new(rx)))
     }
