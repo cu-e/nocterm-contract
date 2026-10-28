@@ -187,6 +187,16 @@ mod tests {
         assert!(RecoveryKey::parse(&typo).is_err());
     }
 
+    /// The text form is what users print and type back years later: its alphabet, bit order
+    /// and check digit must never change. Computed independently (Python, Crockford base32 of
+    /// the key padded with two zero bits, weighted check digit).
+    #[test]
+    fn the_text_form_matches_the_fixed_vector() {
+        assert_eq!(*fixed().display(), "NK1-000G4-0R40M-30E20-9185G-R38E1-W8");
+        let parsed = RecoveryKey::parse("nk1 000g4 0r40m 30e20 9185g r38e1 w8").unwrap();
+        assert_eq!(parsed.0, fixed().0);
+    }
+
     #[test]
     fn the_text_form_is_stable_and_strict() {
         let text = fixed().display();
