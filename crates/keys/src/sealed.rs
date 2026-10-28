@@ -1,20 +1,28 @@
 //! Keys sealed to a public key: the X25519 pair of an account and collection key grants.
 //!
-//! A grant hands a collection key to another account without the hub being able to read it
-//! or move it. The sender needs only the recipient's public key:
+//! A grant hands a collection key to another account without the hub being able to read it,
+//! move it or make one. It is an authenticated box from the granter's static X25519 pair and
+//! a fresh ephemeral pair to the recipient's public key:
 //!
 //! ```text
-//! shared = X25519(ephemeral secret, recipient public key)       // rejected if non-contributory
-//! key    = HKDF-SHA256(salt = ephemeral public ‖ recipient public, ikm = shared,
-//!                      info = "nocterm-grant-v1/key")
+//! dh1    = X25519(ephemeral secret, recipient public key)       // rejected if non-contributory
+//! dh2    = X25519(sender secret, recipient public key)          // rejected if non-contributory
+//! key    = HKDF-SHA256(salt = ephemeral public ‖ sender public ‖ recipient public,
+//!                      ikm = dh1 ‖ dh2, info = "nocterm-grant-v1/auth")
 //! sealed = 0x01 ‖ 0x07 ‖ ephemeral public ‖ nonce(24) ‖ XChaCha20-Poly1305(key, nonce,
-//!          aad = "nocterm/v1/collection-grant" ‖ lp(collection id) ‖ lp(recipient account id))
+//!          aad = "nocterm/v1/collection-grant" ‖ lp(collection id) ‖ lp(recipient account id)
+//!                ‖ lp(sender fingerprint))
 //! ```
 //!
-//! The associated data binds the collection and the recipient account, so a hub cannot
-//! present a grant for one collection as another or hand it to someone else. A sealed box
-//! is anonymous: it proves nothing about the sender, so who may grant is decided by the hub's
-//! access rules and by the fingerprint a person confirms before granting.
+//! Opening needs the sender's public key (`dh2`), and the fingerprint of that key is in the
+//! associated data. A recipient therefore opens a grant only if it names the key of the
+//! account it expects to have granted: a grant the hub (or anyone else) made with a key of its
+//! own fails to open. The associated data also binds the collection and the recipient account,
+//! so a hub cannot present a grant for one collection as another or hand it to someone else.
+//!
+//! This authenticates the sender to the recipient, not to third parties: the recipient could
+//! have produced the same bytes, so a grant is no signature and proves nothing to anyone else.
+//! Which key belongs to which account is the client's decision ([`crate::PinnedKeys`]).
 
 use std::fmt;
 
@@ -28,7 +36,7 @@ use crate::{AccountKey, CollectionKey, KeyError, OpenError, SealError, random_by
 
 const KEY_LEN: usize = 32;
 const GRANT_HEADER_LEN: usize = 2 + KEY_LEN + NONCE_LEN;
-const GRANT_INFO: &[u8] = b"nocterm-grant-v1/key";
+const GRANT_INFO: &[u8] = b"nocterm-grant-v1/auth";
 
 /// Bytes that are not an X25519 public key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -150,25 +158,40 @@ impl fmt::Debug for AccountKeyPair {
     }
 }
 
-fn grant_key(
-    shared: &SharedSecret,
-    ephemeral: &[u8; KEY_LEN],
-    recipient: &[u8; KEY_LEN],
-) -> Result<Zeroizing<[u8; 32]>, KeyError> {
-    let mut salt = [0u8; 2 * KEY_LEN];
-    salt[..KEY_LEN].copy_from_slice(ephemeral);
-    salt[KEY_LEN..].copy_from_slice(recipient);
-    let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(&salt), shared.as_bytes())
-        .expand(GRANT_INFO, key.as_mut())
-        .map_err(KeyError::Expand)?;
-    Ok(key)
+/// The keys of a grant, in the order of the HKDF salt and input.
+struct GrantKeys<'a> {
+    ephemeral: &'a [u8; KEY_LEN],
+    sender: &'a [u8; KEY_LEN],
+    recipient: &'a [u8; KEY_LEN],
+}
+
+impl GrantKeys<'_> {
+    fn key(
+        &self,
+        dh_ephemeral: &SharedSecret,
+        dh_sender: &SharedSecret,
+    ) -> Result<Zeroizing<[u8; 32]>, KeyError> {
+        let mut salt = [0u8; 3 * KEY_LEN];
+        salt[..KEY_LEN].copy_from_slice(self.ephemeral);
+        salt[KEY_LEN..2 * KEY_LEN].copy_from_slice(self.sender);
+        salt[2 * KEY_LEN..].copy_from_slice(self.recipient);
+        let mut ikm = Zeroizing::new([0u8; 2 * KEY_LEN]);
+        ikm[..KEY_LEN].copy_from_slice(dh_ephemeral.as_bytes());
+        ikm[KEY_LEN..].copy_from_slice(dh_sender.as_bytes());
+        let mut key = Zeroizing::new([0u8; 32]);
+        Hkdf::<Sha256>::new(Some(&salt), ikm.as_ref())
+            .expand(GRANT_INFO, key.as_mut())
+            .map_err(KeyError::Expand)?;
+        Ok(key)
+    }
 }
 
 impl CollectionKey {
-    /// Seals this key to `recipient`, bound to the collection and the recipient's account.
+    /// Seals this key from `sender` to `recipient`, bound to the collection, the recipient's
+    /// account and the sender's key.
     pub fn seal_to(
         &self,
+        sender: &AccountKeyPair,
         recipient: &PublicKey,
         collection_id: &str,
         recipient_account_id: &str,
@@ -176,6 +199,7 @@ impl CollectionKey {
         let ephemeral = Zeroizing::new(random_bytes::<KEY_LEN>()?);
         let nonce = random_bytes::<NONCE_LEN>()?;
         self.seal_to_with(
+            sender,
             recipient,
             collection_id,
             recipient_account_id,
@@ -186,6 +210,7 @@ impl CollectionKey {
 
     fn seal_to_with(
         &self,
+        sender: &AccountKeyPair,
         recipient: &PublicKey,
         collection_id: &str,
         recipient_account_id: &str,
@@ -193,15 +218,25 @@ impl CollectionKey {
         nonce: &[u8; NONCE_LEN],
     ) -> Result<Vec<u8>, SealError> {
         let ephemeral = AccountKeyPair::from_seed(ephemeral_seed);
-        let shared = ephemeral.agree(&recipient.0);
-        if !shared.was_contributory() {
+        let dh_ephemeral = ephemeral.agree(&recipient.0);
+        let dh_sender = sender.agree(&recipient.0);
+        if !dh_ephemeral.was_contributory() || !dh_sender.was_contributory() {
             return Err(SealError::UnusableRecipientKey);
         }
-        let key = grant_key(&shared, &ephemeral.public.0, &recipient.0)?;
+        let key = GrantKeys {
+            ephemeral: &ephemeral.public.0,
+            sender: &sender.public.0,
+            recipient: &recipient.0,
+        }
+        .key(&dh_ephemeral, &dh_sender)?;
         let ciphertext = encrypt(
             &key,
             Purpose::CollectionGrant,
-            &[collection_id, recipient_account_id],
+            &[
+                collection_id,
+                recipient_account_id,
+                &sender.public.fingerprint(),
+            ],
             nonce,
             &self.0,
         )?;
@@ -214,13 +249,15 @@ impl CollectionKey {
         Ok(sealed)
     }
 
-    /// Opens a grant made by [`CollectionKey::seal_to`] for this account.
+    /// Opens a grant made by [`CollectionKey::seal_to`] for this account by the holder of
+    /// `sender`.
     ///
-    /// Fails with [`OpenError::Rejected`] for another recipient's key, another collection or
-    /// another account identifier, and with [`OpenError::Malformed`] for anything that is not
-    /// a grant.
+    /// Fails with [`OpenError::Rejected`] for a grant made by another key than `sender`, for
+    /// another recipient's key, another collection or another account identifier, and with
+    /// [`OpenError::Malformed`] for anything that is not a grant.
     pub fn open_from(
         recipient: &AccountKeyPair,
+        sender: &PublicKey,
         collection_id: &str,
         recipient_account_id: &str,
         sealed: &[u8],
@@ -237,16 +274,22 @@ impl CollectionKey {
         let nonce: [u8; NONCE_LEN] = sealed[2 + KEY_LEN..GRANT_HEADER_LEN]
             .try_into()
             .map_err(|_| OpenError::Malformed)?;
-        let shared = recipient.agree(&ephemeral);
-        if !shared.was_contributory() {
+        let dh_ephemeral = recipient.agree(&ephemeral);
+        let dh_sender = recipient.agree(&sender.0);
+        if !dh_ephemeral.was_contributory() || !dh_sender.was_contributory() {
             return Err(OpenError::Malformed);
         }
-        let key =
-            grant_key(&shared, &ephemeral, &recipient.public.0).map_err(|_| OpenError::Rejected)?;
+        let key = GrantKeys {
+            ephemeral: &ephemeral,
+            sender: &sender.0,
+            recipient: &recipient.public.0,
+        }
+        .key(&dh_ephemeral, &dh_sender)
+        .map_err(|_| OpenError::Rejected)?;
         let bytes = decrypt(
             &key,
             Purpose::CollectionGrant,
-            &[collection_id, recipient_account_id],
+            &[collection_id, recipient_account_id, &sender.fingerprint()],
             &nonce,
             &sealed[GRANT_HEADER_LEN..],
         )?;
@@ -271,20 +314,35 @@ mod tests {
         AccountKeyPair::from_seed(&seed(0x40))
     }
 
+    fn sender() -> AccountKeyPair {
+        AccountKeyPair::from_seed(&seed(0x10))
+    }
+
     fn collection() -> CollectionKey {
         CollectionKey(seed(0xA0))
     }
 
+    fn open(sealed: &[u8]) -> Result<CollectionKey, OpenError> {
+        CollectionKey::open_from(
+            &recipient(),
+            &sender().public_key(),
+            "col-1",
+            "acc-2",
+            sealed,
+        )
+    }
+
     /// Sealed by an independent implementation (Python `cryptography` for X25519 and HKDF,
-    /// PyCryptodome for XChaCha20-Poly1305).
+    /// PyCryptodome for XChaCha20-Poly1305): sender seed 0x10.., recipient 0x40.., ephemeral
+    /// 0x60.., nonce 0x80.., collection key 0xA0...
     const GRANT: &str = concat!(
         "0107675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea52f808182838485",
-        "868788898a8b8c8d8e8f9091929394959697f5209cdfa3ee771591111992e8708a7647248ec38727",
-        "3135d404e9900332157496209fecce5057bc79be32acf437c8e1"
+        "868788898a8b8c8d8e8f909192939495969733f736665ab683a196081a25101cc7819cf52bdffc66",
+        "cf2ef9ba24d496d860ff4f1b5ff0219cbda50fef269b9025b7fa"
     );
 
     #[test]
-    fn the_public_key_and_fingerprint_match_the_fixed_vectors() {
+    fn the_public_keys_and_fingerprints_match_the_fixed_vectors() {
         let public = recipient().public_key();
         assert_eq!(
             hex::encode(public.as_bytes()),
@@ -294,12 +352,20 @@ mod tests {
             public.fingerprint(),
             "67CA-2FFD-6FE9-EFAB-3D76-E37C-3499-0A5A-33ED-C520-62F0-ECBD-0938-ACC9-1AF7-A425"
         );
+        let public = sender().public_key();
+        assert_eq!(
+            hex::encode(public.as_bytes()),
+            "d89e3bad79437dbed9f843418304f460ff05c7fe81fe4a9577a804cb9367ff66"
+        );
+        assert_eq!(
+            public.fingerprint(),
+            "1AEB-44C4-F0F5-C20C-04E3-E5FD-6BA8-EE4D-F28C-51F0-22B4-E154-FBB9-BB3A-A713-53B0"
+        );
     }
 
     #[test]
     fn a_grant_made_elsewhere_opens() {
-        let sealed = hex::decode(GRANT).unwrap();
-        let key = CollectionKey::open_from(&recipient(), "col-1", "acc-2", &sealed).unwrap();
+        let key = open(&hex::decode(GRANT).unwrap()).unwrap();
         assert_eq!(key.0, collection().0);
     }
 
@@ -307,6 +373,7 @@ mod tests {
     fn the_same_inputs_seal_to_the_fixed_vector() {
         let sealed = collection()
             .seal_to_with(
+                &sender(),
                 &recipient().public_key(),
                 "col-1",
                 "acc-2",
@@ -319,39 +386,70 @@ mod tests {
 
     #[test]
     fn a_grant_round_trips() {
-        let pair = AccountKeyPair::generate().unwrap();
+        let (from, to) = (
+            AccountKeyPair::generate().unwrap(),
+            AccountKeyPair::generate().unwrap(),
+        );
         let key = CollectionKey::generate().unwrap();
-        let sealed = key.seal_to(&pair.public_key(), "col", "acc").unwrap();
-        let opened = CollectionKey::open_from(&pair, "col", "acc", &sealed).unwrap();
+        let sealed = key.seal_to(&from, &to.public_key(), "col", "acc").unwrap();
+        let opened =
+            CollectionKey::open_from(&to, &from.public_key(), "col", "acc", &sealed).unwrap();
         assert_eq!(opened.0, key.0);
     }
 
     #[test]
+    fn a_grant_opens_only_under_the_key_of_the_account_that_made_it() {
+        // The hub makes its own grant of a key it chose, to the recipient's public key.
+        let hub = AccountKeyPair::generate().unwrap();
+        let chosen = CollectionKey::generate().unwrap();
+        let forged = chosen
+            .seal_to(&hub, &recipient().public_key(), "col-1", "acc-2")
+            .unwrap();
+
+        // A recipient that expects the real granter refuses it.
+        assert_eq!(open(&forged).unwrap_err(), OpenError::Rejected);
+        // Only a recipient that was made to trust the hub's key accepts it.
+        let accepted =
+            CollectionKey::open_from(&recipient(), &hub.public_key(), "col-1", "acc-2", &forged)
+                .unwrap();
+        assert_eq!(accepted.0, chosen.0);
+        // The real grant does not open under the hub's key either.
+        assert_eq!(
+            CollectionKey::open_from(
+                &recipient(),
+                &hub.public_key(),
+                "col-1",
+                "acc-2",
+                &hex::decode(GRANT).unwrap()
+            )
+            .unwrap_err(),
+            OpenError::Rejected
+        );
+    }
+
+    #[test]
     fn a_grant_does_not_open_for_another_key() {
-        let sealed = hex::decode(GRANT).unwrap();
         let stranger = AccountKeyPair::generate().unwrap();
+        let sealed = hex::decode(GRANT).unwrap();
         assert_eq!(
-            CollectionKey::open_from(&stranger, "col-1", "acc-2", &sealed).unwrap_err(),
+            CollectionKey::open_from(&stranger, &sender().public_key(), "col-1", "acc-2", &sealed)
+                .unwrap_err(),
             OpenError::Rejected
         );
     }
 
     #[test]
-    fn a_grant_does_not_open_for_another_collection() {
+    fn a_grant_does_not_open_for_another_collection_or_account_identifier() {
         let sealed = hex::decode(GRANT).unwrap();
-        assert_eq!(
-            CollectionKey::open_from(&recipient(), "col-2", "acc-2", &sealed).unwrap_err(),
-            OpenError::Rejected
-        );
-    }
-
-    #[test]
-    fn a_grant_does_not_open_for_another_account_identifier() {
-        let sealed = hex::decode(GRANT).unwrap();
-        assert_eq!(
-            CollectionKey::open_from(&recipient(), "col-1", "acc-3", &sealed).unwrap_err(),
-            OpenError::Rejected
-        );
+        let sender = sender().public_key();
+        for (collection, account) in [("col-2", "acc-2"), ("col-1", "acc-3")] {
+            assert_eq!(
+                CollectionKey::open_from(&recipient(), &sender, collection, account, &sealed)
+                    .unwrap_err(),
+                OpenError::Rejected,
+                "{collection} {account}"
+            );
+        }
     }
 
     #[test]
@@ -361,7 +459,7 @@ mod tests {
             let mut tampered = sealed.clone();
             tampered[index] ^= 1;
             assert_eq!(
-                CollectionKey::open_from(&recipient(), "col-1", "acc-2", &tampered).unwrap_err(),
+                open(&tampered).unwrap_err(),
                 OpenError::Rejected,
                 "byte {index}"
             );
@@ -374,17 +472,11 @@ mod tests {
         let account = AccountKey(seed(1));
         let wrapped = collection().seal_for(&account, "col-1").unwrap();
         for bad in [&sealed[..40], &wrapped[..], &[][..]] {
-            assert_eq!(
-                CollectionKey::open_from(&recipient(), "col-1", "acc-2", bad).unwrap_err(),
-                OpenError::Malformed
-            );
+            assert_eq!(open(bad).unwrap_err(), OpenError::Malformed);
         }
         let mut other_version = sealed;
         other_version[0] = 2;
-        assert_eq!(
-            CollectionKey::open_from(&recipient(), "col-1", "acc-2", &other_version).unwrap_err(),
-            OpenError::Malformed
-        );
+        assert_eq!(open(&other_version).unwrap_err(), OpenError::Malformed);
     }
 
     #[test]
@@ -397,46 +489,43 @@ mod tests {
             CollectionKey::open(&account, "col-1", &own).unwrap().0,
             collection().0
         );
-        assert_eq!(
-            CollectionKey::open_from(&recipient(), "col-1", "acc-2", &granted)
-                .unwrap()
-                .0,
-            collection().0
-        );
+        assert_eq!(open(&granted).unwrap().0, collection().0);
         // The kind is the caller's choice, not the hub's: a value of the other kind is an
         // error whatever its purpose byte says.
         assert_eq!(
             CollectionKey::open(&account, "col-1", &granted).unwrap_err(),
             OpenError::Malformed
         );
-        assert_eq!(
-            CollectionKey::open_from(&recipient(), "col-1", "acc-2", &own).unwrap_err(),
-            OpenError::Malformed
-        );
+        assert_eq!(open(&own).unwrap_err(), OpenError::Malformed);
     }
 
     #[test]
-    fn an_ephemeral_key_of_small_order_is_refused() {
+    fn keys_of_small_order_are_refused_on_both_sides() {
         let mut sealed = hex::decode(GRANT).unwrap();
         sealed[2..34].fill(0);
+        assert_eq!(open(&sealed).unwrap_err(), OpenError::Malformed);
+
+        let zero = PublicKey([0; 32]);
+        let sealed = hex::decode(GRANT).unwrap();
         assert_eq!(
-            CollectionKey::open_from(&recipient(), "col-1", "acc-2", &sealed).unwrap_err(),
+            CollectionKey::open_from(&recipient(), &zero, "col-1", "acc-2", &sealed).unwrap_err(),
             OpenError::Malformed
         );
-    }
-
-    #[test]
-    fn sealing_to_a_small_order_key_is_refused() {
-        let zero = PublicKey([0; 32]);
-        let err = collection().seal_to(&zero, "col", "acc").unwrap_err();
+        let err = collection()
+            .seal_to(&sender(), &zero, "col", "acc")
+            .unwrap_err();
         assert!(matches!(err, SealError::UnusableRecipientKey));
     }
 
     #[test]
     fn two_grants_of_one_key_differ() {
         let public = recipient().public_key();
-        let a = collection().seal_to(&public, "col", "acc").unwrap();
-        let b = collection().seal_to(&public, "col", "acc").unwrap();
+        let a = collection()
+            .seal_to(&sender(), &public, "col", "acc")
+            .unwrap();
+        let b = collection()
+            .seal_to(&sender(), &public, "col", "acc")
+            .unwrap();
         assert_ne!(a, b);
     }
 

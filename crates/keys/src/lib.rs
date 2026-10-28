@@ -3,7 +3,8 @@
 //! Owns: device signing keys (Ed25519) used for proof of possession; the derivation of the
 //! login value the hub verifies and of the unlock key it never sees (`login-v1`, from one
 //! password); the recovery key; the key hierarchy unlock key → account key → collection key;
-//! the account's X25519 pair with collection key grants sealed to a public key; and the sealed
+//! the account's X25519 pair with collection key grants authenticated by the granter's key; the
+//! pins (trust on first use) of the public keys of other accounts; and the sealed
 //! formats of keys, names and objects (XChaCha20-Poly1305 with purpose-bound associated data).
 //! Does not own: storage of keys on the device, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
@@ -16,6 +17,8 @@
 //!   bound;
 //! - the unlock key and the master key behind it never leave the device: the hub gets only the
 //!   independent `auth` output, and each HKDF output has its own `info` label;
+//! - a grant opens only under the public key of the account that made it, and that key is one the
+//!   client pinned: the hub can swap a key only before the first pin;
 //! - the recovery key is 128 random bits shown once and used only through HKDF;
 //! - secrets are zeroized on drop and never printed by `Debug`.
 //!
@@ -24,6 +27,7 @@
 mod device;
 mod kdf;
 mod login;
+mod pins;
 mod random;
 mod recovery;
 mod seal;
@@ -33,6 +37,7 @@ pub use device::DeviceKey;
 pub use kdf::{KdfParams, KdfParseError};
 pub use login::{LoginError, LoginSecrets, MIN_PASSWORD_CHARS, UnlockKdf, UnlockKey, UnlockSource};
 pub use nocterm_hub_model::pop::{SignatureError, verify as verify_signature};
+pub use pins::{PinError, PinnedKeys, TrustedKey};
 pub use random::{random_bytes, random_token};
 pub use recovery::{RecoveryKey, RecoveryKeyParseError};
 pub use seal::{AccountKey, CollectionKey, OpenError, SealError};

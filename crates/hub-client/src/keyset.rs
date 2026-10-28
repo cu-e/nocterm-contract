@@ -8,7 +8,7 @@
 use nocterm_hub_proto::v1;
 use nocterm_keys::{
     AccountKey, AccountKeyPair, CollectionKey, KdfParseError, KeyError, OpenError, PublicKey,
-    PublicKeyError, RecoveryKey, SealError, UnlockKdf, UnlockKey, UnlockSource,
+    PublicKeyError, RecoveryKey, SealError, TrustedKey, UnlockKdf, UnlockKey, UnlockSource,
 };
 
 use crate::{ClientError, HubClient, StatusCode};
@@ -172,15 +172,26 @@ impl Keyset {
         CollectionKey::open(&self.account_key, collection_id, sealed)
     }
 
-    /// Opens a key another member granted to this account for an organization collection.
+    /// Opens a key `granter` granted to this account for an organization collection.
     ///
-    /// An envelope the account sealed for itself is refused with [`OpenError::Malformed`].
+    /// `granter` is the pinned key of the account that is expected to have granted it (the
+    /// hub names it in `CollectionKey.granted_by`, then [`nocterm_keys::PinnedKeys::trust`]
+    /// vouches for the key). A grant made with another key, such as one the hub made itself,
+    /// is [`OpenError::Rejected`]. An envelope the account sealed for itself is
+    /// [`OpenError::Malformed`].
     pub fn open_granted_collection_key(
         &self,
         collection_id: &str,
         sealed: &[u8],
+        granter: &TrustedKey,
     ) -> Result<CollectionKey, OpenError> {
-        CollectionKey::open_from(&self.pair, collection_id, &self.account_id, sealed)
+        CollectionKey::open_from(
+            &self.pair,
+            granter.public_key(),
+            collection_id,
+            &self.account_id,
+            sealed,
+        )
     }
 
     /// Seals a collection key this account created, for `CreateCollection`.
@@ -407,23 +418,30 @@ impl HubClient {
         Ok(keyset)
     }
 
-    /// Grants `key` of `collection_id` to another member: seals it to the member's public
-    /// key, bound to the collection and the member's account, and asks the hub to store it.
+    /// Grants `key` of `collection_id` to another member: seals it from `granter`'s key pair
+    /// to the member's pinned public key, bound to the collection, the member's account and
+    /// the granter's key, and asks the hub to store it.
     ///
-    /// The caller decides whose key this is, for example after a person confirmed the
-    /// fingerprint of `recipient`; the hub still checks who may grant.
+    /// `recipient` comes from [`nocterm_keys::PinnedKeys`]: a key the hub merely published is
+    /// not enough, since a hub that substitutes it receives the collection key. The hub still
+    /// checks who may grant.
     pub async fn grant(
         &self,
+        granter: &Keyset,
         collection_id: &str,
         key: &CollectionKey,
-        recipient_account_id: &str,
-        recipient: &PublicKey,
+        recipient: &TrustedKey,
     ) -> Result<(), KeysetError> {
-        let sealed_key = key.seal_to(recipient, collection_id, recipient_account_id)?;
+        let sealed_key = key.seal_to(
+            granter.key_pair(),
+            recipient.public_key(),
+            collection_id,
+            recipient.account_id(),
+        )?;
         self.store()
             .grant_collection_key(v1::GrantCollectionKeyRequest {
                 collection_id: collection_id.to_owned(),
-                account_id: recipient_account_id.to_owned(),
+                account_id: recipient.account_id().to_owned(),
                 sealed_key,
             })
             .await
@@ -434,7 +452,7 @@ impl HubClient {
 
 #[cfg(test)]
 mod tests {
-    use nocterm_keys::{KdfParams, LoginSecrets};
+    use nocterm_keys::{KdfParams, LoginSecrets, PinError, PinnedKeys};
 
     use super::*;
 
@@ -540,53 +558,90 @@ mod tests {
         ));
     }
 
+    fn trusted(account_id: &str, keyset: &Keyset) -> TrustedKey {
+        PinnedKeys::new()
+            .pin(account_id, keyset.public_key())
+            .unwrap()
+    }
+
     #[test]
     fn the_caller_chooses_how_an_envelope_opens_and_a_wrong_kind_is_an_error() {
         let (alice, _) = Keyset::build("alice", &unlock(), &kdf()).unwrap();
         let (bob, _) = Keyset::build("bob", &unlock(), &kdf()).unwrap();
+        let alice_key = trusted("alice", &alice.keyset);
         let key = CollectionKey::generate().unwrap();
 
         let own = alice.keyset.seal_collection_key(&key, "col").unwrap();
         assert!(alice.keyset.open_own_collection_key("col", &own).is_ok());
         assert!(matches!(
-            alice.keyset.open_granted_collection_key("col", &own),
+            alice
+                .keyset
+                .open_granted_collection_key("col", &own, &alice_key),
             Err(OpenError::Malformed)
         ));
 
-        let grant = key.seal_to(&bob.keyset.public_key(), "col", "bob").unwrap();
+        let grant = key
+            .seal_to(
+                alice.keyset.key_pair(),
+                &bob.keyset.public_key(),
+                "col",
+                "bob",
+            )
+            .unwrap();
         let opened = bob
             .keyset
-            .open_granted_collection_key("col", &grant)
+            .open_granted_collection_key("col", &grant, &alice_key)
             .unwrap();
         let name = key.seal_name("col", "Servers").unwrap();
         assert_eq!(opened.open_name("col", &name).unwrap(), "Servers");
-
-        assert!(
-            alice
-                .keyset
-                .open_granted_collection_key("col", &grant)
-                .is_err()
-        );
-        assert!(
+        assert!(matches!(
             bob.keyset
-                .open_granted_collection_key("other", &grant)
-                .is_err()
-        );
+                .open_granted_collection_key("other", &grant, &alice_key),
+            Err(OpenError::Rejected)
+        ));
     }
 
     #[test]
     fn a_hub_cannot_put_a_grant_in_place_of_the_owners_own_envelope() {
         let (owner, _) = Keyset::build("owner", &unlock(), &kdf()).unwrap();
+        let hub = AccountKeyPair::generate().unwrap();
         let chosen_by_hub = CollectionKey::generate().unwrap();
         // Anyone who knows the published public key can make this; the hub answers
         // `GetCollectionKey` of the personal collection `vault` with it.
         let forged = chosen_by_hub
-            .seal_to(&owner.keyset.public_key(), "vault", "owner")
+            .seal_to(&hub, &owner.keyset.public_key(), "vault", "owner")
             .unwrap();
 
         assert!(matches!(
             owner.keyset.open_own_collection_key("vault", &forged),
             Err(OpenError::Malformed)
+        ));
+    }
+
+    #[test]
+    fn a_grant_the_hub_made_with_its_own_key_is_refused_by_a_recipient_that_pinned_the_admin() {
+        let (admin, _) = Keyset::build("admin", &unlock(), &kdf()).unwrap();
+        let (member, _) = Keyset::build("member", &unlock(), &kdf()).unwrap();
+        let mut pins = PinnedKeys::new();
+        let admin_key = pins.pin("admin", admin.keyset.public_key()).unwrap();
+
+        // The hub invents a group collection with a key of its own and "grants" it.
+        let hub = AccountKeyPair::generate().unwrap();
+        let hub_key = CollectionKey::generate().unwrap();
+        let forged = hub_key
+            .seal_to(&hub, &member.keyset.public_key(), "team", "member")
+            .unwrap();
+        assert!(matches!(
+            member
+                .keyset
+                .open_granted_collection_key("team", &forged, &admin_key),
+            Err(OpenError::Rejected)
+        ));
+
+        // Offering its own key as the admin's is caught by the pin.
+        assert!(matches!(
+            pins.trust("admin", &hub.public_key()),
+            Err(PinError::Changed { .. })
         ));
     }
 

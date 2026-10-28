@@ -129,14 +129,20 @@ message CollectionKey {
   string collection_id = 1;
   uint64 key_version = 2;
   bytes wrapped_key = 3;
+  // The account that granted the key to the caller; empty for the caller's own envelope. The
+  // hub records it when it stores a grant. It only tells the client whose pinned public key
+  // to try: a grant opens only under the key of the account that made it, so a wrong or
+  // forged value yields an error, not a key.
+  string granted_by = 4;
 }
 
 message GrantCollectionKeyRequest {
   string collection_id = 1;
   // The member who receives the key.
   string account_id = 2;
-  // The collection key sealed to the recipient's public key, bound to this collection and
-  // this account.
+  // The collection key sealed from the granter's key pair to the recipient's public key, bound
+  // to this collection, this account and the granter's key. The hub stores it as given and
+  // records the caller as `granted_by`.
   bytes sealed_key = 3;
 }
 

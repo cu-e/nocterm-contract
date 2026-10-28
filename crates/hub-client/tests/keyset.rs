@@ -5,7 +5,7 @@
 mod support;
 
 use nocterm_hub_client::{KeysetError, UnlockMethod};
-use nocterm_keys::{CollectionKey, KdfParams, UnlockKdf, UnlockKey};
+use nocterm_keys::{CollectionKey, KdfParams, PinnedKeys, UnlockKdf, UnlockKey};
 use support::FakeHub;
 
 fn unlock(password: &str) -> (UnlockKey, UnlockKdf) {
@@ -85,7 +85,7 @@ async fn the_recovery_key_restores_access_under_a_new_password() {
 }
 
 #[tokio::test]
-async fn a_grant_is_sealed_to_the_recipient_for_one_collection() {
+async fn a_grant_is_sealed_by_the_granter_to_the_recipient_for_one_collection() {
     let hub = FakeHub::start(false).await;
     let client = hub.signed_in_client().await;
     let (key, kdf) = unlock("correct horse battery");
@@ -95,10 +95,12 @@ async fn a_grant_is_sealed_to_the_recipient_for_one_collection() {
         .unwrap()
         .keyset;
     let bob = nocterm_keys::AccountKeyPair::generate().unwrap();
+    let mut pins = PinnedKeys::new();
+    let bob_key = pins.pin("bob", bob.public_key()).unwrap();
     let collection_key = CollectionKey::generate().unwrap();
 
     client
-        .grant("col-1", &collection_key, "bob", &bob.public_key())
+        .grant(&alice, "col-1", &collection_key, &bob_key)
         .await
         .unwrap();
 
@@ -106,13 +108,21 @@ async fn a_grant_is_sealed_to_the_recipient_for_one_collection() {
     assert_eq!(grants.len(), 1);
     assert_eq!(grants[0].collection_id, "col-1");
     assert_eq!(grants[0].account_id, "bob");
-    let opened = CollectionKey::open_from(&bob, "col-1", "bob", &grants[0].sealed_key).unwrap();
+    let sealed = &grants[0].sealed_key;
+    let from = alice.public_key();
+    let opened = CollectionKey::open_from(&bob, &from, "col-1", "bob", sealed).unwrap();
     let name = collection_key.seal_name("col-1", "Servers").unwrap();
     assert_eq!(opened.open_name("col-1", &name).unwrap(), "Servers");
-    assert!(CollectionKey::open_from(&bob, "col-2", "bob", &grants[0].sealed_key).is_err());
+    assert!(CollectionKey::open_from(&bob, &from, "col-2", "bob", sealed).is_err());
+    // Another key than the granter's does not open it, and nor does the granter's own account.
+    let stranger = nocterm_keys::AccountKeyPair::generate().unwrap();
+    assert!(
+        CollectionKey::open_from(&bob, &stranger.public_key(), "col-1", "bob", sealed).is_err()
+    );
+    let alice_key = pins.pin("alice", from).unwrap();
     assert!(
         alice
-            .open_granted_collection_key("col-1", &grants[0].sealed_key)
+            .open_granted_collection_key("col-1", sealed, &alice_key)
             .is_err()
     );
 }
