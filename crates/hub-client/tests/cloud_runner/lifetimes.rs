@@ -22,6 +22,8 @@ async fn stored_runner_with_expired_access_requires_explicit_refresh_before_rpc(
         session,
     )
     .await?;
+    let (access, refresh) = restored.credential_deadlines()?;
+    assert!(access < now_ms() && refresh > now_ms());
     assert!(restored.heartbeat(vec![1]).await.is_err());
     restored.refresh().await?;
     assert!(restored.heartbeat(vec![2]).await? > 0);

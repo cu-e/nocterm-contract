@@ -18,6 +18,10 @@ pub use command::{CloudCommandInvocation, PreparedCloudCommand};
 pub use runner::CloudRunner;
 pub use runner_credentials::RunnerSession;
 pub use watch::CloudWatch;
+mod status;
+pub use status::{
+    MAX_STATUS_BYTES, MAX_STATUS_WIRE_BYTES, ResidentRunnerStatus, status_work_bytes,
+};
 mod upload;
 pub use replay::{
     CloudDeliveryOrigin, CloudIncomingRecord, CloudReplay, CloudReplayItem, CloudSelector,
@@ -519,6 +523,15 @@ impl CloudClient {
             }
         }
         Ok(response)
+    }
+    /// Guarded unary status lookup. The bounded decoded result retains the same
+    /// actual caller work owner; no status timestamp establishes R freshness.
+    pub async fn runner_status_with_residency(
+        &self,
+        runner: [u8; 16],
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<ResidentRunnerStatus, CloudError> {
+        status::receive(self, runner, residency).await
     }
     pub async fn runner_status(
         &self,

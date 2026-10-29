@@ -2,6 +2,7 @@
 mod head;
 mod retention;
 mod runner;
+mod status;
 use super::{HUB_ID, Reply, lock};
 use nocterm_hub_client::now_ms;
 use nocterm_hub_grpc::cloud_service_server::{CloudService, CloudServiceServer};
@@ -42,6 +43,7 @@ pub struct CloudHarness {
     runner: Arc<runner::RunnerPeer>,
     authority: Arc<DeviceKey>,
     heads: head::HeadLane,
+    status: Arc<status::StatusLane>,
 }
 impl CloudHarness {
     pub fn new() -> Self {
@@ -52,6 +54,7 @@ impl CloudHarness {
             runner: Arc::new(runner::RunnerPeer::default()),
             authority: Arc::new(DeviceKey::from_seed(&[0x91; 32])),
             heads: head::HeadLane::default(),
+            status: Arc::new(status::StatusLane::default()),
         }
     }
     pub fn enable_key_material(&self) {
@@ -345,12 +348,36 @@ impl CloudService for CloudPeer {
             &request,
             nocterm_hub_model::cloud::runner_request::RunnerMethod::Heartbeat,
         )?;
+        let signed = request.into_inner().signed_status;
+        if signed.is_empty() || signed.len() > 4096 {
+            return Err(Status::invalid_argument("status"));
+        }
+        self.0.status.heartbeat(signed).await?;
         Ok(Response::new(v1::CloudHeartbeatReceipt {
             accepted_at_ms: now_ms(),
         }))
     }
-    async fn runner_status(&self, _: Request<v1::CloudRunnerRef>) -> Reply<v1::CloudRunnerStatus> {
-        Err(Status::unimplemented("fixture"))
+    async fn runner_status(
+        &self,
+        request: Request<v1::CloudRunnerRef>,
+    ) -> Reply<v1::CloudRunnerStatus> {
+        if request
+            .metadata()
+            .get_bin("x-nocterm-runner-claim-bin")
+            .is_some()
+        {
+            return Err(Status::permission_denied("device status scope"));
+        }
+        if request.metadata().get("authorization").is_none() {
+            return Err(Status::unauthenticated("device"));
+        }
+        if request.get_ref().runner_id != [2; 16] {
+            return Err(Status::not_found("runner"));
+        }
+        Ok(Response::new(v1::CloudRunnerStatus {
+            signed_status: self.0.status.read().await?,
+            received_at_ms: now_ms(),
+        }))
     }
     async fn acknowledge(
         &self,

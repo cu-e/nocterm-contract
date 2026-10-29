@@ -114,6 +114,11 @@ impl CloudRunner {
     pub fn session(&self) -> Result<RunnerSession, CloudError> {
         self.credentials.snapshot()
     }
+    /// Current nonsecret scheduling facts, not RPC authority. Expired access may
+    /// still be refreshed explicitly; retired/expired refresh sources refuse.
+    pub fn credential_deadlines(&self) -> Result<(i64, i64), CloudError> {
+        self.credentials.deadlines()
+    }
     /// Local revocation is permanent for all clones, including a pending refresh.
     pub fn revoke_local(&self) {
         self.credentials.revoke();
@@ -175,6 +180,15 @@ impl CloudRunner {
             residency,
         )
         .await
+    }
+    /// The actual heartbeat body retains the same pre-admitted work owner after
+    /// transfer/cancellation. No device or ordinary Store authority is available.
+    pub async fn heartbeat_with_residency(
+        &self,
+        signed_status: Vec<u8>,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<i64, CloudError> {
+        super::status::heartbeat(self.access(), signed_status, residency).await
     }
     pub async fn heartbeat(&self, signed_status: Vec<u8>) -> Result<i64, CloudError> {
         if signed_status.is_empty() || signed_status.len() > 4096 {

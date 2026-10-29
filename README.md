@@ -542,3 +542,22 @@ read lock, never bearer or refresh tokens. Neither descriptive check establishes
 native membership or remote authorization. Native callers retain their original
 membership, reject replacement sources after awaits and never replace a read-lock
 bound with a check-then-unbounded `session()` token clone.
+
+### Guarded runner status and scheduling
+
+`CloudRunner::heartbeat_with_residency` and
+`CloudClient::runner_status_with_residency` use the existing bounded signed RPC
+transport. Reserve `cloud::status_work_bytes()` from the caller's actual finite
+pool before creating the request. This names logical proof/body/decoded-status
+working memory, not total Tonic/HTTP2/TLS/runtime RSS. Status bytes are at most
+4096; the guarded wire ceiling is applied before protobuf response decoding.
+The returned `ResidentRunnerStatus` exposes borrowed data and retains that same
+owner until its actual final drop. Copying borrowed status requires separate
+caller admission. `received_at_ms` is a hub diagnostic, never signed freshness.
+
+`CloudRunner::credential_deadlines` reads only current access/refresh deadlines
+under the credential lock. It clones no session or token and grants no RPC
+permission. Expired access can still be observed for explicit refresh planning;
+a locally retired or refresh-expired source refuses. Heartbeat/status operations
+still recheck their captured source after awaits; no automatic refresh or device
+session authority is added to a runner.

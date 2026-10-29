@@ -133,6 +133,14 @@ impl RunnerCredentials {
         }
         Ok(())
     }
+    pub(super) fn deadlines(&self) -> Result<(i64, i64), CloudError> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        let session = current.as_ref().ok_or(CloudError::SourceChanged)?;
+        if session.refresh_expires_at_ms <= crate::now_ms() {
+            return Err(CloudError::SourceChanged);
+        }
+        Ok((session.access_expires_at_ms, session.refresh_expires_at_ms))
+    }
     pub(super) fn revoke(&self) {
         self.session
             .write()

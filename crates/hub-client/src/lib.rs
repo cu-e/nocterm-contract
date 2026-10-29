@@ -12,6 +12,8 @@
 //! staging authenticated native outbox bytes never rewrites signed commands.
 //! Guarded capability/Store acquisition retains actual body and accepted metadata
 //! owners; immutable hub information is shared rather than deeply cloned.
+//! Guarded runner heartbeat and device status calls retain bounded body/result
+//! ownership; runner deadline observations clone no credential or token.
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
 //! provide a [`SessionStore`] for tokens), how a device is named (callers pass a
 //! [`DeviceInfo`]), terminal rendering, or vault encryption (`nocterm-keys`).
