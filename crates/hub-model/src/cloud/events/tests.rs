@@ -313,6 +313,36 @@ fn every_kind_and_snapshot_match_independent_public_python_bytes() -> TestResult
 }
 
 #[test]
+fn preflight_and_exact_buffers_preserve_all_public_vectors_and_refuse_wrong_lengths() -> TestResult
+{
+    for vector in event_vectors() {
+        let bytes = hex::decode(vector.trim())?;
+        let event = CloudEvent::from_canonical_bytes(&bytes)?;
+        let length = event.canonical_len()?;
+        assert_eq!(length, bytes.len());
+        assert_eq!(event.canonical_bytes_exact(length)?, bytes);
+        assert!(event.canonical_bytes_exact(length - 1).is_err());
+        assert!(event.canonical_bytes_exact(length + 1).is_err());
+        assert!(event.canonical_bytes_exact(usize::MAX).is_err());
+    }
+    let bytes =
+        hex::decode(include_str!("../../../../../fixtures/cloud-events-v1/snapshot.hex").trim())?;
+    let snapshot = CloudSnapshotPayload::from_canonical_bytes(&bytes)?;
+    let length = snapshot.canonical_len()?;
+    assert_eq!(length, bytes.len());
+    assert_eq!(snapshot.canonical_bytes_exact(length)?, bytes);
+    assert!(snapshot.canonical_bytes_exact(length - 1).is_err());
+    assert!(snapshot.canonical_bytes_exact(length + 1).is_err());
+    assert!(snapshot.canonical_bytes_exact(usize::MAX).is_err());
+    let invalid = CloudEvent {
+        timestamp_ms: 0,
+        ..observation(CloudEventPayload::Deleted { command: [1; 16] })
+    };
+    assert!(invalid.canonical_len().is_err());
+    Ok(())
+}
+
+#[test]
 fn snapshot_requires_exact_eof_closed_metadata_and_ordered_heads() -> TestResult {
     let bytes =
         hex::decode(include_str!("../../../../../fixtures/cloud-events-v1/snapshot.hex").trim())?;

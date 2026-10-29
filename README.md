@@ -443,3 +443,8 @@ re-signs/reseals M, changes its issuer/deadline, replaces its original IDs or tu
 a delivery ACK into R admission. Persist the exact publication before sending,
 then retry those same bytes or query the same original ID/digest. Expired new
 admission and previously accepted idempotent receipt lookup remain R's duties.
+
+`CloudEvent` and `CloudSnapshotPayload` expose `canonical_len()` for preflight and
+`canonical_bytes_exact(length)` to encode into an admitted single output buffer.
+Nested tool arguments reuse that sink without another encoded buffer; JSON
+validation may still use parser scratch, so this is not an allocation-free API.

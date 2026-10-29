@@ -25,6 +25,25 @@ pub struct CloudEvent<'a> {
     pub payload: CloudEventPayload<'a>,
 }
 impl<'a> CloudEvent<'a> {
+    /// Validates with the canonical counter before a consumer reserves its bytes.
+    /// No encoded payload buffer is allocated by this pass. JSON validation
+    /// may use parser scratch; this is not a general allocation-free guarantee.
+    pub fn canonical_len(&self) -> Result<usize, EventPayloadError> {
+        let mut counter = writer::EventWriter::counter();
+        counter.event(self)?;
+        Ok(counter.len())
+    }
+    /// Encodes into one pre-sized buffer after the caller's admission. A stale
+    /// length refuses before growth. Nested arguments write directly into this
+    /// buffer; JSON parser scratch is separate from the encoded-buffer bound.
+    pub fn canonical_bytes_exact(&self, length: usize) -> Result<Vec<u8>, EventPayloadError> {
+        let mut output = writer::EventWriter::exact_buffer(length)?;
+        output.event(self)?;
+        if output.len() != length {
+            return Err(EventPayloadError::Bounds);
+        }
+        output.finish()
+    }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, EventPayloadError> {
         let mut output = writer::EventWriter::buffer();
         output.event(self)?;
@@ -152,6 +171,22 @@ pub struct CloudSnapshotPayload<'a> {
     pub events: Vec<CloudEvent<'a>>,
 }
 impl<'a> CloudSnapshotPayload<'a> {
+    /// Counts the same canonical layout without allocating an encoded buffer.
+    /// JSON validation may use parser scratch.
+    pub fn canonical_len(&self) -> Result<usize, EventPayloadError> {
+        let mut counter = writer::EventWriter::counter();
+        counter.snapshot(self)?;
+        Ok(counter.len())
+    }
+    /// Uses the admitted exact canonical length, refusing a mismatched preflight.
+    pub fn canonical_bytes_exact(&self, length: usize) -> Result<Vec<u8>, EventPayloadError> {
+        let mut output = writer::EventWriter::exact_buffer(length)?;
+        output.snapshot(self)?;
+        if output.len() != length {
+            return Err(EventPayloadError::Bounds);
+        }
+        output.finish()
+    }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, EventPayloadError> {
         let mut out = writer::EventWriter::buffer();
         out.snapshot(self)?;

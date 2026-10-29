@@ -26,6 +26,16 @@ impl BoundedWriter {
             maximum,
         }
     }
+    pub(in crate::cloud) fn exact_buffer(length: usize) -> Self {
+        Self {
+            sink: Sink::Buffer(Vec::with_capacity(length)),
+            length: 0,
+            maximum: length,
+        }
+    }
+    pub(in crate::cloud) fn len(&self) -> usize {
+        self.length
+    }
     pub(in crate::cloud) fn hasher(maximum: usize) -> Self {
         Self {
             sink: Sink::Hash(Sha256::new()),
@@ -66,5 +76,11 @@ impl BoundedWriter {
             Sink::Hash(hash) => Ok(hash.finalize().into()),
             Sink::Counter | Sink::Buffer(_) => Err(CommandError::Malformed),
         }
+    }
+}
+
+impl AsMut<BoundedWriter> for BoundedWriter {
+    fn as_mut(&mut self) -> &mut Self {
+        self
     }
 }

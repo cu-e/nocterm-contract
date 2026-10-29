@@ -25,6 +25,14 @@ impl EventWriter {
             output: PayloadWriter::counter(),
         }
     }
+    pub(super) fn exact_buffer(length: usize) -> Result<Self, EventPayloadError> {
+        Ok(Self {
+            output: PayloadWriter::exact_buffer(length)?,
+        })
+    }
+    pub(super) fn len(&self) -> usize {
+        self.output.len()
+    }
     pub(super) fn finish(self) -> Result<Vec<u8>, EventPayloadError> {
         Ok(self.output.finish()?)
     }
@@ -127,7 +135,7 @@ impl EventWriter {
         self.output.execution(&value.execution)?;
         self.raw(&value.arguments_digest)?;
         self.tag(u8::from(value.mutates))?;
-        self.field(&value.arguments.canonical_bytes()?)?;
+        self.output.tool_arguments(&value.arguments)?;
         self.display(&value.display)
     }
     fn job(&mut self, value: &BackgroundJob<'_>) -> Result<(), EventPayloadError> {

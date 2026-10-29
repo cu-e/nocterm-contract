@@ -76,8 +76,29 @@ impl<'a> ToolArguments<'a> {
         self.encode(&mut writer)?;
         writer.output.into_digest()
     }
-    fn encode(&self, writer: &mut ArgumentWriter) -> Result<(), CommandError> {
-        writer.output.field(b"nocterm/cloud-tool-arguments/v1")?;
+    /// Writes one length-delimited argument field directly into the enclosing
+    /// canonical sink, after the same encoder checks the separate argument cap.
+    pub(in crate::cloud) fn write_field_to(
+        &self,
+        output: &mut BoundedWriter,
+    ) -> Result<(), CommandError> {
+        let mut counter = ArgumentWriter {
+            output: BoundedWriter::counter(MAX_TOOL_ARGUMENT_BYTES),
+        };
+        self.encode(&mut counter)?;
+        let length =
+            u32::try_from(counter.output.len()).map_err(|_| CommandError::PlaintextTooLarge)?;
+        output.extend(&length.to_be_bytes())?;
+        self.encode(&mut ArgumentWriter { output })
+    }
+    fn encode<W: AsMut<BoundedWriter>>(
+        &self,
+        writer: &mut ArgumentWriter<W>,
+    ) -> Result<(), CommandError> {
+        writer
+            .output
+            .as_mut()
+            .field(b"nocterm/cloud-tool-arguments/v1")?;
         match self {
             Self::ListTerminals => writer.tag(1),
             Self::OpenTerminal { server_id } => {
@@ -130,7 +151,7 @@ impl<'a> ToolArguments<'a> {
                 writer.tag(6)?;
                 writer.id(terminal_id)?;
                 writer.text(program)?;
-                writer.output.extend(
+                writer.output.as_mut().extend(
                     &u16::try_from(args.len())
                         .map_err(|_| CommandError::Malformed)?
                         .to_be_bytes(),
@@ -174,10 +195,10 @@ impl fmt::Debug for ToolArguments<'_> {
     }
 }
 
-struct ArgumentWriter {
-    output: BoundedWriter,
+struct ArgumentWriter<W> {
+    output: W,
 }
-impl ArgumentWriter {
+impl ArgumentWriter<BoundedWriter> {
     fn buffer() -> Self {
         Self {
             output: BoundedWriter::buffer(MAX_TOOL_ARGUMENT_BYTES),
@@ -188,8 +209,10 @@ impl ArgumentWriter {
             output: BoundedWriter::hasher(MAX_TOOL_ARGUMENT_BYTES),
         }
     }
+}
+impl<W: AsMut<BoundedWriter>> ArgumentWriter<W> {
     fn tag(&mut self, value: u8) -> Result<(), CommandError> {
-        self.output.extend(&[value])
+        self.output.as_mut().extend(&[value])
     }
     fn id(&mut self, value: &str) -> Result<(), CommandError> {
         if value.is_empty() || value.len() > 128 {
@@ -198,12 +221,12 @@ impl ArgumentWriter {
         self.text(value)
     }
     fn text(&mut self, value: &str) -> Result<(), CommandError> {
-        self.output.field(value.as_bytes())
+        self.output.as_mut().field(value.as_bytes())
     }
     fn number(&mut self, value: Option<u64>) -> Result<(), CommandError> {
         self.tag(u8::from(value.is_some()))?;
         if let Some(value) = value {
-            self.output.extend(&value.to_be_bytes())?;
+            self.output.as_mut().extend(&value.to_be_bytes())?;
         }
         Ok(())
     }

@@ -227,3 +227,40 @@ fn decoder_refuses_unknown_flags_argument_counts_and_versions() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn preflight_nested_arguments_write_all_eight_variants_directly_into_the_outer_sink() -> TestResult
+{
+    for (_, arguments, fixture, _) in fixtures() {
+        let bytes = hex::decode(fixture.trim())?;
+        let mut expected = u32::try_from(bytes.len())?.to_be_bytes().to_vec();
+        expected.extend_from_slice(&bytes);
+        let mut counter = BoundedWriter::counter(expected.len());
+        arguments.write_field_to(&mut counter)?;
+        assert_eq!(counter.len(), expected.len());
+        let mut output = BoundedWriter::exact_buffer(counter.len());
+        arguments.write_field_to(&mut output)?;
+        assert_eq!(output.into_bytes()?, expected);
+        let mut short = BoundedWriter::counter(expected.len() - 1);
+        assert!(arguments.write_field_to(&mut short).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn preflight_nested_arguments_refuse_their_own_cap_before_touching_outer_output() -> TestResult {
+    let text = "x".repeat(MAX_TOOL_ARGUMENT_BYTES);
+    let arguments = ToolArguments::SendInput {
+        terminal_id: "terminal",
+        text: &text,
+        press_enter: false,
+    };
+    let mut outer = BoundedWriter::buffer(usize::MAX);
+    assert_eq!(
+        arguments.write_field_to(&mut outer),
+        Err(CommandError::PlaintextTooLarge)
+    );
+    assert_eq!(outer.len(), 0);
+    assert!(outer.into_bytes()?.is_empty());
+    Ok(())
+}

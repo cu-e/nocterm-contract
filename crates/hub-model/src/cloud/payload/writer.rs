@@ -24,6 +24,17 @@ impl PayloadWriter {
             output: BoundedWriter::counter(MAX_PLAINTEXT_BYTES),
         }
     }
+    pub(in crate::cloud) fn exact_buffer(length: usize) -> Result<Self, PayloadError> {
+        if length > MAX_PLAINTEXT_BYTES {
+            return Err(PayloadError::Bounds);
+        }
+        Ok(Self {
+            output: BoundedWriter::exact_buffer(length),
+        })
+    }
+    pub(in crate::cloud) fn len(&self) -> usize {
+        self.output.len()
+    }
     pub(in crate::cloud) fn finish(self) -> Result<Vec<u8>, PayloadError> {
         Ok(self.output.into_bytes()?)
     }
@@ -32,6 +43,12 @@ impl PayloadWriter {
     }
     pub(in crate::cloud) fn field(&mut self, bytes: &[u8]) -> Result<(), PayloadError> {
         Ok(self.output.field(bytes)?)
+    }
+    pub(in crate::cloud) fn tool_arguments(
+        &mut self,
+        value: &crate::cloud::tool_arguments::ToolArguments<'_>,
+    ) -> Result<(), PayloadError> {
+        Ok(value.write_field_to(&mut self.output)?)
     }
     pub(in crate::cloud) fn tag(&mut self, value: u8) -> Result<(), PayloadError> {
         self.raw(&[value])
