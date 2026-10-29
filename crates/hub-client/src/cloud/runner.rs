@@ -145,6 +145,24 @@ impl CloudRunner {
     ) -> Result<CloudReplay, CloudError> {
         CloudReplay::start(self.access(), selector, after, max_records, max_bytes).await
     }
+    pub async fn replay_with_residency(
+        &self,
+        selector: CloudSelector,
+        after: u64,
+        max_records: u32,
+        max_bytes: u32,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<CloudReplay, CloudError> {
+        CloudReplay::start_with_residency(
+            self.access(),
+            selector,
+            after,
+            max_records,
+            max_bytes,
+            residency,
+        )
+        .await
+    }
     pub async fn heartbeat(&self, signed_status: Vec<u8>) -> Result<i64, CloudError> {
         if signed_status.is_empty() || signed_status.len() > 4096 {
             return Err(CloudError::Protocol);
@@ -170,21 +188,17 @@ impl CloudRunner {
         selector: &CloudSelector,
         through: u64,
     ) -> Result<u64, CloudError> {
-        let access = self.access();
-        access.require_selector(selector)?;
-        let response = access
-            .service()?
-            .acknowledge(v1::CloudAcknowledge {
-                selector: Some(selector.wire()?),
-                through_cursor: through,
-            })
-            .await?
-            .into_inner();
-        self.check_source()?;
-        if response.through_cursor != through {
-            return Err(CloudError::Protocol);
-        }
-        Ok(through)
+        self.access().acknowledge(selector, through, None).await
+    }
+    pub async fn acknowledge_with_residency(
+        &self,
+        selector: &CloudSelector,
+        through: u64,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<u64, CloudError> {
+        self.access()
+            .acknowledge(selector, through, Some(residency))
+            .await
     }
     /// Retain the same stream's durable Snapshot at cursor through+1.
     /// The hub validates that anchor atomically; inbox retention is not supported.

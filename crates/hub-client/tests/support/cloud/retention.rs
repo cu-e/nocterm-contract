@@ -6,6 +6,24 @@ use nocterm_hub_proto::v1::{self, cloud_replay_frame::Frame, cloud_selector::Str
 use tonic::Status;
 
 type Publications = [(PublicationMetadata, Vec<u8>)];
+pub(super) fn acknowledge(
+    publications: &Publications,
+    request: v1::CloudAcknowledge,
+) -> Result<v1::CloudAcknowledged, Status> {
+    let selector = request
+        .selector
+        .ok_or_else(|| Status::invalid_argument("selector"))?;
+    let head = publications
+        .iter()
+        .filter(|(meta, _)| selected(&selector, meta))
+        .count() as u64;
+    if request.through_cursor > head {
+        return Err(Status::out_of_range("ACK exceeds stream head"));
+    }
+    Ok(v1::CloudAcknowledged {
+        through_cursor: request.through_cursor,
+    })
+}
 /// Exact retries keep their original stream position; changed reuse conflicts.
 /// This is the shared test peer's behavior, not a production persistence adapter.
 pub(super) fn publish(

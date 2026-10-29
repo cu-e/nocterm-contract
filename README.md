@@ -227,6 +227,16 @@ Unary retention has the same ownership requirement: `CloudRunner::purge_with_res
 retains the caller's allocation in the actual encoded request body, including background
 channel queuing after response cancellation. The existing `purge` API remains available.
 
+Both runner and device Cloud clients expose `replay_with_residency` and
+`acknowledge_with_residency`. The allocation follows encoded request and response bodies;
+the replay object also retains it until its decoded stream state drops. Charge assembled
+ciphertext, opened plaintext and native DTOs separately from `CloudReplay::buffer_work_bytes()`.
+`cloud::acknowledgement_work_bytes()` describes the guarded unary ACK working bound without
+an upload queue. Guarded device signing rejects tokens over1024bytes and hub/device IDs
+over128bytes under the same lock used for signing, before cloning them. Existing unguarded
+signing policy is unchanged. These are logical SDK buffer bounds, not process RSS or the
+Tonic/HTTP2/TLS/runtime/allocator baseline.
+
 ### Memory-only provider grants
 
 `RunnerBootKey` creates a fresh non-restorable X25519 recipient. Its API has no seed export,

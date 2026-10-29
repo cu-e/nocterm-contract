@@ -32,3 +32,34 @@ async fn retained_unary_body_keeps_work_after_request_transfer_and_through_eof()
     assert!(weak.upgrade().is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn retained_response_body_keeps_receive_work_after_service_future_handoff()
+-> Result<(), Box<dyn std::error::Error>> {
+    let owner = Arc::new(());
+    let weak = Arc::downgrade(&owner);
+    let response = retain_response(
+        http::Response::new(Body::new(String::from("queued response"))),
+        owner.clone(),
+    );
+    let mut body = response.into_body();
+    drop(owner);
+    assert!(weak.upgrade().is_some());
+    let frame = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
+        .await
+        .ok_or("missing response")??;
+    assert_eq!(
+        frame.data_ref().map(|bytes| bytes.as_ref()),
+        Some(b"queued response".as_slice())
+    );
+    drop(frame);
+    assert!(
+        std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
+            .await
+            .is_none()
+    );
+    assert!(weak.upgrade().is_some());
+    drop(body);
+    assert!(weak.upgrade().is_none());
+    Ok(())
+}

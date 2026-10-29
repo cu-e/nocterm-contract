@@ -23,13 +23,19 @@ impl ResidentChannel {
 impl Service<http::Request<Body>> for ResidentChannel {
     type Response = <Channel as Service<http::Request<Body>>>::Response;
     type Error = <Channel as Service<http::Request<Body>>>::Error;
-    type Future = <Channel as Service<http::Request<Body>>>::Future;
+    type Future = tonic::codegen::BoxFuture<Self::Response, Self::Error>;
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-        self.inner
-            .call(retain_request(request, self.residency.clone()))
+        let future = self
+            .inner
+            .call(retain_request(request, self.residency.clone()));
+        let residency = self.residency.clone();
+        Box::pin(async move {
+            let response = future.await?;
+            Ok(retain_response(response, residency))
+        })
     }
 }
 
@@ -38,6 +44,18 @@ fn retain_request(
     residency: Arc<dyn Send + Sync>,
 ) -> http::Request<Body> {
     request.map(|inner| {
+        Body::new(ResidentBody {
+            inner,
+            _residency: residency,
+        })
+    })
+}
+
+fn retain_response(
+    response: http::Response<Body>,
+    residency: Arc<dyn Send + Sync>,
+) -> http::Response<Body> {
+    response.map(|inner| {
         Body::new(ResidentBody {
             inner,
             _residency: residency,
@@ -69,7 +87,12 @@ impl http_body::Body for ResidentBody {
 }
 
 pub(super) fn working_owner_bytes() -> usize {
-    std::mem::size_of::<ResidentChannel>() + std::mem::size_of::<ResidentBody>()
+    // Request and response bodies may coexist; the service's response future
+    // also owns a channel future and one residency reference while pending.
+    std::mem::size_of::<ResidentChannel>()
+        + 2 * std::mem::size_of::<ResidentBody>()
+        + std::mem::size_of::<<Channel as Service<http::Request<Body>>>::Future>()
+        + std::mem::size_of::<Arc<dyn Send + Sync>>()
 }
 
 #[cfg(test)]

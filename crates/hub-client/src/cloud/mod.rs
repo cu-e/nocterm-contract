@@ -22,6 +22,14 @@ pub use replay::{
 };
 pub use upload::CloudUpload;
 
+/// Logical SDK working bound for a guarded unary ACK. Caller-owned metadata,
+/// private storage and Tonic/HTTP2/TLS/runtime/allocator baseline are separate.
+/// Guarded device signing limits tokens to1024bytes and textual hub/device IDs
+/// to128bytes before cloning, under the actual signer lock.
+pub fn acknowledgement_work_bytes() -> usize {
+    transport::acknowledgement_work_bytes()
+}
+
 use crate::{
     ClientError, Keyset,
     signer::{CredentialCapture, Credentials},
@@ -320,24 +328,42 @@ impl CloudClient {
         )
         .await
     }
+    pub async fn replay_with_residency(
+        &self,
+        selector: CloudSelector,
+        after: u64,
+        max_records: u32,
+        max_bytes: u32,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<CloudReplay, CloudError> {
+        CloudReplay::start_with_residency(
+            transport::RelayAccess::device(self),
+            selector,
+            after,
+            max_records,
+            max_bytes,
+            residency,
+        )
+        .await
+    }
     pub async fn acknowledge(
         &self,
         selector: &CloudSelector,
         through: u64,
     ) -> Result<u64, CloudError> {
-        let response = self
-            .service()?
-            .acknowledge(v1::CloudAcknowledge {
-                selector: Some(selector.wire()?),
-                through_cursor: through,
-            })
-            .await?
-            .into_inner();
-        self.check_source()?;
-        if response.through_cursor != through {
-            return Err(CloudError::Protocol);
-        }
-        Ok(through)
+        transport::RelayAccess::device(self)
+            .acknowledge(selector, through, None)
+            .await
+    }
+    pub async fn acknowledge_with_residency(
+        &self,
+        selector: &CloudSelector,
+        through: u64,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<u64, CloudError> {
+        transport::RelayAccess::device(self)
+            .acknowledge(selector, through, Some(residency))
+            .await
     }
     pub async fn watch(
         &self,
@@ -458,14 +484,37 @@ pub(crate) struct CapturedSigner {
     generation: u64,
 }
 impl Interceptor for CapturedSigner {
-    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
+    fn call(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+        self.sign(request, false)
+    }
+}
+impl CapturedSigner {
+    fn call_bounded(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+        self.sign(request, true)
+    }
+    fn require_bounded(&self) -> Result<(), CloudError> {
+        self.credentials
+            .require_cloud_metadata(self.generation)
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unauthenticated {
+                    CloudError::SourceChanged
+                } else {
+                    CloudError::Protocol
+                }
+            })
+    }
+    fn sign(&self, mut request: Request<()>, bounded: bool) -> Result<Request<()>, Status> {
         let method = request
             .extensions()
             .get::<GrpcMethod>()
             .ok_or_else(|| Status::internal("unknown method"))?;
         let path = method_path(method.service(), method.method());
-        let (token, device, nonce, ts, signature) =
-            self.credentials.sign_scoped(&path, Some(self.generation))?;
+        let (token, device, nonce, ts, signature) = if bounded {
+            self.credentials
+                .sign_scoped_bounded(&path, Some(self.generation))?
+        } else {
+            self.credentials.sign_scoped(&path, Some(self.generation))?
+        };
         let headers = request.metadata_mut();
         let mut authorization: tonic::metadata::AsciiMetadataValue = format!("Bearer {token}")
             .parse()

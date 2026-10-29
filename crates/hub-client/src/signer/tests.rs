@@ -111,3 +111,46 @@ fn conditional_refresh_does_not_sign_in_an_already_signed_out_client() -> TestRe
     assert!(credentials.capture().is_none());
     Ok(())
 }
+
+#[test]
+fn bounded_cloud_signing_preserves_canonical_proof_and_refuses_large_metadata_before_cloning()
+-> TestResult {
+    let credentials = credentials();
+    let capture = credentials.capture().ok_or("capture")?;
+    let path = "/nocterm.hub.v1.CloudService/Acknowledge";
+    let (token, _, nonce, timestamp, signature) =
+        credentials.sign_scoped_bounded(path, Some(capture.generation))?;
+    nocterm_hub_model::pop::verify(
+        &capture.signing_key,
+        &request_message("hub", path, &token, &nonce, timestamp),
+        &signature,
+    )?;
+    let token = "x".repeat(1025);
+    assert!(credentials.rotate_session(capture.generation, session("A", &token)));
+    assert!(
+        credentials
+            .sign_scoped_bounded(path, Some(capture.generation))
+            .is_err()
+    );
+    assert!(
+        credentials
+            .require_cloud_metadata(capture.generation)
+            .is_err()
+    );
+    // Existing unguarded signing retains its original policy and raw bytes.
+    assert_eq!(
+        credentials.sign_scoped(path, Some(capture.generation))?.0,
+        token
+    );
+    for (hub, device) in [
+        ("h".repeat(129), "device".into()),
+        ("hub".into(), "d".repeat(129)),
+    ] {
+        let mut value = session("A", "normal");
+        value.device_id = device;
+        let candidate = Credentials::new(hub, DeviceKey::from_seed(&[7; 32]), Some(value));
+        assert!(candidate.sign_scoped_bounded(path, None).is_err());
+        assert!(candidate.sign_scoped(path, None).is_ok());
+    }
+    Ok(())
+}

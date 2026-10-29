@@ -7,7 +7,7 @@ use nocterm_hub_model::cloud::{
     },
 };
 use nocterm_hub_proto::v1::{self, cloud_publication_origin::Issuer, cloud_replay_frame::Frame};
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub enum CloudSelector {
@@ -152,6 +152,7 @@ pub struct CloudReplay {
     max_bytes: u32,
     ended: bool,
     poisoned: bool,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl CloudReplay {
     pub(super) async fn start(
@@ -161,6 +162,34 @@ impl CloudReplay {
         max_records: u32,
         max_bytes: u32,
     ) -> Result<Self, CloudError> {
+        Self::start_inner(client, selector, after, max_records, max_bytes, None).await
+    }
+    pub(super) async fn start_with_residency(
+        client: RelayAccess,
+        selector: CloudSelector,
+        after: u64,
+        max_records: u32,
+        max_bytes: u32,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<Self, CloudError> {
+        Self::start_inner(
+            client,
+            selector,
+            after,
+            max_records,
+            max_bytes,
+            Some(residency),
+        )
+        .await
+    }
+    async fn start_inner(
+        client: RelayAccess,
+        selector: CloudSelector,
+        after: u64,
+        max_records: u32,
+        max_bytes: u32,
+        residency: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<Self, CloudError> {
         if max_records == 0
             || max_records > MAX_RELAY_PAGE_RECORDS
             || max_bytes == 0
@@ -169,17 +198,23 @@ impl CloudReplay {
             return Err(CloudError::Protocol);
         }
         client.require_selector(&selector)?;
-        let stream = client
-            .service()?
-            .replay(v1::CloudReplayRequest {
-                selector: Some(selector.wire()?),
-                after_cursor: after,
-                max_records,
-                max_bytes,
-            })
-            .await?
-            .into_inner();
+        let request = v1::CloudReplayRequest {
+            selector: Some(selector.wire()?),
+            after_cursor: after,
+            max_records,
+            max_bytes,
+        };
+        let response = match residency.as_ref() {
+            Some(owner) => {
+                client
+                    .service_with_residency(owner.clone())?
+                    .replay(request)
+                    .await
+            }
+            None => client.service()?.replay(request).await,
+        };
         client.check_source()?;
+        let stream = response?.into_inner();
         Ok(Self {
             client,
             stream,
@@ -191,7 +226,20 @@ impl CloudReplay {
             max_bytes,
             ended: false,
             poisoned: false,
+            _residency: residency,
         })
+    }
+    /// SDK-owned parsed frame/header and routing scratch for one guarded stream.
+    /// Callers separately charge assembled ciphertext, opened plaintext and DTOs.
+    /// Tonic/HTTP2/TLS/runtime/allocator/decoder internals are connection baseline,
+    /// not a total process memory bound supplied by this accessor.
+    pub fn buffer_work_bytes() -> usize {
+        super::transport::acknowledgement_work_bytes()
+            + nocterm_hub_model::cloud::relay::MAX_RELAY_WIRE_BYTES
+            + 2 * nocterm_hub_model::cloud::relay::MAX_RELAY_BINDING_BYTES
+            + nocterm_hub_model::cloud::relay::MAX_RELAY_FRAME_BYTES
+            + std::mem::size_of::<Self>()
+            + std::mem::size_of::<CloudIncomingRecord<'static>>()
     }
     pub async fn next_record(&mut self) -> Result<CloudReplayItem<'_>, CloudError> {
         if self.ended || self.poisoned {

@@ -112,3 +112,76 @@ async fn runner_upload_uses_smaller_signed_frame_limit_and_clamped_work_budget()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn guarded_runner_and_device_replay_and_ack_keep_original_stream_data() -> TestResult {
+    use nocterm_hub_client::cloud::{CloudReplay, CloudReplayItem, acknowledgement_work_bytes};
+    let hub = FakeHub::start_cloud().await;
+    let (_, cloud, runner) = enrolled(&hub).await?;
+    let body = vec![42; 5000];
+    let context = record_context(&cloud, [4; 16], 1)?;
+    assert_eq!(
+        publish_record(&runner, [45; 16], RelayBinding::event(context), &body).await?,
+        1
+    );
+    let selector = CloudSelector::Chat {
+        runner: RunnerCoordinate {
+            id: [2; 16],
+            key_epoch: 3,
+        },
+        chat: [4; 16],
+    };
+    assert!(acknowledgement_work_bytes() <= 16 * 1024);
+    assert!(CloudReplay::buffer_work_bytes() > acknowledgement_work_bytes());
+    for device in [false, true] {
+        let owner = Arc::new(());
+        let weak = Arc::downgrade(&owner);
+        let mut replay = if device {
+            cloud
+                .replay_with_residency(selector.clone(), 0, 1, 8192, owner.clone())
+                .await?
+        } else {
+            runner
+                .replay_with_residency(selector.clone(), 0, 1, 8192, owner.clone())
+                .await?
+        };
+        drop(owner);
+        assert!(weak.upgrade().is_some());
+        let CloudReplayItem::Record(mut record) = replay.next_record().await? else {
+            return Err("record missing".into());
+        };
+        let mut received = Vec::new();
+        while let Some(chunk) = record.next_chunk().await? {
+            received.extend_from_slice(&chunk);
+        }
+        assert_eq!(received, body);
+        drop(record);
+        assert!(matches!(
+            replay.next_record().await?,
+            CloudReplayItem::End {
+                through: 1,
+                has_more: false
+            }
+        ));
+        assert!(weak.upgrade().is_some());
+        drop(replay);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let owner = Arc::new(());
+        let acknowledged = if device {
+            cloud
+                .acknowledge_with_residency(&selector, 1, owner)
+                .await?
+        } else {
+            runner
+                .acknowledge_with_residency(&selector, 1, owner)
+                .await?
+        };
+        assert_eq!(acknowledged, 1);
+    }
+    Ok(())
+}

@@ -166,6 +166,48 @@ impl Credentials {
         path: &str,
         generation: Option<u64>,
     ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
+        self.sign_scoped_inner(path, generation, false)
+    }
+    pub(crate) fn sign_scoped_bounded(
+        &self,
+        path: &str,
+        generation: Option<u64>,
+    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
+        self.sign_scoped_inner(path, generation, true)
+    }
+    pub(crate) fn require_cloud_metadata(&self, generation: u64) -> Result<(), Status> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Err(Status::unauthenticated(
+                "the original account sign-in was replaced",
+            ));
+        }
+        self.cloud_metadata(
+            current
+                .as_ref()
+                .ok_or_else(|| Status::unauthenticated("not signed in"))?,
+        )
+    }
+    fn cloud_metadata(&self, session: &Session) -> Result<(), Status> {
+        if session.access_token.is_empty()
+            || self.hub_id.is_empty()
+            || session.device_id.is_empty()
+            || session.access_token.len() > 1024
+            || self.hub_id.len() > 128
+            || session.device_id.len() > 128
+        {
+            return Err(Status::resource_exhausted(
+                "Cloud authentication metadata exceeds its bound",
+            ));
+        }
+        Ok(())
+    }
+    fn sign_scoped_inner(
+        &self,
+        path: &str,
+        generation: Option<u64>,
+        bounded: bool,
+    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
         let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
         if generation.is_some_and(|expected| self.generation.load(Ordering::Acquire) != expected) {
             return Err(Status::unauthenticated(
@@ -175,6 +217,11 @@ impl Credentials {
         let session = current
             .as_ref()
             .ok_or_else(|| Status::unauthenticated("not signed in"))?;
+        // The check and subsequent clone/sign use the same lock: a refresh
+        // cannot enlarge the actual input after this bound was checked.
+        if bounded {
+            self.cloud_metadata(session)?;
+        }
         let nonce = nonce().map_err(|_| Status::internal("no randomness"))?;
         let ts = now_ms();
         let signature = self.key.sign(&request_message(

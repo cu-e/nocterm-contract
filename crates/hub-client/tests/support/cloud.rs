@@ -345,8 +345,27 @@ impl CloudService for CloudPeer {
     async fn runner_status(&self, _: Request<v1::CloudRunnerRef>) -> Reply<v1::CloudRunnerStatus> {
         Err(Status::unimplemented("fixture"))
     }
-    async fn acknowledge(&self, _: Request<v1::CloudAcknowledge>) -> Reply<v1::CloudAcknowledged> {
-        Err(Status::unimplemented("fixture"))
+    async fn acknowledge(
+        &self,
+        request: Request<v1::CloudAcknowledge>,
+    ) -> Reply<v1::CloudAcknowledged> {
+        if request
+            .metadata()
+            .get_bin("x-nocterm-runner-claim-bin")
+            .is_some()
+        {
+            self.0.runner.authenticate(
+                &request,
+                nocterm_hub_model::cloud::runner_request::RunnerMethod::Acknowledge,
+            )?;
+        } else if request.metadata().get("authorization").is_none() {
+            return Err(Status::unauthenticated("device"));
+        }
+        let state = lock(&self.0.state);
+        Ok(Response::new(retention::acknowledge(
+            &state.publications,
+            request.into_inner(),
+        )?))
     }
     type WatchStream = Hints;
     async fn watch(&self, _: Request<v1::CloudWatchRequest>) -> Reply<Self::WatchStream> {
