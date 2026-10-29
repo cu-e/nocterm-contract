@@ -409,6 +409,20 @@ impl CloudClient {
     ) -> Result<CloudUpload, CloudError> {
         CloudUpload::start(transport::RelayAccess::device(self), metadata)
     }
+    /// The caller's actual allocation follows queued frames, encoded request
+    /// and response bodies and the RPC task through their final destruction.
+    /// Original ciphertext and retained results need their own charged owners.
+    pub fn begin_publication_with_residency(
+        &self,
+        metadata: PublicationMetadata,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<CloudUpload, CloudError> {
+        CloudUpload::start_with_residency(
+            transport::RelayAccess::device(self),
+            metadata,
+            Some(residency),
+        )
+    }
     pub async fn replay(
         &self,
         selector: CloudSelector,

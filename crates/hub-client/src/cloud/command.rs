@@ -26,8 +26,11 @@ impl CloudCommandInvocation {
         client.check_source()?;
         let capture = client
             .credentials
-            .capture()
-            .ok_or(CloudError::NotSignedIn)?;
+            .capture_cloud(client.generation)
+            .map_err(|error| match error.code() {
+                tonic::Code::Unauthenticated => CloudError::SourceChanged,
+                _ => CloudError::Protocol,
+            })?;
         if capture.generation != client.generation
             || capture.account_id != client.subject().account.as_str()
             || capture.device_id != client.subject().device.as_str()

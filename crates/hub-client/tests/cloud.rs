@@ -59,6 +59,35 @@ async fn a_cancelled_backpressured_write_cannot_finish_a_publication() -> TestRe
     assert!(harness.publications().is_empty());
     Ok(())
 }
+#[tokio::test]
+async fn guarded_device_upload_retains_the_actual_rpc_owner_after_cancellation() -> TestResult {
+    use std::{sync::Arc, time::Duration};
+    let hub = FakeHub::start_cloud().await;
+    let (_, client) = cloud(&hub).await?;
+    let harness = hub.cloud().ok_or("fixture")?;
+    harness.hold_receipt();
+    let bytes = [0x51; 128];
+    let owner = Arc::new(());
+    let weak = Arc::downgrade(&owner);
+    let mut upload = client.begin_publication_with_residency(metadata(&client, &bytes)?, owner)?;
+    upload.write(&bytes).await?;
+    let mut pending = Box::pin(upload.finish());
+    tokio::select! {
+        result = &mut pending => return Err(format!("unexpected receipt: {result:?}").into()),
+        _ = harness.wait_published() => {}
+    }
+    drop(pending);
+    assert!(weak.upgrade().is_some());
+    harness.release_receipt();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(harness.publications().len(), 1);
+    Ok(())
+}
 async fn cloud(
     hub: &FakeHub,
 ) -> Result<(nocterm_hub_client::HubClient, CloudClient), Box<dyn std::error::Error>> {

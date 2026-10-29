@@ -68,6 +68,28 @@ pub struct CloudUpload {
     write_pending: bool,
     _residency: Option<Arc<dyn Send + Sync>>,
 }
+enum PublicationService {
+    Ordinary(super::transport::RelayService),
+    Resident(super::transport::ResidentRelayService),
+}
+impl PublicationService {
+    fn new(
+        client: &RelayAccess,
+        residency: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<Self, CloudError> {
+        match residency {
+            Some(owner) => Ok(Self::Resident(client.service_with_residency(owner)?)),
+            None => Ok(Self::Ordinary(client.service()?)),
+        }
+    }
+    async fn publish(self, frames: ResidentFrames) -> Result<v1::CloudDeliveryReceipt, CloudError> {
+        let response = match self {
+            Self::Ordinary(mut rpc) => rpc.publish(frames).await,
+            Self::Resident(mut rpc) => rpc.publish(frames).await,
+        };
+        Ok(response?.into_inner())
+    }
+}
 impl CloudUpload {
     pub(super) fn start(
         client: RelayAccess,
@@ -86,7 +108,7 @@ impl CloudUpload {
         {
             return Err(CloudError::Protocol);
         }
-        let mut rpc = client.service()?;
+        let rpc = PublicationService::new(&client, residency.clone())?;
         let (sender, receiver) = mpsc::channel(MAX_RELAY_QUEUE_FRAMES);
         let publication = v1::CloudPublication {
             publication_id: metadata.id().to_vec(),
@@ -108,7 +130,7 @@ impl CloudUpload {
             // The response future has its own owner. A transferred request body
             // keeps another owner if it outlives this task in Tonic/Tower.
             let response = async {
-                let receipt = rpc.publish(frames).await?.into_inner();
+                let receipt = rpc.publish(frames).await?;
                 if receipt.publication_id != expected_id
                     || receipt.ciphertext_sha256 != expected_digest
                     || receipt.cursor == 0
@@ -161,6 +183,7 @@ impl CloudUpload {
             std::mem::size_of::<ResidentFrames>(),
             std::mem::size_of::<ResidentReceipt>(),
             super::resident_channel::working_owner_bytes(),
+            super::acknowledgement_work_bytes(),
         ]
         .into_iter()
         .try_fold(0usize, |sum, bytes| {

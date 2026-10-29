@@ -15,6 +15,31 @@ use nocterm_keys::{
 use support::FakeHub;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[tokio::test]
+async fn command_invocation_refuses_oversized_original_credential_metadata() -> TestResult {
+    let hub = FakeHub::start_cloud().await;
+    let now = now_ms();
+    let client = HubClient::connect(
+        &hub.endpoint(),
+        DeviceKey::generate()?,
+        Some(Session {
+            account_id: "acc-1".into(),
+            device_id: "dev-1".into(),
+            access_token: "x".repeat(2048),
+            access_expires_at_ms: now + 30_000,
+            refresh_token: "refresh".into(),
+            refresh_expires_at_ms: now + 45_000,
+        }),
+    )
+    .await?;
+    let authority = hub.cloud().ok_or("fixture")?.authority();
+    let cloud = client.cloud_offer().await?.accept(&authority)?;
+    assert!(matches!(
+        cloud.command_invocation(),
+        Err(CloudError::Protocol)
+    ));
+    Ok(())
+}
+#[tokio::test]
 async fn reconciliation_fingerprint_survives_actual_signed_encrypted_command_and_exact_retry()
 -> TestResult {
     let hub = FakeHub::start_cloud().await;
