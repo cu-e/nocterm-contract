@@ -194,21 +194,44 @@ impl CloudRunner {
         through: u64,
         retained_publication: [u8; 16],
     ) -> Result<u64, CloudError> {
+        self.purge_inner(selector, through, retained_publication, None)
+            .await
+    }
+    /// Retains the actual caller allocation in the encoded request body, even
+    /// when Tonic/Tower keeps that body after the response future is cancelled.
+    pub async fn purge_with_residency(
+        &self,
+        selector: &CloudSelector,
+        through: u64,
+        retained_publication: [u8; 16],
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<u64, CloudError> {
+        self.purge_inner(selector, through, retained_publication, Some(residency))
+            .await
+    }
+    async fn purge_inner(
+        &self,
+        selector: &CloudSelector,
+        through: u64,
+        retained_publication: [u8; 16],
+        residency: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<u64, CloudError> {
         if !matches!(selector, CloudSelector::Chat { .. }) || through.checked_add(1).is_none() {
             return Err(CloudError::Protocol);
         }
         let access = self.access();
         access.require_selector(selector)?;
-        let response = access
-            .service()?
-            .purge(v1::CloudPurge {
-                selector: Some(selector.wire()?),
-                through_cursor: through,
-                retained_publication_id: retained_publication.to_vec(),
-            })
-            .await?
-            .into_inner();
+        let request = v1::CloudPurge {
+            selector: Some(selector.wire()?),
+            through_cursor: through,
+            retained_publication_id: retained_publication.to_vec(),
+        };
+        let response = match residency {
+            Some(owner) => access.service_with_residency(owner)?.purge(request).await,
+            None => access.service()?.purge(request).await,
+        };
         self.check_source()?;
+        let response = response?.into_inner();
         if response.through_cursor != through {
             return Err(CloudError::Protocol);
         }

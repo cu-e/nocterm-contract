@@ -223,6 +223,10 @@ their original ciphertext and the retained runtime/connection, Tonic, HTTP/2, TL
 baseline. It is not a total RSS bound. Use `max_frame_bytes()` from the upload's signed
 negotiated limit when producing chunks.
 
+Unary retention has the same ownership requirement: `CloudRunner::purge_with_residency`
+retains the caller's allocation in the actual encoded request body, including background
+channel queuing after response cancellation. The existing `purge` API remains available.
+
 ### Memory-only provider grants
 
 `RunnerBootKey` creates a fresh non-restorable X25519 recipient. Its API has no seed export,

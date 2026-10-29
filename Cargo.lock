@@ -754,6 +754,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "hex",
+ "http-body",
  "hyper-util",
  "nocterm-hub-grpc",
  "nocterm-hub-model",

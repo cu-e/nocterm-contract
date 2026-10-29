@@ -325,7 +325,13 @@ async fn purge_gap_recovers_the_first_retained_signed_snapshot_in_a_bounded_repl
     };
     assert_eq!(record.cursor(), 1);
     drop(record);
-    assert_eq!(runner.purge(&selector, 1, [2; 16]).await?, 1);
+    let residency = std::sync::Arc::new(());
+    assert_eq!(
+        runner
+            .purge_with_residency(&selector, 1, [2; 16], residency)
+            .await?,
+        1
+    );
     let mut stale = cloud.replay(selector.clone(), 0, 1, 65_536).await?;
     let CloudReplayItem::Gap {
         retained_from,

@@ -160,6 +160,7 @@ impl CloudUpload {
             std::mem::size_of::<Self>(),
             std::mem::size_of::<ResidentFrames>(),
             std::mem::size_of::<ResidentReceipt>(),
+            super::resident_channel::working_owner_bytes(),
         ]
         .into_iter()
         .try_fold(0usize, |sum, bytes| {

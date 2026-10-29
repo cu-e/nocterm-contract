@@ -36,6 +36,8 @@ pub(super) struct RelayAccess {
     limits: CapabilityLimits,
 }
 pub(super) type RelayService = CloudServiceClient<InterceptedService<Channel, RelaySigner>>;
+pub(super) type ResidentRelayService =
+    CloudServiceClient<InterceptedService<super::resident_channel::ResidentChannel, RelaySigner>>;
 impl RelayAccess {
     pub(super) fn namespace(&self) -> &CloudNamespace {
         &self.namespace
@@ -110,6 +112,18 @@ impl RelayAccess {
         self.check_source()?;
         Ok(CloudServiceClient::new(InterceptedService::new(
             self.channel.clone(),
+            self.signer.clone(),
+        ))
+        .max_decoding_message_size(MAX_RELAY_WIRE_BYTES)
+        .max_encoding_message_size(MAX_RELAY_WIRE_BYTES))
+    }
+    pub(super) fn service_with_residency(
+        &self,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<ResidentRelayService, CloudError> {
+        self.check_source()?;
+        Ok(CloudServiceClient::new(InterceptedService::new(
+            super::resident_channel::ResidentChannel::new(self.channel.clone(), residency),
             self.signer.clone(),
         ))
         .max_decoding_message_size(MAX_RELAY_WIRE_BYTES)

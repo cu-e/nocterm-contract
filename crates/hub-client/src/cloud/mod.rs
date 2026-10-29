@@ -7,6 +7,7 @@ pub use probe::{
     CompletedHeadProbe, DeviceHeadProbes, IncomingHeadProbe, PreparedHeadProbe, RunnerHeadProbes,
 };
 mod replay;
+mod resident_channel;
 mod runner;
 mod runner_credentials;
 mod transport;
