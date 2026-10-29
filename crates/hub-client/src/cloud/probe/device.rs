@@ -1,4 +1,5 @@
-use super::{require_feature, require_reply, require_wire};
+use super::{ResidentHeadWitness, require_feature, require_reply, require_wire};
+use crate::cloud::transport::RelayAccess;
 use crate::{
     Keyset,
     cloud::{CloudClient, CloudError},
@@ -24,15 +25,25 @@ use std::{
 };
 use tokio::time::{Instant, timeout_at};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeviceHeadProbes {
     client: CloudClient,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl DeviceHeadProbes {
-    pub(in crate::cloud) fn new(client: CloudClient) -> Result<Self, CloudError> {
+    pub(in crate::cloud) fn new(
+        client: CloudClient,
+        residency: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<Self, CloudError> {
         require_feature(client.limits())?;
         client.check_source()?;
-        Ok(Self { client })
+        if residency.is_some() {
+            client.credentials.capture_cloud(client.generation)?;
+        }
+        Ok(Self {
+            client,
+            _residency: residency,
+        })
     }
     /// Scope contains independently established account/R pins. The SDK repeats
     /// its actual account key, device attribution and original login capture.
@@ -50,11 +61,16 @@ impl DeviceHeadProbes {
         {
             return Err(CloudError::Protocol);
         }
-        let capture = self
-            .client
-            .credentials
-            .capture()
-            .ok_or(CloudError::NotSignedIn)?;
+        let capture = if self._residency.is_some() {
+            self.client
+                .credentials
+                .capture_cloud(self.client.generation)?
+        } else {
+            self.client
+                .credentials
+                .capture()
+                .ok_or(CloudError::NotSignedIn)?
+        };
         if capture.generation != self.client.generation {
             return Err(CloudError::SourceChanged);
         }
@@ -96,6 +112,7 @@ impl DeviceHeadProbes {
             source: Arc::downgrade(&self.client.credentials),
             generation: capture.generation,
             deadline: Instant::now() + duration,
+            _residency: self._residency.clone(),
         })
     }
     /// Consumes the actual one-shot query. The wait retains no account keyset.
@@ -105,6 +122,9 @@ impl DeviceHeadProbes {
         probe: PreparedHeadProbe,
     ) -> Result<CompletedHeadProbe, CloudError> {
         probe.require_source(&self.client.credentials, self.client.generation)?;
+        if self._residency.is_some() && probe._residency.is_none() {
+            return Err(CloudError::Protocol);
+        }
         let scope = probe.query.scope.canonical_bytes()?;
         let request = v1::CloudHeadProbe {
             scope: scope.clone(),
@@ -112,11 +132,21 @@ impl DeviceHeadProbes {
             ciphertext: probe.ciphertext,
             expires_at_ms: probe.query.window.expires_at_ms,
         };
-        let mut service = self.client.service()?;
-        let response = timeout_at(probe.deadline, service.probe_head(request))
-            .await
-            .map_err(|_| HeadProbeError::Time)??
-            .into_inner();
+        let access = RelayAccess::device(&self.client);
+        let response = match probe._residency.as_ref() {
+            Some(owner) => {
+                timeout_at(
+                    probe.deadline,
+                    access
+                        .service_with_residency(owner.clone())?
+                        .probe_head(request),
+                )
+                .await
+            }
+            None => timeout_at(probe.deadline, access.service()?.probe_head(request)).await,
+        }
+        .map_err(|_| HeadProbeError::Time)??
+        .into_inner();
         require_original(&probe.source, probe.generation, probe.deadline)?;
         if response.scope != scope || response.probe_id != probe.query.probe_id {
             return Err(CloudError::Protocol);
@@ -128,6 +158,7 @@ impl DeviceHeadProbes {
             source: probe.source,
             generation: probe.generation,
             deadline: probe.deadline,
+            _residency: probe._residency,
         })
     }
 }
@@ -139,6 +170,7 @@ pub struct PreparedHeadProbe {
     source: Weak<Credentials>,
     generation: u64,
     deadline: Instant,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl PreparedHeadProbe {
     pub fn query(&self) -> &HeadQuery {
@@ -164,12 +196,34 @@ pub struct CompletedHeadProbe {
     source: Weak<Credentials>,
     generation: u64,
     deadline: Instant,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl CompletedHeadProbe {
     pub fn query(&self) -> &HeadQuery {
         &self.query
     }
     pub fn open(self, keyset: &Keyset, now_ms: i64) -> Result<SignedHeadWitness, CloudError> {
+        if self._residency.is_some() {
+            return Err(CloudError::Protocol);
+        }
+        self.open_value(keyset, now_ms)
+    }
+    /// Retains the original allocation through the returned decoded witness.
+    /// Cloning borrowed payloads creates separately admitted caller generations.
+    pub fn open_resident(
+        self,
+        keyset: &Keyset,
+        now_ms: i64,
+    ) -> Result<ResidentHeadWitness, CloudError> {
+        let owner = self
+            ._residency
+            .as_ref()
+            .ok_or(CloudError::Protocol)?
+            .clone();
+        let value = self.open_value(keyset, now_ms)?;
+        Ok(ResidentHeadWitness::new(value, owner))
+    }
+    fn open_value(&self, keyset: &Keyset, now_ms: i64) -> Result<SignedHeadWitness, CloudError> {
         require_original(&self.source, self.generation, self.deadline)?;
         if keyset.account_id() != self.query.scope.namespace.account_id.as_str() {
             return Err(CloudError::SourceChanged);
@@ -205,6 +259,14 @@ impl fmt::Debug for CompletedHeadProbe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompletedHeadProbe")
             .field("probe", &self.query.probe_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for DeviceHeadProbes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceHeadProbes")
+            .field("client", &self.client)
             .finish_non_exhaustive()
     }
 }

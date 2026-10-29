@@ -133,14 +133,39 @@ impl Credentials {
     pub(crate) fn capture(&self) -> Option<CredentialCapture> {
         let session = self.session.read().unwrap_or_else(PoisonError::into_inner);
         let session = session.as_ref()?;
-        Some(CredentialCapture {
+        Some(self.capture_session(session))
+    }
+
+    /// Bounded Cloud attribution before any account/device clone, using the same
+    /// lock for source, metadata bounds and the captured actual session values.
+    pub(crate) fn capture_cloud(&self, generation: u64) -> Result<CredentialCapture, Status> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Err(Status::unauthenticated(
+                "the original account sign-in was replaced",
+            ));
+        }
+        let session = current
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("not signed in"))?;
+        self.cloud_metadata(session)?;
+        if session.account_id.is_empty() || session.account_id.len() > 128 {
+            return Err(Status::resource_exhausted(
+                "Cloud account identity exceeds its bound",
+            ));
+        }
+        Ok(self.capture_session(session))
+    }
+
+    fn capture_session(&self, session: &Session) -> CredentialCapture {
+        CredentialCapture {
             generation: self.generation.load(Ordering::Acquire),
             account_id: session.account_id.clone(),
             device_id: session.device_id.clone(),
             signing_key: self.key.public_key(),
             access_digest: Sha256::digest(session.access_token.as_bytes()).into(),
             refresh_expires_at_ms: session.refresh_expires_at_ms,
-        })
+        }
     }
 
     pub(crate) fn require_generation(&self, generation: u64) -> Result<(), Status> {

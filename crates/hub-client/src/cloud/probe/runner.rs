@@ -1,4 +1,4 @@
-use super::{require_feature, require_reply};
+use super::{ResidentHeadQuery, require_feature, require_reply};
 use crate::cloud::{CloudError, transport::RelayAccess};
 use nocterm_hub_model::cloud::head::{
     HeadProbeError, HeadProbeScope, MAX_HEAD_PROBE_LIFETIME_MS, MAX_HEAD_QUERY_ENVELOPE_BYTES,
@@ -6,23 +6,29 @@ use nocterm_hub_model::cloud::head::{
 };
 use nocterm_hub_proto::v1;
 use nocterm_keys::cloud::{RunnerEncryptionKey, open_head_query};
-use std::{fmt, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 use tokio::time::{Instant, timeout};
 
 #[derive(Clone)]
 pub struct RunnerHeadProbes {
     access: RelayAccess,
     scope: HeadProbeScope,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl RunnerHeadProbes {
     pub(in crate::cloud) fn new(
         access: RelayAccess,
         scope: HeadProbeScope,
+        residency: Option<Arc<dyn Send + Sync>>,
     ) -> Result<Self, CloudError> {
         require_feature(access.limits())?;
         access.check_source()?;
         scope.canonical_bytes()?;
-        Ok(Self { access, scope })
+        Ok(Self {
+            access,
+            scope,
+            _residency: residency,
+        })
     }
     pub async fn next(&self, wait: Duration) -> Result<Option<IncomingHeadProbe>, CloudError> {
         if wait > Duration::from_millis(10_000) {
@@ -30,15 +36,28 @@ impl RunnerHeadProbes {
         }
         self.access.check_source()?;
         let scope = self.scope.canonical_bytes()?;
-        let mut service = self.access.service()?;
-        let response = timeout(
-            Duration::from_millis(10_000),
-            service.next_head_probe(v1::CloudNextHeadProbe {
-                scope: scope.clone(),
-                wait_millis: u32::try_from(wait.as_millis()).map_err(|_| CloudError::Protocol)?,
-            }),
-        )
-        .await
+        let request = v1::CloudNextHeadProbe {
+            scope: scope.clone(),
+            wait_millis: u32::try_from(wait.as_millis()).map_err(|_| CloudError::Protocol)?,
+        };
+        let response = match self._residency.as_ref() {
+            Some(owner) => {
+                timeout(
+                    Duration::from_millis(10_000),
+                    self.access
+                        .service_with_residency(owner.clone())?
+                        .next_head_probe(request),
+                )
+                .await
+            }
+            None => {
+                timeout(
+                    Duration::from_millis(10_000),
+                    self.access.service()?.next_head_probe(request),
+                )
+                .await
+            }
+        }
         .map_err(|_| HeadProbeError::Time)??
         .into_inner();
         self.access.check_source()?;
@@ -66,6 +85,8 @@ impl RunnerHeadProbes {
                 .map_err(|_| CloudError::Protocol)?,
             ciphertext: probe.ciphertext,
             deadline: Instant::now() + Duration::from_millis(millis),
+            opened: false,
+            _residency: self._residency.clone(),
         }))
     }
 }
@@ -77,6 +98,8 @@ pub struct IncomingHeadProbe {
     probe_id: [u8; 16],
     ciphertext: Vec<u8>,
     deadline: Instant,
+    opened: bool,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl IncomingHeadProbe {
     fn check(&self) -> Result<(), CloudError> {
@@ -87,6 +110,38 @@ impl IncomingHeadProbe {
         Ok(())
     }
     pub fn open(
+        &self,
+        runner: &RunnerEncryptionKey,
+        expected: &HeadProbeScope,
+        now_ms: i64,
+    ) -> Result<SignedHeadQuery, CloudError> {
+        if self._residency.is_some() {
+            return Err(CloudError::Protocol);
+        }
+        self.open_value(runner, expected, now_ms)
+    }
+    /// One decode only; its query retains the received body's original allocation.
+    pub fn open_resident(
+        &mut self,
+        runner: &RunnerEncryptionKey,
+        expected: &HeadProbeScope,
+        now_ms: i64,
+    ) -> Result<ResidentHeadQuery, CloudError> {
+        let owner = self
+            ._residency
+            .as_ref()
+            .ok_or(CloudError::Protocol)?
+            .clone();
+        if self.opened {
+            return Err(CloudError::Protocol);
+        }
+        self.opened = true;
+        Ok(ResidentHeadQuery::new(
+            self.open_value(runner, expected, now_ms)?,
+            owner,
+        ))
+    }
+    fn open_value(
         &self,
         runner: &RunnerEncryptionKey,
         expected: &HeadProbeScope,
@@ -106,16 +161,29 @@ impl IncomingHeadProbe {
         self.check()?;
         let scope = self.scope.canonical_bytes()?;
         require_reply(&scope, &ciphertext)?;
-        let mut service = self.access.service()?;
-        let response = tokio::time::timeout_at(
-            self.deadline,
-            service.reply_head_probe(v1::CloudHeadProbeReply {
-                scope,
-                probe_id: self.probe_id.to_vec(),
-                ciphertext,
-            }),
-        )
-        .await
+        let request = v1::CloudHeadProbeReply {
+            scope,
+            probe_id: self.probe_id.to_vec(),
+            ciphertext,
+        };
+        let response = match self._residency.as_ref() {
+            Some(owner) => {
+                tokio::time::timeout_at(
+                    self.deadline,
+                    self.access
+                        .service_with_residency(owner.clone())?
+                        .reply_head_probe(request),
+                )
+                .await
+            }
+            None => {
+                tokio::time::timeout_at(
+                    self.deadline,
+                    self.access.service()?.reply_head_probe(request),
+                )
+                .await
+            }
+        }
         .map_err(|_| HeadProbeError::Time)??
         .into_inner();
         self.check()?;

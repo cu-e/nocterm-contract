@@ -449,6 +449,25 @@ A replacement login, old nonce, altered scope/key or backwards/expired device
 clock cannot publish a witness. Native callers inject their actual clock and
 repeat their own retained membership fence before projection publication.
 
+`head_probes_with_residency` on device and runner ports retains a caller's actual
+pre-admitted allocation through request/response Body ownership and through
+Prepared/Incoming/Completed destruction. `open_resident` returns borrow-only
+`ResidentHeadQuery`/`ResidentHeadWitness` owners with the same allocation last;
+there is no consuming unguarded extraction, Deref or Clone on those owners.
+The existing `open` refuses a guarded object; default unguarded ports retain their
+original behavior. Explicit clones of borrowed contents and native publication
+remain separately admitted generations with their own source checks.
+
+Before creating a guarded port, admit one operation's `head_query_work_bytes()` +
+`head_reply_work_bytes()` + `head_decoded_metadata_bytes()`. These name concrete
+logical SDK canonical/signature/AAD/body buffers and bounded decoded metadata;
+they exclude caller original ciphertext/native clones, witness signing/sealing,
+curve/hash stack and Tonic/HTTP2/TLS/runtime/allocator/connection baseline. They
+are not process RSS bounds. Each concurrent operation needs its own admission;
+an opaque shared Arc proves retention, not capacity. Guarded device attribution
+and request signing bound actual metadata under their credential read locks
+before cloning, retaining the same original membership across conditional refresh.
+
 Canonical bodies are at most 2 KiB(query)/30 KiB(witness), including bounded 64-chat
 pages. Signed framing adds 68 bytes; authenticated boxes add 74 bytes. SDK transport
 also counts canonical scope and a conservative 128 bytes for complete protobuf

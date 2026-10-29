@@ -1,14 +1,18 @@
 //! One-shot read-only head probes. No chat admission, journal mutation or
 //! background task is hidden here; the native caller supplies actual heads.
+mod bounds;
 mod device;
+mod resident;
 mod runner;
 use super::CloudError;
+pub use bounds::{head_decoded_metadata_bytes, head_query_work_bytes, head_reply_work_bytes};
 pub use device::{CompletedHeadProbe, DeviceHeadProbes, PreparedHeadProbe};
 use nocterm_hub_model::cloud::{
     capabilities::{CLOUD_FEATURE_FRESH_HEAD, CapabilityLimits},
     head::{MAX_HEAD_QUERY_BYTES, MAX_HEAD_REPLY_ENVELOPE_BYTES},
     relay::MAX_RELAY_WIRE_BYTES,
 };
+pub use resident::{ResidentHeadQuery, ResidentHeadWitness};
 pub use runner::{IncomingHeadProbe, RunnerHeadProbes};
 
 fn require_feature(limits: CapabilityLimits) -> Result<(), CloudError> {

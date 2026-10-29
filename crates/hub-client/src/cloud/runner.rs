@@ -34,7 +34,20 @@ impl CloudRunner {
         {
             return Err(CloudError::Protocol);
         }
-        super::RunnerHeadProbes::new(self.access(), scope)
+        super::RunnerHeadProbes::new(self.access(), scope, None)
+    }
+    /// One pre-admitted fresh-head operation; decoded opens remain resident.
+    pub fn head_probes_with_residency(
+        &self,
+        scope: nocterm_hub_model::cloud::head::HeadProbeScope,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<super::RunnerHeadProbes, CloudError> {
+        if scope.namespace != self.subject().namespace
+            || scope.runner.id != self.subject().runner_id
+        {
+            return Err(CloudError::Protocol);
+        }
+        super::RunnerHeadProbes::new(self.access(), scope, Some(residency))
     }
     pub async fn redeem(
         endpoint: &crate::HubEndpoint,

@@ -4,7 +4,9 @@ mod material;
 mod probe;
 pub use material::PreparedChatKeyGrant;
 pub use probe::{
-    CompletedHeadProbe, DeviceHeadProbes, IncomingHeadProbe, PreparedHeadProbe, RunnerHeadProbes,
+    CompletedHeadProbe, DeviceHeadProbes, IncomingHeadProbe, PreparedHeadProbe, ResidentHeadQuery,
+    ResidentHeadWitness, RunnerHeadProbes, head_decoded_metadata_bytes, head_query_work_bytes,
+    head_reply_work_bytes,
 };
 mod replay;
 mod resident_channel;
@@ -189,7 +191,17 @@ impl CloudClient {
     /// Captured read-only probe access. Pin establishment and native head/outbox
     /// storage remain with the consumer, never the hub capability advertisement.
     pub fn head_probes(&self) -> Result<DeviceHeadProbes, CloudError> {
-        DeviceHeadProbes::new(self.clone())
+        DeviceHeadProbes::new(self.clone(), None)
+    }
+    /// Pre-admit one operation's named head work before creating this port.
+    /// The same owner follows actual request/response bodies and decoded owners.
+    pub fn head_probes_with_residency(
+        &self,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<DeviceHeadProbes, CloudError> {
+        // Validate before cloning the actual captured client metadata as well.
+        self.credentials.capture_cloud(self.generation)?;
+        DeviceHeadProbes::new(self.clone(), Some(residency))
     }
     /// Rebind exact original bytes loaded from an authenticated native outbox.
     /// This does not authenticate that native record or the encrypted command.

@@ -348,3 +348,91 @@ async fn per_account_probe_capacity_is_bounded_and_cancellation_releases_slots()
     tokio::time::timeout(Duration::from_secs(2), harness.wait_head_probes(0)).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn guarded_head_owners_follow_real_fresh_probe_and_decoded_query_witness() -> TestResult {
+    use nocterm_hub_client::cloud::{
+        head_decoded_metadata_bytes, head_query_work_bytes, head_reply_work_bytes,
+    };
+    use std::sync::Arc;
+    let hub = FakeHub::start_cloud().await;
+    let setup = Setup::new(&hub).await?;
+    assert!(
+        head_query_work_bytes() > nocterm_hub_model::cloud::head::MAX_HEAD_QUERY_ENVELOPE_BYTES
+    );
+    assert!(head_reply_work_bytes() > MAX_HEAD_REPLY_ENVELOPE_BYTES);
+    assert!(head_decoded_metadata_bytes() > 64 * std::mem::size_of::<ChatHead>());
+    let mut prior_challenge = None;
+    for resident_open in [false, true] {
+        let device_owner = Arc::new(());
+        let device_weak = Arc::downgrade(&device_owner);
+        let device = setup.cloud.head_probes_with_residency(device_owner)?;
+        let prepared = device.prepare(
+            &setup.keyset,
+            setup.scope.clone(),
+            HeadTarget::Catalog { after: None },
+            now_ms(),
+        )?;
+        let expected = prepared.query().clone();
+        assert_ne!(prior_challenge, Some(expected.challenge));
+        prior_challenge = Some(expected.challenge);
+        drop(device);
+        // Only the actual Prepared owner remains; even a default facade must
+        // preserve its captured allocation through the guarded transport.
+        assert!(device_weak.upgrade().is_some());
+        let facade = setup.cloud.head_probes()?;
+        let request = tokio::spawn(async move { facade.request(prepared).await });
+        let runner_owner = Arc::new(());
+        let runner_weak = Arc::downgrade(&runner_owner);
+        let runner = setup
+            .runner
+            .head_probes_with_residency(setup.scope.clone(), runner_owner)?;
+        let mut incoming = runner.next(Duration::from_secs(2)).await?.ok_or("query")?;
+        drop(runner);
+        assert!(runner_weak.upgrade().is_some());
+        assert!(matches!(
+            incoming.open(&setup.encryption, &setup.scope, now_ms()),
+            Err(CloudError::Protocol)
+        ));
+        let opened = incoming.open_resident(&setup.encryption, &setup.scope, now_ms())?;
+        assert_eq!(opened.query().query(), &expected);
+        assert!(matches!(
+            incoming.open_resident(&setup.encryption, &setup.scope, now_ms()),
+            Err(CloudError::Protocol)
+        ));
+        // This explicit caller clone/seal is a separate native generation; the
+        // SDK guard only claims its own returned query and transport buffers.
+        let response = setup.signing.attest_head(HeadWitness {
+            query: opened.query().query().clone(),
+            observed_at_ms: now_ms(),
+            value: empty_catalog(),
+        })?;
+        let ciphertext = seal_head_witness(&setup.encryption, &response)?;
+        drop(response);
+        incoming.reply(ciphertext).await?;
+        assert!(runner_weak.upgrade().is_some());
+        drop(opened);
+        let completed = request.await??;
+        assert!(device_weak.upgrade().is_some());
+        if resident_open {
+            let opened = completed.open_resident(&setup.keyset, now_ms())?;
+            assert_eq!(opened.witness().witness().query, expected);
+            assert_eq!(opened.witness().witness().value, empty_catalog());
+            assert!(device_weak.upgrade().is_some());
+            drop(opened);
+        } else {
+            assert!(matches!(
+                completed.open(&setup.keyset, now_ms()),
+                Err(CloudError::Protocol)
+            ));
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while device_weak.upgrade().is_some() || runner_weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+    }
+    assert!(hub.cloud().ok_or("fixture")?.publications().is_empty());
+    Ok(())
+}
