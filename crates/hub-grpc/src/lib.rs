@@ -33,6 +33,10 @@ pub mod metadata {
     /// Ed25519 signature over `pop::request_message(hub_id, path, token, nonce, ts)` where
     /// `path` is `/{service}/{method}` (binary metadata, base64 on the wire).
     pub const PROOF: &str = "x-nocterm-proof-bin";
+    /// Strict canonical `cloud::runner_request::RunnerRequestClaim`, Cloud service only.
+    pub const RUNNER_CLAIM: &str = "x-nocterm-runner-claim-bin";
+    /// Runner PoP signature; never interpreted as an ordinary account-device proof.
+    pub const RUNNER_PROOF: &str = "x-nocterm-runner-proof-bin";
     /// `ErrorCode` name of a failed call (`ERROR_CODE_TOKEN_EXPIRED`, …).
     pub const ERROR_CODE: &str = "x-nocterm-error";
     /// Current version of an object after a version conflict.

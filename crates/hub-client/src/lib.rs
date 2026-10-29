@@ -6,6 +6,10 @@
 //! the hub gets a value derived from it), token refresh, the account keyset (create, open with
 //! the unlock or the recovery key, grant collection keys), relayed byte streams, a resumable
 //! terminal driver over the Link, and typed errors ([`ClientError`]) for all of them.
+//! Cloud clients capture original sign-in ownership, stream bounded opaque records and
+//! keep runner-only credentials separate from ordinary account-device sessions.
+//! One-shot fresh-head probes preserve the original login/challenge/deadline;
+//! staging authenticated native outbox bytes never rewrites signed commands.
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
 //! provide a [`SessionStore`] for tokens), how a device is named (callers pass a
 //! [`DeviceInfo`]), terminal rendering, or vault encryption (`nocterm-keys`).
@@ -18,6 +22,7 @@
 //! credentials; the library reads no environment.
 
 mod client;
+pub mod cloud;
 mod connect;
 mod error;
 mod keyset;

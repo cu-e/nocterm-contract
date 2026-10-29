@@ -114,6 +114,16 @@ impl HubClient {
         self.channel.clone()
     }
 
+    /// A fresh self-signed authority offer, requiring an independent retained pin to accept.
+    pub async fn cloud_offer(&self) -> Result<crate::cloud::CloudOffer, crate::cloud::CloudError> {
+        crate::cloud::CloudOffer::fetch(
+            self.channel.clone(),
+            self.credentials.clone(),
+            &self.info.hub_id,
+        )
+        .await
+    }
+
     /// Current tokens, to persist after sign-in or refresh.
     pub fn session(&self) -> Option<Session> {
         self.credentials.session()
@@ -341,18 +351,29 @@ impl HubClient {
         let Some(store) = self.credentials.store() else {
             return Ok(None);
         };
+        let (generation, _) = self
+            .credentials
+            .snapshot()
+            .ok_or(ClientError::NotSignedIn)?;
         let lock = store.lock().map_err(ClientError::SessionStore)?;
         if let Some(stored) = store.load().map_err(ClientError::SessionStore)?
             && Some(&stored) != self.credentials.session().as_ref()
+            && !self.credentials.rotate_session(generation, stored)
         {
-            self.credentials.set_session(Some(stored));
+            return Err(ClientError::SessionReplaced);
         }
+        self.credentials
+            .require_generation(generation)
+            .map_err(|_| ClientError::SessionReplaced)?;
         Ok(Some(lock))
     }
 
     /// Exchanges the current refresh token; callers hold the refresh turn.
     async fn rotate(&self) -> Result<Session, ClientError> {
-        let session = self.credentials.session().ok_or(ClientError::NotSignedIn)?;
+        let (generation, session) = self
+            .credentials
+            .snapshot()
+            .ok_or(ClientError::NotSignedIn)?;
         let ts = now_ms();
         let proof = self.credentials.key.sign(&refresh_message(
             &self.info.hub_id,
@@ -366,7 +387,9 @@ impl HubClient {
             signed_at_ms: ts,
         };
         let fresh = Session::from(self.auth().refresh(request).await?.into_inner());
-        self.credentials.set_session(Some(fresh.clone()));
+        if !self.credentials.rotate_session(generation, fresh.clone()) {
+            return Err(ClientError::SessionReplaced);
+        }
         if let Some(store) = self.credentials.store() {
             store.save(&fresh).map_err(ClientError::SessionStore)?;
         }

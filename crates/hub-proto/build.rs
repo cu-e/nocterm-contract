@@ -15,6 +15,7 @@ const FILES: &[&str] = &[
     "nocterm/hub/v1/relay.proto",
     "nocterm/hub/v1/fleet.proto",
     "nocterm/hub/v1/audit.proto",
+    "nocterm/hub/v1/cloud.proto",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,6 +26,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         out.join("hub_v1_descriptor.bin"),
         descriptors.encode_to_vec(),
     )?;
-    prost_build::Config::new().compile_fds(descriptors)?;
+    prost_build::Config::new()
+        .skip_debug([
+            ".nocterm.hub.v1.CloudRunnerGrant",
+            ".nocterm.hub.v1.CloudRedeemRunnerGrant",
+            ".nocterm.hub.v1.CloudRefreshRunner",
+            ".nocterm.hub.v1.CloudRunnerTokens",
+            ".nocterm.hub.v1.CloudHeadProbe",
+            ".nocterm.hub.v1.CloudHeadProbeReply",
+        ])
+        .compile_fds(descriptors)?;
     Ok(())
 }

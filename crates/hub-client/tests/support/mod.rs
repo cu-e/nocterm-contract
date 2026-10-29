@@ -3,6 +3,8 @@
 
 #![allow(clippy::expect_used, dead_code)]
 
+pub mod cloud;
+
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -368,12 +370,25 @@ pub struct FakeHub {
     pub seen: Arc<Seen>,
     addr: SocketAddr,
     _stop: oneshot::Sender<()>,
+    cloud: Option<cloud::CloudHarness>,
 }
 
 impl FakeHub {
     /// A hub with the auth and store services, and the relay service when `relay` is set (one
     /// without it answers `UNIMPLEMENTED`, like an older hub).
     pub async fn start(relay: bool) -> Self {
+        Self::start_services(relay, None).await
+    }
+
+    pub async fn start_cloud() -> Self {
+        Self::start_services(false, Some(cloud::CloudHarness::new())).await
+    }
+
+    pub fn cloud(&self) -> Option<&cloud::CloudHarness> {
+        self.cloud.as_ref()
+    }
+
+    async fn start_services(relay: bool, cloud: Option<cloud::CloudHarness>) -> Self {
         let seen = Arc::new(Seen::default());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("address");
@@ -382,7 +397,10 @@ impl FakeHub {
             .add_service(AuthServiceServer::new(Auth(Arc::clone(&seen))))
             .add_service(StoreServiceServer::new(Store(Arc::clone(&seen))));
         let relay_service = relay.then(|| RelayServiceServer::new(Relay(Arc::clone(&seen))));
-        let router = server.add_optional_service(relay_service);
+        let cloud_service = cloud.clone().map(cloud::service);
+        let router = server
+            .add_optional_service(relay_service)
+            .add_optional_service(cloud_service);
         tokio::spawn(async move {
             let _ = router
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
@@ -394,6 +412,7 @@ impl FakeHub {
             seen,
             addr,
             _stop: stop,
+            cloud,
         }
     }
 

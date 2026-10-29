@@ -26,11 +26,11 @@
 
 use std::fmt;
 
-use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use x25519_dalek::{SharedSecret, StaticSecret};
 use zeroize::Zeroizing;
 
+use crate::authenticated_box::AuthenticatedBoxKeys;
 use crate::seal::{FORMAT_VERSION, NONCE_LEN, Purpose, decrypt, encrypt, open, seal};
 use crate::{AccountKey, CollectionKey, KeyError, OpenError, SealError, random_bytes};
 
@@ -48,6 +48,10 @@ pub struct PublicKeyError;
 pub struct PublicKey([u8; KEY_LEN]);
 
 impl PublicKey {
+    pub(crate) fn from_array(bytes: [u8; KEY_LEN]) -> Self {
+        Self(bytes)
+    }
+
     /// A public key from the 32 bytes the hub stores.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PublicKeyError> {
         bytes.try_into().map(Self).map_err(|_| PublicKeyError)
@@ -144,7 +148,7 @@ impl AccountKeyPair {
         Ok(pair)
     }
 
-    fn agree(&self, peer: &[u8; KEY_LEN]) -> SharedSecret {
+    pub(crate) fn agree(&self, peer: &[u8; KEY_LEN]) -> SharedSecret {
         self.secret
             .diffie_hellman(&x25519_dalek::PublicKey::from(*peer))
     }
@@ -155,34 +159,6 @@ impl fmt::Debug for AccountKeyPair {
         f.debug_struct("AccountKeyPair")
             .field("public", &self.public)
             .finish_non_exhaustive()
-    }
-}
-
-/// The keys of a grant, in the order of the HKDF salt and input.
-struct GrantKeys<'a> {
-    ephemeral: &'a [u8; KEY_LEN],
-    sender: &'a [u8; KEY_LEN],
-    recipient: &'a [u8; KEY_LEN],
-}
-
-impl GrantKeys<'_> {
-    fn key(
-        &self,
-        dh_ephemeral: &SharedSecret,
-        dh_sender: &SharedSecret,
-    ) -> Result<Zeroizing<[u8; 32]>, KeyError> {
-        let mut salt = [0u8; 3 * KEY_LEN];
-        salt[..KEY_LEN].copy_from_slice(self.ephemeral);
-        salt[KEY_LEN..2 * KEY_LEN].copy_from_slice(self.sender);
-        salt[2 * KEY_LEN..].copy_from_slice(self.recipient);
-        let mut ikm = Zeroizing::new([0u8; 2 * KEY_LEN]);
-        ikm[..KEY_LEN].copy_from_slice(dh_ephemeral.as_bytes());
-        ikm[KEY_LEN..].copy_from_slice(dh_sender.as_bytes());
-        let mut key = Zeroizing::new([0u8; 32]);
-        Hkdf::<Sha256>::new(Some(&salt), ikm.as_ref())
-            .expand(GRANT_INFO, key.as_mut())
-            .map_err(KeyError::Expand)?;
-        Ok(key)
     }
 }
 
@@ -223,12 +199,8 @@ impl CollectionKey {
         if !dh_ephemeral.was_contributory() || !dh_sender.was_contributory() {
             return Err(SealError::UnusableRecipientKey);
         }
-        let key = GrantKeys {
-            ephemeral: &ephemeral.public.0,
-            sender: &sender.public.0,
-            recipient: &recipient.0,
-        }
-        .key(&dh_ephemeral, &dh_sender)?;
+        let key = AuthenticatedBoxKeys::new(&ephemeral.public.0, &sender.public.0, &recipient.0)
+            .key(&dh_ephemeral, &dh_sender, GRANT_INFO)?;
         let ciphertext = encrypt(
             &key,
             Purpose::CollectionGrant,
@@ -279,13 +251,9 @@ impl CollectionKey {
         if !dh_ephemeral.was_contributory() || !dh_sender.was_contributory() {
             return Err(OpenError::Malformed);
         }
-        let key = GrantKeys {
-            ephemeral: &ephemeral,
-            sender: &sender.0,
-            recipient: &recipient.public.0,
-        }
-        .key(&dh_ephemeral, &dh_sender)
-        .map_err(|_| OpenError::Rejected)?;
+        let key = AuthenticatedBoxKeys::new(&ephemeral, &sender.0, &recipient.public.0)
+            .key(&dh_ephemeral, &dh_sender, GRANT_INFO)
+            .map_err(|_| OpenError::Rejected)?;
         let bytes = decrypt(
             &key,
             Purpose::CollectionGrant,

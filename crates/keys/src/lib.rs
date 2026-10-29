@@ -4,8 +4,16 @@
 //! login value the hub verifies and of the unlock key it never sees (`login-v1`, from one
 //! password); the recovery key; the key hierarchy unlock key → account key → collection key;
 //! the account's X25519 pair with collection key grants authenticated by the granter's key; the
-//! pins (trust on first use) of the public keys of other accounts; and the sealed
+//! pins (trust on first use) of the public keys of other accounts; account-authenticated,
+//! device-signed Cloud command boxes with a pinned runner, its separately
+//! restorable encryption identity; and the sealed
 //! formats of keys, names and objects (XChaCha20-Poly1305 with purpose-bound associated data).
+//! Also owns per-chat key wraps/grants, runner-signed encrypted events/snapshots,
+//! and purpose-separated encryption of native journal slots. Read-only head probes
+//! have separate signed purposes and account-key replies, independent of ChatKey.
+//! Native head cells use a distinct runner-derived key and finite purpose18 blob.
+//! Provider credentials use a separate non-restorable boot recipient with finite
+//! stable-runner attestation; opening returns a zeroizing secret owner.
 //! Does not own: storage of keys on the device, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants:
@@ -22,10 +30,14 @@
 //! - a grant opens only under the public key of the account that made it, and that key is one the
 //!   client pinned: the hub can swap a key only before the first pin;
 //! - the recovery key is 128 random bits shown once and used only through HKDF;
-//! - secrets are zeroized on drop and never printed by `Debug`.
+//! - secrets are zeroized on drop and never printed by `Debug`;
+//! - a Cloud command binds its exact expected account/runner keys and route; its opaque
+//!   payload still requires semantic validation and durable admission before effects.
 //!
 //! The control plane must never depend on this crate (blindness hygiene, checked by xtask).
 
+mod authenticated_box;
+pub mod cloud;
 mod device;
 mod kdf;
 mod login;

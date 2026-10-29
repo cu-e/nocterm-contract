@@ -1,5 +1,6 @@
 //! Signs every authenticated call with the device key (proof of possession).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,6 +8,7 @@ use nocterm_hub_grpc::{metadata, method_path};
 use nocterm_hub_model::pop::request_message;
 use nocterm_keys::{DeviceKey, KeyError};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tonic::metadata::{AsciiMetadataValue, BinaryMetadataValue};
 use tonic::service::Interceptor;
 use tonic::{GrpcMethod, Request, Status};
@@ -65,6 +67,7 @@ pub(crate) struct Credentials {
     pub(crate) hub_id: String,
     pub(crate) key: DeviceKey,
     session: RwLock<Option<Session>>,
+    generation: AtomicU64,
     /// Refreshes of this process take turns: a refresh token is single-use.
     pub(crate) refreshing: tokio::sync::Mutex<()>,
     store: OnceLock<Arc<dyn SessionStore>>,
@@ -76,6 +79,7 @@ impl Credentials {
             hub_id,
             key,
             session: RwLock::new(session),
+            generation: AtomicU64::new(1),
             refreshing: tokio::sync::Mutex::new(()),
             store: OnceLock::new(),
         }
@@ -98,7 +102,55 @@ impl Credentials {
     }
 
     pub(crate) fn set_session(&self, session: Option<Session>) {
-        *self.session.write().unwrap_or_else(PoisonError::into_inner) = session;
+        let mut current = self.session.write().unwrap_or_else(PoisonError::into_inner);
+        let advanced = self
+            .generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            });
+        *current = if advanced.is_ok() { session } else { None };
+    }
+
+    pub(crate) fn snapshot(&self) -> Option<(u64, Session)> {
+        let session = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        Some((self.generation.load(Ordering::Acquire), session.clone()?))
+    }
+
+    /// Refresh is conditional on the original login, even if an account later logs in again.
+    pub(crate) fn rotate_session(&self, generation: u64, session: Session) -> bool {
+        let mut current = self.session.write().unwrap_or_else(PoisonError::into_inner);
+        if self.generation.load(Ordering::Acquire) != generation
+            || !current.as_ref().is_some_and(|old| {
+                old.account_id == session.account_id && old.device_id == session.device_id
+            })
+        {
+            return false;
+        }
+        *current = Some(session);
+        true
+    }
+
+    pub(crate) fn capture(&self) -> Option<CredentialCapture> {
+        let session = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        let session = session.as_ref()?;
+        Some(CredentialCapture {
+            generation: self.generation.load(Ordering::Acquire),
+            account_id: session.account_id.clone(),
+            device_id: session.device_id.clone(),
+            signing_key: self.key.public_key(),
+            access_digest: Sha256::digest(session.access_token.as_bytes()).into(),
+            refresh_expires_at_ms: session.refresh_expires_at_ms,
+        })
+    }
+
+    pub(crate) fn require_generation(&self, generation: u64) -> Result<(), Status> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        if current.is_none() || self.generation.load(Ordering::Acquire) != generation {
+            return Err(Status::unauthenticated(
+                "the original account sign-in was replaced",
+            ));
+        }
+        Ok(())
     }
 
     /// `(token, device, nonce, ts, signature)` for a request to `path`.
@@ -106,8 +158,22 @@ impl Credentials {
         &self,
         path: &str,
     ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
-        let session = self
-            .session()
+        self.sign_scoped(path, None)
+    }
+
+    pub(crate) fn sign_scoped(
+        &self,
+        path: &str,
+        generation: Option<u64>,
+    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        if generation.is_some_and(|expected| self.generation.load(Ordering::Acquire) != expected) {
+            return Err(Status::unauthenticated(
+                "the original account sign-in was replaced",
+            ));
+        }
+        let session = current
+            .as_ref()
             .ok_or_else(|| Status::unauthenticated("not signed in"))?;
         let nonce = nonce().map_err(|_| Status::internal("no randomness"))?;
         let ts = now_ms();
@@ -119,13 +185,24 @@ impl Credentials {
             ts,
         ));
         Ok((
-            session.access_token,
-            session.device_id,
+            session.access_token.clone(),
+            session.device_id.clone(),
             nonce,
             ts,
             signature,
         ))
     }
+}
+
+/// Original attribution is immutable across refresh; it contains no bearer token.
+#[derive(Clone, Debug)]
+pub(crate) struct CredentialCapture {
+    pub(crate) generation: u64,
+    pub(crate) account_id: String,
+    pub(crate) device_id: String,
+    pub(crate) signing_key: [u8; 32],
+    pub(crate) access_digest: [u8; 32],
+    pub(crate) refresh_expires_at_ms: i64,
 }
 
 /// Tonic interceptor adding the device's proof to each call.
@@ -161,3 +238,6 @@ impl Interceptor for Signer {
         Ok(request)
     }
 }
+
+#[cfg(test)]
+mod tests;

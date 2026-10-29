@@ -74,7 +74,7 @@ message LoginGrant {
 
 message StartOidcLoginRequest {
   string provider_id = 1;
-  // Loopback redirect of the client, for example http://127.0.0.1:53111/cb/<nonce>.
+  // Loopback redirect of the client, for example `http://127.0.0.1:53111/cb/<nonce>`.
   string redirect_uri = 2;
   // PKCE S256 challenge of the client (RFC 7636).
   string code_challenge = 3;

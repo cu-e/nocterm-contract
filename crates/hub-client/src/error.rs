@@ -30,6 +30,8 @@ pub enum ClientError {
     UpgradeRequired { hub: u32, client: u32 },
     #[error("not signed in")]
     NotSignedIn,
+    #[error("the original account sign-in was replaced")]
+    SessionReplaced,
     /// The hub revoked this device; it must sign in again.
     #[error("this device was revoked; sign in again")]
     Revoked,

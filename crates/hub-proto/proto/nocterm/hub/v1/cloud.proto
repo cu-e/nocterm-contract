@@ -1,0 +1,220 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+// Account-scoped opaque Cloud delivery. New additive service, capability version1.
+// UNIMPLEMENTED means Cloud unsupported. Every handler has a <=32KiB wire limit;
+// logical encrypted records are chunked, never one giant protobuf message.
+service CloudService {
+  // Public nonce proof, containing no account data. A retained authority pin is required.
+  rpc Capabilities(CloudCapabilitiesRequest) returns (CloudCapabilities);
+  // Existing signed-in account device only. Ticket is one-use, <=60seconds.
+  rpc CreateRunnerGrant(CloudCreateRunnerGrant) returns (CloudRunnerGrant);
+  // These two calls carry their own purpose-specific PoP, not ordinary device auth.
+  rpc RedeemRunnerGrant(CloudRedeemRunnerGrant) returns (CloudRunnerTokens);
+  rpc RefreshRunner(CloudRefreshRunner) returns (CloudRunnerTokens);
+  rpc RevokeRunner(CloudRunnerRef) returns (CloudRevoked);
+  rpc RunnerHeartbeat(CloudHeartbeat) returns (CloudHeartbeatReceipt);
+  rpc RunnerStatus(CloudRunnerRef) returns (CloudRunnerStatus);
+  rpc Publish(stream CloudPublishFrame) returns (CloudDeliveryReceipt);
+  rpc Replay(CloudReplayRequest) returns (stream CloudReplayFrame);
+  rpc Acknowledge(CloudAcknowledge) returns (CloudAcknowledged);
+  rpc Watch(CloudWatchRequest) returns (stream CloudHint);
+  rpc ListStreams(CloudListStreams) returns (CloudStreams);
+  // Runner only, after its own durable tombstone/snapshot publication.
+  rpc Purge(CloudPurge) returns (CloudPurged);
+  // Optional capability-bit16, bounded ephemeral rendezvous. Device-only request,
+  // R-only poll/reply; no task admission, stream EventId, writer renewal or C update.
+  rpc ProbeHead(CloudHeadProbe) returns (CloudHeadProbeReply);
+  rpc NextHeadProbe(CloudNextHeadProbe) returns (CloudHeadProbeDelivery);
+  rpc ReplyHeadProbe(CloudHeadProbeReply) returns (CloudHeadProbeReplied);
+}
+
+message CloudCapabilitiesRequest { bytes nonce = 1; } // Exact16.
+message CloudCapabilities {
+  // Strict canonical capability claim: instance/authority/version/limits/nonce/time.
+  bytes claim = 1;
+  bytes signature = 2; // Ed25519, exact64. Never trust an offered key over an existing pin.
+}
+message CloudRunnerRef { bytes runner_id = 1; } // Exact16.
+message CloudCreateRunnerGrant {
+  bytes runner_id = 1;
+  bytes proof_key = 2; // Exact32, bound before ticket creation.
+}
+message CloudRunnerGrant {
+  string ticket = 1;
+  int64 expires_at_ms = 2;
+}
+message CloudRedeemRunnerGrant {
+  bytes claim = 1; // Strict canonical, purpose-specific PoP claim, includes ticket.
+  bytes signature = 2;
+}
+message CloudRefreshRunner {
+  bytes claim = 1; // Separate refresh purpose, includes rotating refresh token.
+  bytes signature = 2;
+}
+message CloudRunnerTokens {
+  string account_id = 1;
+  bytes runner_id = 2;
+  string access_token = 3;
+  int64 access_expires_at_ms = 4;
+  string refresh_token = 5;
+  int64 refresh_expires_at_ms = 6;
+  // Never usable by ordinary Store/Directory/Session/Relay services.
+  uint32 capability_version = 7;
+}
+message CloudRevoked { bool revoked = 1; }
+message CloudHeartbeat {
+  // Bounded<=4096 canonical SignedBootDescriptor, no provider secrets.
+  bytes signed_status = 1;
+}
+message CloudHeartbeatReceipt { int64 accepted_at_ms = 1; }
+message CloudRunnerStatus {
+  bytes signed_status = 1;
+  int64 received_at_ms = 2; // Hub observation only, never cryptographic freshness.
+}
+
+message CloudPublishFrame {
+  oneof frame {
+    CloudPublication header = 1;
+    bytes data = 2; // Nonempty, <=16KiB; backpressure must reach the original producer.
+    CloudPublishFinished finished = 3;
+  }
+}
+message CloudPublication {
+  bytes publication_id = 1; // Exact16, transport idempotency distinct from command/eventID.
+  bytes binding = 2; // Strict canonical public routing binding, <=4096.
+  uint32 total_bytes = 3; // Positive, <=32MiB+78 before allocation or quota admission.
+  bytes ciphertext_sha256 = 4; // Exact32, never a plaintext-body digest.
+}
+message CloudPublishFinished {} // Followed only by request EOF; otherwise refuse.
+message CloudDeliveryReceipt {
+  bytes publication_id = 1;
+  uint64 cursor = 2;
+  bytes ciphertext_sha256 = 3;
+  // Hub delivery storage only. This is never a runner CommandAccepted receipt.
+}
+
+message CloudSelector {
+  bytes runner_id = 1; // Exact16, always checked against authenticated runner scope.
+  uint64 runner_key_epoch = 2;
+  oneof stream {
+    CloudRunnerInbox inbox = 3; // Commands across this runner's chats.
+    bytes chat_id = 4; // Exact16, delivered events/snapshots of one chat.
+  }
+}
+// Command and capability-bit8 ChatKeyGrant routing share this cursor. Key
+// material is <=256 bytes and cannot authorize execution. A missing/invalid key
+// must refuse command admission; never synthesize a default key to advance it.
+message CloudRunnerInbox {}
+message CloudReplayRequest {
+  CloudSelector selector = 1;
+  uint64 after_cursor = 2;
+  uint32 max_records = 3; // 1..64.
+  uint32 max_bytes = 4; // Bounded page budget; one record may stream over several frames.
+}
+message CloudReplayFrame {
+  oneof frame {
+    CloudDeliveredRecord header = 1;
+    bytes data = 2; // Nonempty<=16KiB; exact declared total before end_record.
+    CloudRecordEnd end_record = 3;
+    CloudPageEnd page_end = 4;
+    CloudReplayGap gap = 5;
+  }
+}
+message CloudPublicationOrigin {
+  string account_id = 1;
+  bytes signing_key = 2;
+  oneof issuer {
+    string device_id = 3;
+    bytes runner_id = 4;
+  }
+  // Original authenticated publisher, never the later reader; metadata is not authority.
+}
+message CloudDeliveredRecord {
+  CloudPublication publication = 1;
+  uint64 cursor = 2;
+  CloudPublicationOrigin origin = 3;
+}
+message CloudRecordEnd { bytes publication_id = 1; }
+message CloudPageEnd {
+  uint64 through_cursor = 1;
+  bool has_more = 2;
+}
+message CloudReplayGap {
+  uint64 retained_from_cursor = 1;
+  bytes snapshot_publication_id = 2;
+  // Chat gaps MUST identify the first retained Snapshot: its transport cursor is
+  // retained_from_cursor, in this exact account/runner/key-epoch/chat stream.
+  // Recover with Replay(after_cursor=retained_from_cursor-1, max_records=1).
+  // Verify the first record ID, expected context and pinned runner signature
+  // before projection/ACK; this pointer never authorizes a baseline by itself.
+  // RunnerInbox gaps have no snapshot pointer: they require durable runner inbox
+  // recovery or an explicit error, never reconstruction from a chat snapshot.
+}
+message CloudAcknowledge {
+  CloudSelector selector = 1;
+  uint64 through_cursor = 2;
+}
+message CloudAcknowledged { uint64 through_cursor = 1; }
+message CloudWatchRequest {
+  CloudSelector selector = 1;
+  uint64 after_cursor = 2;
+}
+message CloudHint {
+  uint64 head_cursor = 1;
+  // Hint only. Bounded queue; close slow consumer and replay on reconnect.
+}
+message CloudListStreams {
+  bytes runner_id = 1; // Empty: this account's runners; exact16 otherwise.
+  bytes after = 2; // Opaque bounded pagination cursor, <=256.
+  uint32 limit = 3; // 1..64.
+}
+message CloudStreamHead {
+  bytes runner_id = 1;
+  uint64 runner_key_epoch = 2;
+  bytes chat_id = 3;
+  uint64 cursor = 4;
+  bytes snapshot_publication_id = 5;
+}
+message CloudStreams {
+  repeated CloudStreamHead streams = 1; // <=64; no plaintext title/model/target.
+  bytes next = 2;
+}
+message CloudPurge {
+  CloudSelector selector = 1;
+  uint64 through_cursor = 2;
+  bytes retained_publication_id = 3;
+  // Chat streams only. The runner first publishes a durable signed Snapshot
+  // (which may contain a tombstone) in this exact account/runner/key-epoch/chat.
+  // Atomically require that publication's cursor == through_cursor+1, with no
+  // overflow, and its kind == Snapshot, before deleting the prefix. That cursor
+  // becomes retained_from_cursor and its ID becomes the Gap pointer. Missing,
+  // foreign-stream, wrong-kind or stale-cursor anchors fail without any mutation.
+  // The blind hub checks routing/kind/position, not the encrypted inner signature.
+}
+message CloudPurged { uint64 through_cursor = 1; }
+
+// All routing values are checked against actual account/R authentication. Scope
+// is strict canonical HeadProbeScope<=2KiB, not proof of its offered trust pins.
+message CloudHeadProbe {
+  bytes scope = 1;
+  bytes probe_id = 2; // Exact16, real one-shot probe id, never a chat EventId.
+  bytes ciphertext = 3; // <=4KiB sealed purpose-specific device query.
+  int64 expires_at_ms = 4; // Routing hint, <=10seconds. R verifies the inner window.
+}
+message CloudNextHeadProbe {
+  bytes scope = 1;
+  uint32 wait_millis = 2; // <=10000; no per-idle-chat worker.
+}
+message CloudHeadProbeDelivery { CloudHeadProbe probe = 1; }
+message CloudHeadProbeReply {
+  bytes scope = 1;
+  bytes probe_id = 2;
+  bytes ciphertext = 3; // <=32KiB logical reply; framing also obeys 32KiB RPC cap.
+}
+message CloudHeadProbeReplied { bool delivered = 1; }
+// H retains at most32 pending probes/account and256 globally, closes each after
+// <=10seconds and removes cancelled/answered entries. Its ACK is not a head witness.
+// Reply is separately R-signed and sealed to the account key, not to a ChatKey,
+// so a deleted chat can prove its tombstone without resurrecting key/history.
