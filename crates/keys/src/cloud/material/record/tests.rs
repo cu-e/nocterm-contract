@@ -272,3 +272,5 @@ fn zero_positions_and_oversized_contexts_are_refused_before_opening() -> TestRes
     ));
     Ok(())
 }
+
+mod session;

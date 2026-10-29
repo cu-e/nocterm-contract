@@ -20,6 +20,7 @@ pub enum CommandKind {
     AnswerSshConsent = 6,
     DeleteChat = 7,
     RevokeIssuerGrants = 8,
+    BeginSession = 9,
 }
 impl TryFrom<u16> for CommandKind {
     type Error = CommandError;
@@ -33,6 +34,7 @@ impl TryFrom<u16> for CommandKind {
             6 => Ok(Self::AnswerSshConsent),
             7 => Ok(Self::DeleteChat),
             8 => Ok(Self::RevokeIssuerGrants),
+            9 => Ok(Self::BeginSession),
             _ => Err(CommandError::UnsupportedKind),
         }
     }

@@ -640,3 +640,5 @@ fn optional_text_step_usage_display_and_actual_job_windows_preserve_their_values
 
 mod background;
 mod prompt;
+
+mod session;

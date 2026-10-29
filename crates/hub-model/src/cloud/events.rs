@@ -113,6 +113,8 @@ pub enum CloudEventPayload<'a> {
         command: [u8; 16],
     },
     BackgroundLifecycle(Box<BackgroundLifecyclePayload<'a>>),
+    AuthenticationRequested(Box<crate::cloud::payload::AuthenticationRequest<'a>>),
+    SessionState(Box<crate::cloud::payload::SessionState>),
 }
 impl CloudEventPayload<'_> {
     pub(super) fn tag(&self) -> u8 {
@@ -128,6 +130,8 @@ impl CloudEventPayload<'_> {
             Self::ToolResult { .. } => 9,
             Self::Deleted { .. } => 10,
             Self::BackgroundLifecycle(_) => 11,
+            Self::AuthenticationRequested(_) => 12,
+            Self::SessionState(_) => 13,
         }
     }
 
@@ -145,6 +149,8 @@ impl CloudEventPayload<'_> {
             Self::ToolIntent(intent) | Self::Approval { intent, .. } => Some(intent.execution.run),
             Self::ApprovalResolved { answer, .. } => Some(answer.execution.run),
             Self::BackgroundLifecycle(observation) => Some(observation.job.execution.run),
+            Self::AuthenticationRequested(request) => Some(request.binding.run),
+            Self::SessionState(state) => Some(state.binding.run),
             Self::Deleted { .. } => return self.validate(),
         };
         if run != context.run() {

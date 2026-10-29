@@ -61,6 +61,10 @@ impl CloudHarness {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_CHAT_KEY_MATERIAL;
     }
+    pub fn enable_session_start(&self) {
+        lock(&self.state).additional_capabilities |=
+            nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_SESSION_START;
+    }
     pub fn oversized_capability_reply(&self, enabled: bool) {
         lock(&self.state).oversized_capability_reply = enabled;
     }

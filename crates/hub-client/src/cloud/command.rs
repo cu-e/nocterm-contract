@@ -20,6 +20,7 @@ pub struct CloudCommandInvocation {
     source: Weak<Credentials>,
     generation: u64,
     max_envelope_bytes: u32,
+    session_start: bool,
 }
 impl CloudCommandInvocation {
     pub(super) fn capture(client: &CloudClient) -> Result<Self, CloudError> {
@@ -44,6 +45,9 @@ impl CloudCommandInvocation {
             source: Arc::downgrade(&client.credentials),
             generation: capture.generation,
             max_envelope_bytes: client.limits().max_envelope_bytes,
+            session_start: client.limits().features
+                & nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_SESSION_START
+                != 0,
         })
     }
     /// Use this exact capture when capping the grant's signed hard-session deadline.
@@ -78,6 +82,9 @@ impl CloudCommandInvocation {
                 }
                 GrantPayload::Provider { context, .. } => context.expires_at_ms(),
             }),
+            CloudCommandPayload::BeginSession(start) => {
+                Some(i64::try_from(start.expires_ms()).map_err(|_| CloudError::Protocol)?)
+            }
             CloudCommandPayload::AnswerSshConsent(answer) => {
                 Some(i64::try_from(answer.binding.expires_ms).map_err(|_| CloudError::Protocol)?)
             }
@@ -107,6 +114,11 @@ impl CloudCommandInvocation {
         payload: &[u8],
         semantic: Option<&CloudCommandPayload<'_>>,
     ) -> Result<PreparedCloudCommand, CloudError> {
+        if context.kind == nocterm_hub_model::cloud::CommandKind::BeginSession
+            && !self.session_start
+        {
+            return Err(CloudError::Unsupported);
+        }
         let source = self.source.upgrade().ok_or(CloudError::SourceChanged)?;
         source
             .require_generation(self.generation)

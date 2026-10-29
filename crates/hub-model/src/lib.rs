@@ -8,6 +8,7 @@
 //! Also owns closed Cloud semantic command/observation payloads, bounded snapshots,
 //! original publication/control metadata, descriptive background lifecycle, accepted
 //! view-only prompts, exact reconciliation facts and tool-argument fingerprints,
+//! finite Local/SSH session startup, original login proofs and descriptive lifecycle,
 //! fresh stable-authority capabilities, scoped runner proofs, finite boot descriptors
 //! and bounded nonce-bound read-only catalog/head/receipt witnesses. Native
 //! per-chat head contexts remain independent of content-key generations.

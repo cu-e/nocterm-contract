@@ -307,6 +307,12 @@ impl EventWriter {
             }
             CloudEventPayload::Deleted { command } => self.raw(command),
             CloudEventPayload::BackgroundLifecycle(value) => self.background(value),
+            CloudEventPayload::AuthenticationRequested(value) => Ok(
+                crate::cloud::payload::session_codec::write_request(&mut self.output, value)?,
+            ),
+            CloudEventPayload::SessionState(value) => Ok(
+                crate::cloud::payload::session_codec::write_state(&mut self.output, value)?,
+            ),
         }
     }
     pub(super) fn snapshot(

@@ -323,37 +323,8 @@ impl PayloadWriter {
         &mut self,
         value: &SshConsentAnswer<'_>,
     ) -> Result<(), PayloadError> {
-        let binding = &value.binding;
-        let duration = binding
-            .expires_ms
-            .checked_sub(binding.issued_ms)
-            .ok_or(PayloadError::Value)?;
-        if duration == 0 || duration > 60_000 || binding.run.expected_epoch == 0 {
-            return Err(PayloadError::Value);
-        }
-        for blob in [
-            binding.user_key_blob,
-            value.proof.host_key_blob,
-            value.proof.host_signature_blob,
-        ] {
-            if blob.is_empty() || blob.len() > 1024 {
-                return Err(PayloadError::Bounds);
-            }
-        }
-        if value.proof.userauth_payload.is_empty() || value.proof.userauth_payload.len() > 4096 {
-            return Err(PayloadError::Bounds);
-        }
-        self.raw(&binding.run.id)?;
-        self.raw(&binding.run.expected_epoch.to_be_bytes())?;
-        self.target(&binding.access)?;
-        self.raw(&binding.attempt)?;
-        self.raw(&binding.nonce)?;
-        self.raw(&binding.issued_ms.to_be_bytes())?;
-        self.raw(&binding.expires_ms.to_be_bytes())?;
-        self.field(binding.user_key_blob)?;
-        self.field(value.proof.host_key_blob)?;
-        self.field(value.proof.host_signature_blob)?;
-        self.field(value.proof.userauth_payload)?;
+        super::session_codec::write_ssh_binding(self, &value.binding)?;
+        super::session_codec::write_proof(self, &value.proof)?;
         match value.decision {
             SshConsentDecision::Deny => self.tag(0),
             SshConsentDecision::Approve { signature_blob } => {

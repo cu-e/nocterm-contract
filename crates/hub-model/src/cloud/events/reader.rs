@@ -256,6 +256,12 @@ impl<'a> EventReader<'a> {
                 command: self.0.array()?,
             },
             11 => CloudEventPayload::BackgroundLifecycle(Box::new(self.background()?)),
+            12 => CloudEventPayload::AuthenticationRequested(Box::new(
+                crate::cloud::payload::session_codec::read_request(&mut self.0)?,
+            )),
+            13 => CloudEventPayload::SessionState(Box::new(
+                crate::cloud::payload::session_codec::read_state(&mut self.0)?,
+            )),
             _ => return Err(EventPayloadError::Value),
         })
     }

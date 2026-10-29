@@ -1,6 +1,9 @@
 //! The sole versioned semantic command payload codec. Descriptive values grant no authority.
 pub(in crate::cloud) mod reader;
+mod session;
+pub(in crate::cloud) mod session_codec;
 mod values;
+pub use session::*;
 pub(in crate::cloud) mod writer;
 use crate::cloud::{
     CommandError, CommandHeader, CommandKind, SignedCommand, provider::ProviderLeaseError,
@@ -19,6 +22,7 @@ pub enum CloudCommandPayload<'a> {
     AnswerSshConsent(Box<SshConsentAnswer<'a>>),
     DeleteChat,
     RevokeIssuerGrants(Box<IssuerRevocation>),
+    BeginSession(Box<BeginSession<'a>>),
 }
 impl<'a> CloudCommandPayload<'a> {
     pub fn kind(&self) -> CommandKind {
@@ -31,6 +35,7 @@ impl<'a> CloudCommandPayload<'a> {
             Self::DeleteChat => CommandKind::DeleteChat,
             Self::RevokeIssuerGrants(_) => CommandKind::RevokeIssuerGrants,
             Self::AnswerSshConsent(_) => CommandKind::AnswerSshConsent,
+            Self::BeginSession(_) => CommandKind::BeginSession,
         }
     }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, PayloadError> {
@@ -59,6 +64,7 @@ impl<'a> CloudCommandPayload<'a> {
                 | Self::ResolveApproval(_)
                 | Self::RevokeGrant(_)
                 | Self::AnswerSshConsent(_)
+                | Self::BeginSession(_)
         ) || matches!(self,Self::IssueGrant(grant) if !matches!(grant.as_ref(),GrantPayload::Provider {..}));
         if requires_run && run.is_none() {
             return Err(PayloadError::Value);
@@ -71,6 +77,16 @@ impl<'a> CloudCommandPayload<'a> {
                 Err(PayloadError::Value)
             }
             Self::AnswerSshConsent(value) if Some(value.binding.run) != run => {
+                Err(PayloadError::Value)
+            }
+            Self::BeginSession(value)
+                if Some(value.run()) != run
+                    || u64::try_from(header.context().issued_at_ms)
+                        .ok()
+                        .is_none_or(|issued| {
+                            issued < value.issued_ms() || issued >= value.expires_ms()
+                        }) =>
+            {
                 Err(PayloadError::Value)
             }
             Self::RevokeIssuerGrants(value)
@@ -106,6 +122,9 @@ impl<'a> CloudCommandPayload<'a> {
                 Self::RevokeIssuerGrants(Box::new(reader.issuer_revoke()?))
             }
             CommandKind::AnswerSshConsent => Self::AnswerSshConsent(Box::new(reader.ssh_answer()?)),
+            CommandKind::BeginSession => {
+                Self::BeginSession(Box::new(session_codec::read_start(&mut reader)?))
+            }
         };
         reader.finish()?;
         value.validate()?;
@@ -120,6 +139,7 @@ impl<'a> CloudCommandPayload<'a> {
             Self::IssueGrant(value) => out.grant_payload(value),
             Self::RevokeGrant(value) => out.scoped_grant(*value),
             Self::AnswerSshConsent(value) => out.ssh_answer(value),
+            Self::BeginSession(value) => session_codec::write_start(out, value),
             Self::RevokeIssuerGrants(value) => out.issuer_revoke(value),
             Self::Stop | Self::DeleteChat => Ok(()),
         }

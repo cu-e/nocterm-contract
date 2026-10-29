@@ -11,6 +11,8 @@ pub const CLOUD_CAPABILITY_VERSION: u32 = 1;
 pub const CLOUD_FEATURE_CHAT_KEY_MATERIAL: u64 = 8;
 /// Optional read-only rendezvous for a nonce-bound witness by the trusted R.
 pub const CLOUD_FEATURE_FRESH_HEAD: u64 = 16;
+/// Optional additive BeginSession9 and AuthenticationRequested12/SessionState13.
+pub const CLOUD_FEATURE_SESSION_START: u64 = 32;
 pub const CLOUD_REQUIRED_FEATURES: u64 = 1 | 2 | 4; // E2EE commands, replay, scoped runners.
 pub const MAX_CAPABILITY_CLAIM_BYTES: usize = 512;
 const MAX_WINDOW_MS: i64 = 60_000;

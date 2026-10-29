@@ -114,6 +114,39 @@ recipient; persisting its seed would defeat that boot-only lifetime.
 
 Independent fixed vectors and their Python generator are in `fixtures/cloud-command-v1/`.
 
+### Finite session startup
+
+The optional `CLOUD_FEATURE_SESSION_START` flag (value 32) negotiates additive semantic
+command 9 `BeginSession`, event 12 `AuthenticationRequested` and event 13
+`SessionState`. Existing command 6 `AnswerSshConsent` and all existing canonical
+bytes keep their layouts. The command/event/snapshot labels remain v1 and the
+service protocol remains 2; a missing feature or unknown semantic tag refuses
+explicitly. Consumers must support the new observation variants before enabling
+this feature, including snapshot retention and inverse projection.
+
+`BeginSession` selects Local or SSH and authorizes at most one connection within
+the device-issued original run/attempt/nonce window of 1..60 seconds. Startup mode
+`ConnectOnly` requests Connection capability; `Terminal` also requests Execution.
+A transport that cannot connect without starting a shell refuses ConnectOnly.
+Read-only access does not start a connection or PTY. This finite startup request
+is separate from session-bound tool grants: it carries no fabricated pre-login
+receipt, and successful authentication does not install a tool grant. Local has
+no SSH key/proof fields. SSH reuses the exact binding and proof codec from
+AnswerSshConsent, with ≤1024-byte public key/host signature fields, ≤4096-byte
+userauth and ≤128-byte answer signatures. The native device authorizer must
+verify the pinned host's actual initial-session proof and exact userauth action;
+wire decoding alone proves neither consent nor target authority.
+
+The original run must already exist. Device consent supplies the attempt/nonce
+before the handshake; the runner publishes the actual proof request under that
+same run, and the existing signed answer 6 resolves only that original attempt.
+`SessionState` describes Established, Lost or Refused with a closed reason and,
+where applicable, the actual original session reference. Its target/authentication
+must match the original attempt. Historical state never restores a live session,
+approval or grant. `seal_payload` also rejects startup expiry beyond the actual
+captured device session's hard refresh deadline. Independent additive vectors are
+in `fixtures/cloud-session-v1/`; the old Answer6 vectors remain unchanged.
+
 ### Per-chat material, records and the native journal
 
 `cloud::ChatKey` generates independent content material for one chat generation.

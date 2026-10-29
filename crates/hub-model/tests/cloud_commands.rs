@@ -104,10 +104,10 @@ fn textual_identity_bounds_count_utf8_bytes_and_preserve_exact_values() -> TestR
 
 #[test]
 fn unknown_kind_and_noncanonical_option_tags_are_refused() -> TestResult {
-    for n in 1..=8 {
+    for n in 1..=9 {
         assert_eq!(CommandKind::try_from(n)? as u16, n);
     }
-    for n in [0, 9, u16::MAX] {
+    for n in [0, 10, u16::MAX] {
         assert!(matches!(
             CommandKind::try_from(n),
             Err(CommandError::UnsupportedKind)

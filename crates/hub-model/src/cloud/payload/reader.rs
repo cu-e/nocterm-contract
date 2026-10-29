@@ -5,8 +5,7 @@ use super::{
         ApprovalChoice, ApprovalPayload, AuthenticationSelection, ExecutionReference, GrantClass,
         GrantPayload, GrantReference, GrantWindow, ImageMime, InferenceLimits, IssuerRevocation,
         ModelSelection, PromptPart, PromptPayload, ScopedGrantReference, SessionReference,
-        SshConsentAnswer, SshConsentBinding, SshConsentDecision, SshProof, TargetAccess,
-        TargetSelection,
+        SshConsentAnswer, SshConsentDecision, TargetAccess, TargetSelection,
     },
 };
 use crate::cloud::{
@@ -262,30 +261,8 @@ impl<'a> PayloadReader<'a> {
         })
     }
     pub(in crate::cloud) fn ssh_answer(&mut self) -> Result<SshConsentAnswer<'a>, PayloadError> {
-        let run = RunCoordinate {
-            id: self.array()?,
-            expected_epoch: u64::from_be_bytes(self.array()?),
-        };
-        let access = self.target()?;
-        let attempt = self.array()?;
-        let nonce = self.array()?;
-        let issued_ms = u64::from_be_bytes(self.array()?);
-        let expires_ms = u64::from_be_bytes(self.array()?);
-        let user_key_blob = self.field(1024)?;
-        let binding = SshConsentBinding {
-            run,
-            access,
-            attempt,
-            nonce,
-            issued_ms,
-            expires_ms,
-            user_key_blob,
-        };
-        let proof = SshProof {
-            host_key_blob: self.field(1024)?,
-            host_signature_blob: self.field(1024)?,
-            userauth_payload: self.field(4096)?,
-        };
+        let binding = super::session_codec::read_ssh_binding(self)?;
+        let proof = super::session_codec::read_proof(self)?;
         let decision = match self.tag()? {
             0 => SshConsentDecision::Deny,
             1 => SshConsentDecision::Approve {
