@@ -15,6 +15,9 @@ use support::FakeHub;
 use zeroize::Zeroizing;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "cloud_runner/lifetimes.rs"]
+mod lifetimes;
+
 async fn enrolled(
     hub: &FakeHub,
 ) -> Result<(HubClient, CloudClient, CloudRunner), Box<dyn std::error::Error>> {

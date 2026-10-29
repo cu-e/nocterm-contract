@@ -208,6 +208,21 @@ runner scope and current tokens, consume durable nonces/tickets, reserve upload 
 commit receipt/idempotency state; codecs and SDK fixtures do not supply these server duties.
 Independent canonical/signature vectors are in `fixtures/cloud-relay-v1/`.
 
+`RunnerSession::from_stored_response` restores private runner storage with live refresh
+credentials even after access expires. It preserves the original subject and token bounds;
+`from_response` still requires fresh access. Restore never refreshes implicitly: call
+`CloudRunner::refresh` explicitly, then durably save that exact returned rotation before
+admitting more work. A failed native write must retry persistence rather than rotate again.
+
+`CloudRunner::begin_publication_with_residency` retains the same opaque caller allocation
+owner in the upload, actual RPC task and transferred request stream/body, including
+asynchronous cancellation when Tonic/Tower retains the body after its response future.
+`CloudUpload::buffer_work_bytes(ciphertext_bytes)` bounds SDK-owned logical queue data,
+routing/framing scratch and the receipt before starting an upload; callers separately own
+their original ciphertext and the retained runtime/connection, Tonic, HTTP/2, TLS and allocator
+baseline. It is not a total RSS bound. Use `max_frame_bytes()` from the upload's signed
+negotiated limit when producing chunks.
+
 ### Memory-only provider grants
 
 `RunnerBootKey` creates a fresh non-restorable X25519 recipient. Its API has no seed export,

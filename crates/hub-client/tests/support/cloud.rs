@@ -31,6 +31,7 @@ struct State {
     hold_upload: bool,
     retention: retention::Retention,
     additional_capabilities: u64,
+    max_frame_bytes: Option<u32>,
 }
 #[derive(Clone)]
 pub struct CloudHarness {
@@ -77,6 +78,9 @@ impl CloudHarness {
     }
     pub fn hold_upload(&self) {
         lock(&self.state).hold_upload = true;
+    }
+    pub fn set_max_frame_bytes(&self, bytes: u32) {
+        lock(&self.state).max_frame_bytes = Some(bytes);
     }
     pub fn wrong_receipt(&self) {
         lock(&self.state).wrong_receipt = true;
@@ -175,6 +179,9 @@ impl CloudService for CloudPeer {
         let now = now_ms();
         let mut limits = CapabilityLimits::v1();
         limits.features |= lock(&self.0.state).additional_capabilities;
+        if let Some(bytes) = lock(&self.0.state).max_frame_bytes {
+            limits.max_frame_bytes = bytes;
+        }
         let claim = CapabilitiesClaim::new(
             CloudTextId::new(HUB_ID).map_err(|_| Status::internal("id"))?,
             key.public_key(),

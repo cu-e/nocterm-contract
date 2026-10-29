@@ -127,6 +127,15 @@ impl CloudRunner {
     ) -> Result<CloudUpload, CloudError> {
         CloudUpload::start(self.access(), metadata)
     }
+    /// The same opaque allocation owner follows producer, RPC task and request body.
+    /// Cancellation requests abort; residency ends on the final actual owner drop.
+    pub fn begin_publication_with_residency(
+        &self,
+        metadata: PublicationMetadata,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<CloudUpload, CloudError> {
+        CloudUpload::start_with_residency(self.access(), metadata, Some(residency))
+    }
     pub async fn replay(
         &self,
         selector: CloudSelector,

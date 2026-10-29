@@ -27,6 +27,22 @@ impl RunnerSession {
         tokens: v1::CloudRunnerTokens,
         subject: &RunnerProofSubject,
     ) -> Result<Self, CloudError> {
+        Self::parse(tokens, subject, false)
+    }
+    /// Restores private runner storage, including an expired access token whose
+    /// refresh token is still live. This does not refresh or admit an RPC.
+    /// Call `CloudRunner::refresh` explicitly before using expired access.
+    pub fn from_stored_response(
+        tokens: v1::CloudRunnerTokens,
+        subject: &RunnerProofSubject,
+    ) -> Result<Self, CloudError> {
+        Self::parse(tokens, subject, true)
+    }
+    fn parse(
+        tokens: v1::CloudRunnerTokens,
+        subject: &RunnerProofSubject,
+        stored: bool,
+    ) -> Result<Self, CloudError> {
         let valid_scope = tokens.account_id == subject.namespace.account_id.as_str()
             && tokens.runner_id == subject.runner_id
             && tokens.capability_version == 1;
@@ -37,12 +53,15 @@ impl RunnerSession {
             refresh: Zeroizing::new(tokens.refresh_token),
             refresh_expires_at_ms: tokens.refresh_expires_at_ms,
         };
+        let now = crate::now_ms();
         if !valid_scope
             || tokens.access.is_empty()
             || tokens.refresh.is_empty()
             || tokens.access.len() > 256
             || tokens.refresh.len() > 256
-            || tokens.access_expires_at_ms <= crate::now_ms()
+            || tokens.access_expires_at_ms <= 0
+            || (!stored && tokens.access_expires_at_ms <= now)
+            || tokens.refresh_expires_at_ms <= now
             || tokens.refresh_expires_at_ms < tokens.access_expires_at_ms
         {
             return Err(CloudError::Protocol);
