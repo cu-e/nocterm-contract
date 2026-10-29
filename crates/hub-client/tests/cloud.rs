@@ -384,3 +384,117 @@ async fn missing_end_bad_cursor_and_frames_after_page_end_fail_closed() -> TestR
     assert!(replay.next_record().await.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn guarded_acquisition_keeps_capability_and_store_source_owners_with_closed_limits()
+-> TestResult {
+    use nocterm_hub_client::{
+        ClientError, StatusCode,
+        cloud::{capability_resident_bytes, capability_work_bytes},
+        store_work_bytes,
+    };
+    use std::{sync::Arc, time::Duration};
+    let hub = FakeHub::start_cloud().await;
+    let client = hub.signed_in_client().await;
+    assert!(std::ptr::eq(client.info(), client.clone().info()));
+    client.require_cloud_metadata()?;
+    assert_eq!(
+        client.account_subject(),
+        Some(("acc-1".into(), "dev-1".into()))
+    );
+    assert!(capability_resident_bytes() <= 16 * 1024);
+    assert!(capability_work_bytes() > capability_resident_bytes());
+    guarded_offer_transition(&client, &hub.cloud().ok_or("fixture")?.authority()).await?;
+    assert!(store_work_bytes(0).is_err());
+    assert!(store_work_bytes(4 * 1024 * 1024 + 1).is_err());
+    let owner = Arc::new(());
+    let weak = Arc::downgrade(&owner);
+    let mut store = client.store_with_residency(owner, 16 * 1024)?;
+    assert!(store_work_bytes(16 * 1024)? >= 32 * 1024);
+    assert_eq!(keyset_code(&mut store).await, tonic::Code::NotFound);
+    assert_eq!(
+        store
+            .watch_changes(v1::WatchChangesRequest {
+                collection_ids: vec!["c".into()],
+            })
+            .await
+            .err()
+            .ok_or("Store watch scope")?
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    hub.seen.hold_keyset_reply();
+    let task = tokio::spawn(async move {
+        store
+            .get_account_keyset(v1::GetAccountKeysetRequest {})
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), hub.seen.wait_keyset_request()).await?;
+    assert!(weak.upgrade().is_some());
+    task.abort();
+    let _ = task.await;
+    hub.seen.release_keyset_reply();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    hub.cloud()
+        .ok_or("fixture")?
+        .oversized_capability_reply(true);
+    let response = client.cloud_offer_with_residency(Arc::new(())).await;
+    assert!(
+        matches!(response,Err(CloudError::Hub(error)) if matches!(*error,ClientError::Status {code:StatusCode::OutOfRange,..}))
+    );
+    hub.cloud()
+        .ok_or("fixture")?
+        .oversized_capability_reply(false);
+    let mut old_store = client.store_with_residency(Arc::new(()), 16 * 1024)?;
+    client.sign_out();
+    assert!(client.account_subject().is_none());
+    assert!(client.require_cloud_metadata().is_err());
+    assert_eq!(
+        keyset_code(&mut old_store).await,
+        tonic::Code::Unauthenticated
+    );
+    Ok(())
+}
+
+async fn guarded_offer_transition(
+    client: &nocterm_hub_client::HubClient,
+    authority: &[u8; 32],
+) -> TestResult {
+    use std::{sync::Arc, time::Duration};
+    let work = Arc::new(());
+    let old = Arc::downgrade(&work);
+    let offer = client.cloud_offer_with_residency(work).await?;
+    assert!(old.upgrade().is_some());
+    let resident = Arc::new(());
+    let small = Arc::downgrade(&resident);
+    let cloud = offer.accept_with_residency(authority, resident)?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while old.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let cloned = cloud.clone();
+    assert!(std::ptr::eq(cloud.namespace(), cloned.namespace()));
+    assert!(std::ptr::eq(cloud.subject(), cloned.subject()));
+    assert!(small.upgrade().is_some());
+    drop(cloud);
+    assert!(small.upgrade().is_some());
+    drop(cloned);
+    assert!(small.upgrade().is_none());
+    Ok(())
+}
+async fn keyset_code(store: &mut nocterm_hub_client::ResidentStoreClient) -> tonic::Code {
+    match store
+        .get_account_keyset(v1::GetAccountKeysetRequest {})
+        .await
+    {
+        Ok(_) => tonic::Code::Ok,
+        Err(error) => error.code(),
+    }
+}

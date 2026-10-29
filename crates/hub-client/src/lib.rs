@@ -10,6 +10,8 @@
 //! keep runner-only credentials separate from ordinary account-device sessions.
 //! One-shot fresh-head probes preserve the original login/challenge/deadline;
 //! staging authenticated native outbox bytes never rewrites signed commands.
+//! Guarded capability/Store acquisition retains actual body and accepted metadata
+//! owners; immutable hub information is shared rather than deeply cloned.
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
 //! provide a [`SessionStore`] for tokens), how a device is named (callers pass a
 //! [`DeviceInfo`]), terminal rendering, or vault encryption (`nocterm-keys`).
@@ -29,6 +31,7 @@ mod keyset;
 mod oidc;
 mod probe;
 mod relay;
+mod resident_store;
 mod signer;
 mod store;
 pub mod terminal;
@@ -43,3 +46,8 @@ pub use relay::{
 };
 pub use signer::{Session, Signer, now_ms};
 pub use store::SessionStore;
+
+pub use resident_store::{
+    ResidentStoreChannel, ResidentStoreClient, ResidentStoreSigned, ResidentStoreSigner,
+    store_work_bytes,
+};

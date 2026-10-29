@@ -11,12 +11,12 @@ use tonic::{
 };
 
 #[derive(Clone)]
-pub(super) struct ResidentChannel {
+pub struct ResidentChannel {
     inner: Channel,
     residency: Arc<dyn Send + Sync>,
 }
 impl ResidentChannel {
-    pub(super) fn new(inner: Channel, residency: Arc<dyn Send + Sync>) -> Self {
+    pub(crate) fn new(inner: Channel, residency: Arc<dyn Send + Sync>) -> Self {
         Self { inner, residency }
     }
 }
@@ -97,3 +97,10 @@ pub(super) fn working_owner_bytes() -> usize {
 
 #[cfg(test)]
 mod tests;
+
+impl std::fmt::Debug for ResidentChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResidentStoreChannel")
+            .finish_non_exhaustive()
+    }
+}

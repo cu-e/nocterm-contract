@@ -31,6 +31,7 @@ struct State {
     hold_upload: bool,
     retention: retention::Retention,
     additional_capabilities: u64,
+    oversized_capability_reply: bool,
     max_frame_bytes: Option<u32>,
 }
 #[derive(Clone)]
@@ -56,6 +57,9 @@ impl CloudHarness {
     pub fn enable_key_material(&self) {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_CHAT_KEY_MATERIAL;
+    }
+    pub fn oversized_capability_reply(&self, enabled: bool) {
+        lock(&self.state).oversized_capability_reply = enabled;
     }
     pub fn enable_head_probes(&self) {
         lock(&self.state).additional_capabilities |=
@@ -196,7 +200,10 @@ impl CloudService for CloudPeer {
         let claim = claim
             .canonical_bytes()
             .map_err(|_| Status::internal("claim"))?;
-        let signature = key.sign(&claim).to_vec();
+        let mut signature = key.sign(&claim).to_vec();
+        if lock(&self.0.state).oversized_capability_reply {
+            signature.resize(2048, 0);
+        }
         Ok(Response::new(v1::CloudCapabilities { claim, signature }))
     }
     async fn publish(

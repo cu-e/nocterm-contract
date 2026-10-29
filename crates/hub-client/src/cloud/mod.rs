@@ -9,7 +9,7 @@ pub use probe::{
     head_reply_work_bytes,
 };
 mod replay;
-mod resident_channel;
+pub(crate) mod resident_channel;
 mod runner;
 mod runner_credentials;
 mod transport;
@@ -23,6 +23,27 @@ pub use replay::{
     CloudDeliveryOrigin, CloudIncomingRecord, CloudReplay, CloudReplayItem, CloudSelector,
 };
 pub use upload::CloudUpload;
+
+/// Closed capability protobuf envelope: claim<=512, signature64 and framing.
+pub const MAX_CAPABILITY_REPLY_BYTES: usize = 1024;
+/// Logical SDK work for guarded capability acquisition. Original connection,
+/// caller DTOs and transport/runtime baseline are separately owned.
+pub fn capability_work_bytes() -> usize {
+    transport::acknowledgement_work_bytes()
+        + 3 * MAX_CAPABILITY_REPLY_BYTES
+        + 2 * nocterm_hub_model::cloud::capabilities::MAX_CAPABILITY_CLAIM_BYTES
+        + std::mem::size_of::<CloudOffer>()
+        + std::mem::size_of::<CredentialCapture>()
+        + 4 * nocterm_hub_model::cloud::MAX_ID_BYTES
+}
+/// Returned CloudClient metadata: two namespace IDs and account/device subject
+/// IDs, fixed client state and Arc references; no full HubInfo or credential copy.
+pub fn capability_resident_bytes() -> usize {
+    std::mem::size_of::<CloudClient>()
+        + std::mem::size_of::<CloudClientMetadata>()
+        + 2 * std::mem::size_of::<usize>()
+        + 4 * nocterm_hub_model::cloud::MAX_ID_BYTES
+}
 
 /// Logical SDK working bound for a guarded unary ACK. Caller-owned metadata,
 /// private storage and Tonic/HTTP2/TLS/runtime/allocator baseline are separate.
@@ -97,6 +118,7 @@ pub struct CloudOffer {
     credentials: Arc<Credentials>,
     capture: CredentialCapture,
     proof: SignedCapabilities,
+    _residency: Option<Arc<dyn Send + Sync>>,
 }
 impl CloudOffer {
     pub(crate) async fn fetch(
@@ -104,16 +126,52 @@ impl CloudOffer {
         credentials: Arc<Credentials>,
         raw_hub: &str,
     ) -> Result<Self, CloudError> {
-        let capture = credentials.capture().ok_or(CloudError::NotSignedIn)?;
+        Self::fetch_inner(channel, credentials, raw_hub, None).await
+    }
+    pub(crate) async fn fetch_with_residency(
+        channel: Channel,
+        credentials: Arc<Credentials>,
+        raw_hub: &str,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<Self, CloudError> {
+        Self::fetch_inner(channel, credentials, raw_hub, Some(residency)).await
+    }
+    async fn fetch_inner(
+        channel: Channel,
+        credentials: Arc<Credentials>,
+        raw_hub: &str,
+        residency: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<Self, CloudError> {
+        let capture = if residency.is_some() {
+            credentials.capture_current_cloud()?
+        } else {
+            credentials.capture().ok_or(CloudError::NotSignedIn)?
+        };
         CloudSubject::captured(&capture)?;
         let nonce = random_bytes::<16>()?;
-        let mut rpc = rpc(channel.clone(), credentials.clone(), capture.generation);
-        let response = rpc
-            .capabilities(v1::CloudCapabilitiesRequest {
-                nonce: nonce.to_vec(),
-            })
-            .await?
-            .into_inner();
+        let request = v1::CloudCapabilitiesRequest {
+            nonce: nonce.to_vec(),
+        };
+        let response = match residency.as_ref() {
+            Some(owner) => {
+                transport::resident_device_rpc(
+                    channel.clone(),
+                    credentials.clone(),
+                    capture.generation,
+                    owner.clone(),
+                )?
+                .max_decoding_message_size(MAX_CAPABILITY_REPLY_BYTES)
+                .max_encoding_message_size(MAX_CAPABILITY_REPLY_BYTES)
+                .capabilities(request)
+                .await?
+            }
+            None => {
+                rpc(channel.clone(), credentials.clone(), capture.generation)
+                    .capabilities(request)
+                    .await?
+            }
+        }
+        .into_inner();
         credentials
             .require_generation(capture.generation)
             .map_err(|_| CloudError::SourceChanged)?;
@@ -131,6 +189,7 @@ impl CloudOffer {
             credentials,
             capture,
             proof,
+            _residency: residency,
         })
     }
     pub fn offered_authority(&self) -> [u8; 32] {
@@ -145,6 +204,22 @@ impl CloudOffer {
     /// Use a separately retained pin or the approved one-time trusted runner setup.
     /// Never replace an existing pin with offered_authority after a mismatch.
     pub fn accept(self, expected_authority: &[u8; 32]) -> Result<CloudClient, CloudError> {
+        self.accept_inner(expected_authority, None)
+    }
+    /// Caller pre-admits returned metadata BEFORE accept. The original work
+    /// owner remains on the offer and any actual in-flight body until its Drop.
+    pub fn accept_with_residency(
+        self,
+        expected_authority: &[u8; 32],
+        resident: Arc<dyn Send + Sync>,
+    ) -> Result<CloudClient, CloudError> {
+        self.accept_inner(expected_authority, Some(resident))
+    }
+    fn accept_inner(
+        self,
+        expected_authority: &[u8; 32],
+        resident: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<CloudClient, CloudError> {
         self.credentials
             .require_generation(self.capture.generation)
             .map_err(|_| CloudError::SourceChanged)?;
@@ -160,13 +235,17 @@ impl CloudOffer {
             account_id: CloudTextId::new(&self.capture.account_id)?,
         };
         let subject = CloudSubject::captured(&self.capture)?;
+        let residency = resident.or_else(|| self._residency.clone());
         Ok(CloudClient {
             channel: self.channel,
             credentials: self.credentials,
             generation: self.capture.generation,
-            namespace,
-            subject,
-            limits: self.proof.claim().limits(),
+            metadata: Arc::new(CloudClientMetadata {
+                namespace,
+                subject,
+                limits: self.proof.claim().limits(),
+            }),
+            _residency: residency,
         })
     }
 }
@@ -183,6 +262,12 @@ pub struct CloudClient {
     channel: Channel,
     credentials: Arc<Credentials>,
     generation: u64,
+    metadata: Arc<CloudClientMetadata>,
+    _residency: Option<Arc<dyn Send + Sync>>,
+}
+/// Immutable accepted metadata has one physical allocation even when clients
+/// clone. The final client drops its metadata before its small admission owner.
+struct CloudClientMetadata {
     namespace: CloudNamespace,
     subject: CloudSubject,
     limits: CapabilityLimits,
@@ -214,13 +299,13 @@ impl CloudClient {
         PreparedCloudCommand::stage_stored(self, metadata, ciphertext, semantic_digest)
     }
     pub fn namespace(&self) -> &CloudNamespace {
-        &self.namespace
+        &self.metadata.namespace
     }
     pub fn subject(&self) -> &CloudSubject {
-        &self.subject
+        &self.metadata.subject
     }
     pub fn limits(&self) -> CapabilityLimits {
-        self.limits
+        self.metadata.limits
     }
     pub fn check_source(&self) -> Result<(), CloudError> {
         self.credentials
@@ -309,8 +394,8 @@ impl CloudClient {
     ) -> Result<v1::CloudDeliveryReceipt, CloudError> {
         command.require_source(&self.credentials, self.generation)?;
         let mut upload = self.begin_publication(command.metadata().clone())?;
-        let frame =
-            usize::try_from(self.limits.max_frame_bytes).map_err(|_| CloudError::Protocol)?;
+        let frame = usize::try_from(self.metadata.limits.max_frame_bytes)
+            .map_err(|_| CloudError::Protocol)?;
         for bytes in command.ciphertext().chunks(frame) {
             upload.write(bytes).await?;
         }
@@ -453,7 +538,7 @@ impl CloudClient {
 impl fmt::Debug for CloudClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CloudClient")
-            .field("subject", &self.subject)
+            .field("subject", self.subject())
             .finish_non_exhaustive()
     }
 }
@@ -501,7 +586,13 @@ impl Interceptor for CapturedSigner {
     }
 }
 impl CapturedSigner {
-    fn call_bounded(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+    pub(crate) fn new(credentials: Arc<Credentials>, generation: u64) -> Self {
+        Self {
+            credentials,
+            generation,
+        }
+    }
+    pub(crate) fn call_bounded(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
         self.sign(request, true)
     }
     fn require_bounded(&self) -> Result<(), CloudError> {

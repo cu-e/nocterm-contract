@@ -29,18 +29,18 @@ impl CloudCommandInvocation {
             .capture()
             .ok_or(CloudError::NotSignedIn)?;
         if capture.generation != client.generation
-            || capture.account_id != client.subject.account.as_str()
-            || capture.device_id != client.subject.device.as_str()
-            || capture.signing_key != client.subject.signing_key
+            || capture.account_id != client.subject().account.as_str()
+            || capture.device_id != client.subject().device.as_str()
+            || capture.signing_key != client.subject().signing_key
         {
             return Err(CloudError::SourceChanged);
         }
         Ok(Self {
-            namespace: client.namespace.clone(),
+            namespace: client.namespace().clone(),
             subject: CloudSubject::captured(&capture)?,
             source: Arc::downgrade(&client.credentials),
             generation: capture.generation,
-            max_envelope_bytes: client.limits.max_envelope_bytes,
+            max_envelope_bytes: client.limits().max_envelope_bytes,
         })
     }
     /// Use this exact capture when capping the grant's signed hard-session deadline.

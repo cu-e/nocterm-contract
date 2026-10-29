@@ -47,6 +47,7 @@ pub struct Seen {
     /// How each relay's request stream ended, in order.
     pub relay_ends: Mutex<Vec<RelayEnd>>,
     relay_ended: Notify,
+    store_control: StoreControl,
 }
 
 /// How the caller ended a relay.
@@ -58,7 +59,27 @@ pub enum RelayEnd {
     Aborted,
 }
 
+#[derive(Default)]
+struct StoreControl {
+    hold: std::sync::atomic::AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
 impl Seen {
+    pub fn hold_keyset_reply(&self) {
+        self.store_control
+            .hold
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    pub async fn wait_keyset_request(&self) {
+        self.store_control.entered.notified().await;
+    }
+    pub fn release_keyset_reply(&self) {
+        self.store_control
+            .hold
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.store_control.release.notify_one();
+    }
     pub fn password_logins(&self) -> Vec<v1::PasswordLoginRequest> {
         lock(&self.password_logins).clone()
     }
@@ -193,6 +214,16 @@ impl StoreService for Store {
         &self,
         _: Request<v1::GetAccountKeysetRequest>,
     ) -> Reply<v1::AccountKeyset> {
+        if self
+            .0
+            .store_control
+            .hold
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let released = self.0.store_control.release.notified();
+            self.0.store_control.entered.notify_one();
+            released.await;
+        }
         lock(&self.0.keyset)
             .clone()
             .map(Response::new)

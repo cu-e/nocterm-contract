@@ -52,7 +52,8 @@ impl PreparedChatKeyGrant {
     ) -> Result<Self, CloudError> {
         Self::require_coordinate(client, &chat)?;
         if ciphertext.len()
-            > usize::try_from(client.limits.max_envelope_bytes).map_err(|_| CloudError::Protocol)?
+            > usize::try_from(client.limits().max_envelope_bytes)
+                .map_err(|_| CloudError::Protocol)?
         {
             return Err(CloudError::Protocol);
         }
@@ -72,7 +73,7 @@ impl PreparedChatKeyGrant {
     }
     fn require_coordinate(client: &CloudClient, chat: &ChatCoordinate) -> Result<(), CloudError> {
         client.check_source()?;
-        if client.limits.features & CLOUD_FEATURE_CHAT_KEY_MATERIAL == 0 {
+        if client.limits().features & CLOUD_FEATURE_CHAT_KEY_MATERIAL == 0 {
             return Err(CloudError::Unsupported);
         }
         if chat.namespace() != client.namespace() {
@@ -97,7 +98,7 @@ impl PreparedChatKeyGrant {
         client.check_source()?;
         let mut upload = client.begin_publication(self.metadata.clone())?;
         for chunk in self.ciphertext.chunks(
-            usize::try_from(client.limits.max_frame_bytes).map_err(|_| CloudError::Protocol)?,
+            usize::try_from(client.limits().max_frame_bytes).map_err(|_| CloudError::Protocol)?,
         ) {
             upload.write(chunk).await?;
         }

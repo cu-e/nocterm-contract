@@ -76,7 +76,7 @@ pub struct SignedIn {
 #[derive(Debug, Clone)]
 pub struct HubClient {
     channel: Channel,
-    info: v1::HubInfo,
+    info: Arc<v1::HubInfo>,
     credentials: Arc<Credentials>,
 }
 
@@ -101,7 +101,7 @@ impl HubClient {
         let credentials = Arc::new(Credentials::new(info.hub_id.clone(), key, session));
         Ok(Self {
             channel,
-            info,
+            info: Arc::new(info),
             credentials,
         })
     }
@@ -122,6 +122,33 @@ impl HubClient {
             &self.info.hub_id,
         )
         .await
+    }
+
+    /// Guarded capability acquisition. The same owner follows actual request/
+    /// response bodies and the offer; acceptance can select a smaller resident owner.
+    pub async fn cloud_offer_with_residency(
+        &self,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<crate::cloud::CloudOffer, crate::cloud::CloudError> {
+        crate::cloud::CloudOffer::fetch_with_residency(
+            self.channel.clone(),
+            self.credentials.clone(),
+            &self.info.hub_id,
+            residency,
+        )
+        .await
+    }
+    /// No token or HubInfo copy. This is a bounded metadata check, not a current
+    /// authorization/pin proof or an extension of the captured native membership.
+    pub fn require_cloud_metadata(&self) -> Result<(), ClientError> {
+        self.credentials
+            .require_current_cloud_metadata()
+            .map_err(Into::into)
+    }
+    /// Descriptive account/device IDs cloned under one credential read lock.
+    /// No bearer/refresh token is copied; invalid-sized identities are absent.
+    pub fn account_subject(&self) -> Option<(String, String)> {
+        self.credentials.account_subject()
     }
 
     /// Current tokens, to persist after sign-in or refresh.
@@ -151,6 +178,21 @@ impl HubClient {
 
     pub fn store(&self) -> StoreServiceClient<Signed> {
         StoreServiceClient::new(self.signed()).max_decoding_message_size(4 * 1024 * 1024)
+    }
+
+    /// A purpose-bound captured Store service. Caller request/decoded DTOs are
+    /// separately admitted and must retain the same owner through publication.
+    pub fn store_with_residency(
+        &self,
+        residency: Arc<dyn Send + Sync>,
+        max_message_bytes: usize,
+    ) -> Result<crate::ResidentStoreClient, ClientError> {
+        crate::resident_store::create(
+            self.channel.clone(),
+            self.credentials.clone(),
+            residency,
+            max_message_bytes,
+        )
     }
 
     pub fn sessions(&self) -> SessionServiceClient<Signed> {

@@ -496,3 +496,49 @@ admission and previously accepted idempotent receipt lookup remain R's duties.
 `canonical_bytes_exact(length)` to encode into an admitted single output buffer.
 Nested tool arguments reuse that sink without another encoded buffer; JSON
 validation may still use parser scratch, so this is not an allocation-free API.
+
+
+### Guarded acquisition and account Store
+
+`HubClient::cloud_offer_with_residency` checks actual bounded account/device/token
+metadata under the credential lock before attribution cloning and uses the sole
+resident channel for request and response bodies. Its generated client has a
+closed 1 KiB protobuf limit before decoding the at-most 512-byte canonical claim
+and 64-byte signature. Source generation, original nonce and pinned acceptance
+rules are unchanged. Legacy `cloud_offer` retains its original behavior.
+
+Pre-admit `cloud::capability_work_bytes()` before fetching. The returned CloudOffer
+retains that owner last; default `accept` preserves it in CloudClient. Native
+callers can pre-admit `cloud::capability_resident_bytes()` and use
+`accept_with_residency(pin, small_owner)` before namespace/subject copies. The old
+work owner stays on the offer and any outstanding actual body until Drop; the
+small owner follows the returned immutable Arc-backed metadata and every shallow
+CloudClient clone; the final clone drops that one physical metadata generation
+before releasing its owner. Explicit descriptor/value clones are separately
+admitted caller generations. No consuming unguarded
+extraction or accepted pin derived from the offered directory key is added.
+
+`HubClient::store_with_residency(owner, max_message_bytes)` returns the generated
+`ResidentStoreClient` using the same body-retaining channel and bounded original
+source signer. Both encoding and decoding use the explicit limit, from 1 byte to
+4 MiB. Its signer permits only the closed unary Store RPC set; WatchChanges and
+other services are refused. The public channel/signer names only make the service
+alias usable; their constructors are private and no generic signer is exposed.
+Default `store()` remains available with its prior policy.
+
+`store_work_bytes(limit)` names body/proof/fixed SDK work. The caller validates
+request encoded length before RPC and separately admits original request values,
+protobuf decoded containers, native crypto and outputs, retaining the exact same
+guard through those generations. A small wire limit is not a decoded object-count
+limit: repeated empty records still allocate their typed container/slot capacity.
+These logical SDK bounds exclude Tonic/HTTP2/TLS/runtime/allocator/connection
+baseline and do not promise process RSS. No implicit credential refresh is hidden
+in either factory; a captured native auth owner separately owns refresh policy.
+
+HubClient shares immutable HubInfo through Arc, so cloning does not duplicate its
+OIDC/provider rows. `require_cloud_metadata` performs a no-copy current metadata
+check; `account_subject` clones only bounded account/device IDs under one session
+read lock, never bearer or refresh tokens. Neither descriptive check establishes
+native membership or remote authorization. Native callers retain their original
+membership, reject replacement sources after awaits and never replace a read-lock
+bound with a check-then-unbounded `session()` token clone.

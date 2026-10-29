@@ -139,8 +139,35 @@ impl Credentials {
     /// Bounded Cloud attribution before any account/device clone, using the same
     /// lock for source, metadata bounds and the captured actual session values.
     pub(crate) fn capture_cloud(&self, generation: u64) -> Result<CredentialCapture, Status> {
+        self.capture_cloud_inner(Some(generation))
+    }
+    pub(crate) fn capture_current_cloud(&self) -> Result<CredentialCapture, Status> {
+        self.capture_cloud_inner(None)
+    }
+    pub(crate) fn require_current_cloud_metadata(&self) -> Result<(), Status> {
         let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        if self.generation.load(Ordering::Acquire) != generation {
+        self.cloud_metadata(
+            current
+                .as_ref()
+                .ok_or_else(|| Status::unauthenticated("not signed in"))?,
+        )
+    }
+    /// Only bounded descriptive IDs; never copies either credential token.
+    pub(crate) fn account_subject(&self) -> Option<(String, String)> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        let session = current.as_ref()?;
+        if session.account_id.is_empty()
+            || session.device_id.is_empty()
+            || session.account_id.len() > 128
+            || session.device_id.len() > 128
+        {
+            return None;
+        }
+        Some((session.account_id.clone(), session.device_id.clone()))
+    }
+    fn capture_cloud_inner(&self, generation: Option<u64>) -> Result<CredentialCapture, Status> {
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        if generation.is_some_and(|expected| self.generation.load(Ordering::Acquire) != expected) {
             return Err(Status::unauthenticated(
                 "the original account sign-in was replaced",
             ));
@@ -149,11 +176,6 @@ impl Credentials {
             .as_ref()
             .ok_or_else(|| Status::unauthenticated("not signed in"))?;
         self.cloud_metadata(session)?;
-        if session.account_id.is_empty() || session.account_id.len() > 128 {
-            return Err(Status::resource_exhausted(
-                "Cloud account identity exceeds its bound",
-            ));
-        }
         Ok(self.capture_session(session))
     }
 
@@ -214,7 +236,9 @@ impl Credentials {
         )
     }
     fn cloud_metadata(&self, session: &Session) -> Result<(), Status> {
-        if session.access_token.is_empty()
+        if session.account_id.is_empty()
+            || session.account_id.len() > 128
+            || session.access_token.is_empty()
             || self.hub_id.is_empty()
             || session.device_id.is_empty()
             || session.access_token.len() > 1024

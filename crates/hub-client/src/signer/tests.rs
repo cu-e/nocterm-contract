@@ -205,3 +205,25 @@ fn bounded_head_capture_fences_generation_and_refuses_oversized_attribution() ->
     assert!(original.capture_cloud(fresh.generation).is_ok());
     Ok(())
 }
+
+#[test]
+fn guarded_acquisition_subject_never_clones_tokens_and_refuses_large_ids() -> TestResult {
+    let owner = credentials();
+    let capture = owner.capture().ok_or("capture")?;
+    let mut huge = session("A", &"t".repeat(1025));
+    huge.refresh_token = "r".repeat(1025);
+    assert!(owner.rotate_session(capture.generation, huge));
+    assert_eq!(owner.account_subject(), Some(("A".into(), "device".into())));
+    assert!(owner.require_current_cloud_metadata().is_err());
+    assert!(owner.capture_current_cloud().is_err());
+    owner.set_session(Some(session(&"a".repeat(129), "token")));
+    assert!(owner.account_subject().is_none());
+    assert!(owner.require_current_cloud_metadata().is_err());
+    owner.set_session(Some(session("B", "new-token")));
+    assert_eq!(owner.account_subject(), Some(("B".into(), "device".into())));
+    assert!(owner.capture_current_cloud().is_ok());
+    owner.set_session(None);
+    assert!(owner.account_subject().is_none());
+    assert!(owner.require_current_cloud_metadata().is_err());
+    Ok(())
+}

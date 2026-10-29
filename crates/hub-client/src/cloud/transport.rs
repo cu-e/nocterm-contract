@@ -89,8 +89,8 @@ impl RelayAccess {
                 credentials: Arc::<Credentials>::clone(&client.credentials),
                 generation: client.generation,
             }),
-            namespace: client.namespace.clone(),
-            limits: client.limits,
+            namespace: client.namespace().clone(),
+            limits: client.limits(),
         }
     }
     pub(super) fn runner(
@@ -188,4 +188,20 @@ pub(super) fn acknowledgement_work_bytes() -> usize {
         + super::resident_channel::working_owner_bytes()
         + std::mem::size_of::<nocterm_hub_proto::v1::CloudAcknowledge>()
         + std::mem::size_of::<nocterm_hub_proto::v1::CloudAcknowledged>()
+}
+
+/// Acquisition before a CloudClient exists; same bounded captured signer/body
+/// path, with no manufactured capabilities or alternate channel.
+pub(super) fn resident_device_rpc(
+    channel: Channel,
+    credentials: Arc<Credentials>,
+    generation: u64,
+    residency: Arc<dyn Send + Sync>,
+) -> Result<ResidentRelayService, CloudError> {
+    let signer = CapturedSigner::new(credentials, generation);
+    signer.require_bounded()?;
+    Ok(CloudServiceClient::new(InterceptedService::new(
+        super::resident_channel::ResidentChannel::new(channel, residency),
+        GuardedRelaySigner(RelaySigner::Device(signer)),
+    )))
 }
