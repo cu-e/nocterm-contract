@@ -22,12 +22,17 @@ use tokio::sync::{Notify, mpsc};
 use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
 
+/// Injected receipt failures.
+#[derive(Default)]
+struct ReceiptFault {
+    hold: bool,
+    wrong: bool,
+}
 #[derive(Default)]
 struct State {
     publications: Vec<(PublicationMetadata, Vec<u8>)>,
     frame_sizes: Vec<usize>,
-    hold_receipt: bool,
-    wrong_receipt: bool,
+    receipt: ReceiptFault,
     replay: Vec<v1::CloudReplayFrame>,
     hold_upload: bool,
     retention: retention::Retention,
@@ -85,7 +90,7 @@ impl CloudHarness {
         lock(&self.state).frame_sizes.clone()
     }
     pub fn hold_receipt(&self) {
-        lock(&self.state).hold_receipt = true;
+        lock(&self.state).receipt.hold = true;
     }
     pub fn hold_upload(&self) {
         lock(&self.state).hold_upload = true;
@@ -94,7 +99,7 @@ impl CloudHarness {
         lock(&self.state).max_frame_bytes = Some(bytes);
     }
     pub fn wrong_receipt(&self) {
-        lock(&self.state).wrong_receipt = true;
+        lock(&self.state).receipt.wrong = true;
     }
     pub fn replay(&self, frames: Vec<v1::CloudReplayFrame>) {
         lock(&self.state).replay = frames;
@@ -273,8 +278,8 @@ impl CloudService for CloudPeer {
             let mut state = lock(&self.0.state);
             (
                 retention::publish(&mut state.publications, &metadata, body)?,
-                state.hold_receipt,
-                state.wrong_receipt,
+                state.receipt.hold,
+                state.receipt.wrong,
             )
         };
         self.0.published.notify_one();

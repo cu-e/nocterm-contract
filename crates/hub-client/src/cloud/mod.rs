@@ -122,7 +122,7 @@ pub struct CloudOffer {
     credentials: Arc<Credentials>,
     capture: CredentialCapture,
     proof: SignedCapabilities,
-    _residency: Option<Arc<dyn Send + Sync>>,
+    residency: Option<Arc<dyn Send + Sync>>,
 }
 impl CloudOffer {
     pub(crate) async fn fetch(
@@ -193,7 +193,7 @@ impl CloudOffer {
             credentials,
             capture,
             proof,
-            _residency: residency,
+            residency,
         })
     }
     pub fn offered_authority(&self) -> [u8; 32] {
@@ -239,7 +239,7 @@ impl CloudOffer {
             account_id: CloudTextId::new(&self.capture.account_id)?,
         };
         let subject = CloudSubject::captured(&self.capture)?;
-        let residency = resident.or_else(|| self._residency.clone());
+        let residency = resident.or_else(|| self.residency.clone());
         Ok(CloudClient {
             channel: self.channel,
             credentials: self.credentials,

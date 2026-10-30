@@ -28,7 +28,7 @@ use tokio::time::{Instant, timeout_at};
 #[derive(Clone)]
 pub struct DeviceHeadProbes {
     client: CloudClient,
-    _residency: Option<Arc<dyn Send + Sync>>,
+    residency: Option<Arc<dyn Send + Sync>>,
 }
 impl DeviceHeadProbes {
     pub(in crate::cloud) fn new(
@@ -40,10 +40,7 @@ impl DeviceHeadProbes {
         if residency.is_some() {
             client.credentials.capture_cloud(client.generation)?;
         }
-        Ok(Self {
-            client,
-            _residency: residency,
-        })
+        Ok(Self { client, residency })
     }
     /// Scope contains independently established account/R pins. The SDK repeats
     /// its actual account key, device attribution and original login capture.
@@ -61,7 +58,7 @@ impl DeviceHeadProbes {
         {
             return Err(CloudError::Protocol);
         }
-        let capture = if self._residency.is_some() {
+        let capture = if self.residency.is_some() {
             self.client
                 .credentials
                 .capture_cloud(self.client.generation)?
@@ -112,7 +109,7 @@ impl DeviceHeadProbes {
             source: Arc::downgrade(&self.client.credentials),
             generation: capture.generation,
             deadline: Instant::now() + duration,
-            _residency: self._residency.clone(),
+            residency: self.residency.clone(),
         })
     }
     /// Consumes the actual one-shot query. The wait retains no account keyset.
@@ -122,7 +119,7 @@ impl DeviceHeadProbes {
         probe: PreparedHeadProbe,
     ) -> Result<CompletedHeadProbe, CloudError> {
         probe.require_source(&self.client.credentials, self.client.generation)?;
-        if self._residency.is_some() && probe._residency.is_none() {
+        if self.residency.is_some() && probe.residency.is_none() {
             return Err(CloudError::Protocol);
         }
         let scope = probe.query.scope.canonical_bytes()?;
@@ -133,7 +130,7 @@ impl DeviceHeadProbes {
             expires_at_ms: probe.query.window.expires_at_ms,
         };
         let access = RelayAccess::device(&self.client);
-        let response = match probe._residency.as_ref() {
+        let response = match probe.residency.as_ref() {
             Some(owner) => {
                 timeout_at(
                     probe.deadline,
@@ -158,7 +155,7 @@ impl DeviceHeadProbes {
             source: probe.source,
             generation: probe.generation,
             deadline: probe.deadline,
-            _residency: probe._residency,
+            residency: probe.residency,
         })
     }
 }
@@ -170,7 +167,7 @@ pub struct PreparedHeadProbe {
     source: Weak<Credentials>,
     generation: u64,
     deadline: Instant,
-    _residency: Option<Arc<dyn Send + Sync>>,
+    residency: Option<Arc<dyn Send + Sync>>,
 }
 impl PreparedHeadProbe {
     pub fn query(&self) -> &HeadQuery {
@@ -196,14 +193,14 @@ pub struct CompletedHeadProbe {
     source: Weak<Credentials>,
     generation: u64,
     deadline: Instant,
-    _residency: Option<Arc<dyn Send + Sync>>,
+    residency: Option<Arc<dyn Send + Sync>>,
 }
 impl CompletedHeadProbe {
     pub fn query(&self) -> &HeadQuery {
         &self.query
     }
     pub fn open(self, keyset: &Keyset, now_ms: i64) -> Result<SignedHeadWitness, CloudError> {
-        if self._residency.is_some() {
+        if self.residency.is_some() {
             return Err(CloudError::Protocol);
         }
         self.open_value(keyset, now_ms)
@@ -215,11 +212,7 @@ impl CompletedHeadProbe {
         keyset: &Keyset,
         now_ms: i64,
     ) -> Result<ResidentHeadWitness, CloudError> {
-        let owner = self
-            ._residency
-            .as_ref()
-            .ok_or(CloudError::Protocol)?
-            .clone();
+        let owner = self.residency.as_ref().ok_or(CloudError::Protocol)?.clone();
         let value = self.open_value(keyset, now_ms)?;
         Ok(ResidentHeadWitness::new(value, owner))
     }

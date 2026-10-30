@@ -74,7 +74,7 @@ async fn guarded_device_upload_retains_the_actual_rpc_owner_after_cancellation()
     let mut pending = Box::pin(upload.finish());
     tokio::select! {
         result = &mut pending => return Err(format!("unexpected receipt: {result:?}").into()),
-        _ = harness.wait_published() => {}
+        () = harness.wait_published() => {}
     }
     drop(pending);
     assert!(weak.upgrade().is_some());

@@ -71,7 +71,7 @@ async fn runner_upload_residency_survives_cancel_until_actual_rpc_task_drop() ->
     let mut pending = Box::pin(upload.finish());
     tokio::select! {
         result = &mut pending => return Err(format!("unexpected early receipt: {result:?}").into()),
-        _ = harness.wait_published() => {}
+        () = harness.wait_published() => {}
     }
     drop(pending);
     // The current-thread runtime has not polled the aborted SDK task yet.

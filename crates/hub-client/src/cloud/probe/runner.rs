@@ -13,7 +13,7 @@ use tokio::time::{Instant, timeout};
 pub struct RunnerHeadProbes {
     access: RelayAccess,
     scope: HeadProbeScope,
-    _residency: Option<Arc<dyn Send + Sync>>,
+    residency: Option<Arc<dyn Send + Sync>>,
 }
 impl RunnerHeadProbes {
     pub(in crate::cloud) fn new(
@@ -27,7 +27,7 @@ impl RunnerHeadProbes {
         Ok(Self {
             access,
             scope,
-            _residency: residency,
+            residency,
         })
     }
     pub async fn next(&self, wait: Duration) -> Result<Option<IncomingHeadProbe>, CloudError> {
@@ -40,7 +40,7 @@ impl RunnerHeadProbes {
             scope: scope.clone(),
             wait_millis: u32::try_from(wait.as_millis()).map_err(|_| CloudError::Protocol)?,
         };
-        let response = match self._residency.as_ref() {
+        let response = match self.residency.as_ref() {
             Some(owner) => {
                 timeout(
                     Duration::from_millis(10_000),
@@ -86,7 +86,7 @@ impl RunnerHeadProbes {
             ciphertext: probe.ciphertext,
             deadline: Instant::now() + Duration::from_millis(millis),
             opened: false,
-            _residency: self._residency.clone(),
+            residency: self.residency.clone(),
         }))
     }
 }
@@ -99,7 +99,7 @@ pub struct IncomingHeadProbe {
     ciphertext: Vec<u8>,
     deadline: Instant,
     opened: bool,
-    _residency: Option<Arc<dyn Send + Sync>>,
+    residency: Option<Arc<dyn Send + Sync>>,
 }
 impl IncomingHeadProbe {
     fn check(&self) -> Result<(), CloudError> {
@@ -115,7 +115,7 @@ impl IncomingHeadProbe {
         expected: &HeadProbeScope,
         now_ms: i64,
     ) -> Result<SignedHeadQuery, CloudError> {
-        if self._residency.is_some() {
+        if self.residency.is_some() {
             return Err(CloudError::Protocol);
         }
         self.open_value(runner, expected, now_ms)
@@ -127,11 +127,7 @@ impl IncomingHeadProbe {
         expected: &HeadProbeScope,
         now_ms: i64,
     ) -> Result<ResidentHeadQuery, CloudError> {
-        let owner = self
-            ._residency
-            .as_ref()
-            .ok_or(CloudError::Protocol)?
-            .clone();
+        let owner = self.residency.as_ref().ok_or(CloudError::Protocol)?.clone();
         if self.opened {
             return Err(CloudError::Protocol);
         }
@@ -166,7 +162,7 @@ impl IncomingHeadProbe {
             probe_id: self.probe_id.to_vec(),
             ciphertext,
         };
-        let response = match self._residency.as_ref() {
+        let response = match self.residency.as_ref() {
             Some(owner) => {
                 tokio::time::timeout_at(
                     self.deadline,

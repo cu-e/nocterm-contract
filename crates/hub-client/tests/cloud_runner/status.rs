@@ -35,7 +35,7 @@ async fn guarded_status_retains_result_and_refuses_oversized_or_replaced_source(
     peer.hold_status_reply();
     let mut pending = Box::pin(cloud.runner_status_with_residency([2; 16], Arc::new(())));
     tokio::select! { result=&mut pending => return Err(format!("early status {result:?}").into()),
-    _=peer.wait_status_after(before)=>{} }
+    ()=peer.wait_status_after(before)=>{} }
     client.sign_out();
     peer.release_status_reply();
     assert!(matches!(pending.await, Err(CloudError::SourceChanged)));
@@ -56,7 +56,7 @@ async fn guarded_heartbeat_cancellation_and_deadlines_preserve_original_runner_s
     let weak = Arc::downgrade(&owner);
     let mut pending = Box::pin(runner.heartbeat_with_residency(vec![7; 4096], owner));
     tokio::select! { result=&mut pending => return Err(format!("early heartbeat {result:?}").into()),
-    _=peer.wait_status_after(before)=>{} }
+    ()=peer.wait_status_after(before)=>{} }
     assert!(weak.upgrade().is_some());
     drop(pending);
     peer.release_status_reply();
@@ -73,7 +73,7 @@ async fn guarded_heartbeat_cancellation_and_deadlines_preserve_original_runner_s
     peer.hold_status_reply();
     let mut revoked = Box::pin(runner.heartbeat_with_residency(vec![2], Arc::new(())));
     tokio::select! { result=&mut revoked => return Err(format!("early heartbeat {result:?}").into()),
-    _=peer.wait_status_after(before)=>{} }
+    ()=peer.wait_status_after(before)=>{} }
     runner.revoke_local();
     peer.release_status_reply();
     assert!(matches!(revoked.await, Err(CloudError::SourceChanged)));

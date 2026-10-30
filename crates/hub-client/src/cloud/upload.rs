@@ -166,16 +166,16 @@ impl CloudUpload {
     /// the caller's original ciphertext and the established connection/runtime,
     /// Tonic, HTTP/2, TLS and allocator baseline. It is not a total process bound.
     pub fn buffer_work_bytes(ciphertext_bytes: usize) -> Result<usize, CloudError> {
+        const FRAMES: usize = MAX_RELAY_QUEUE_FRAMES + 2;
+        // Routing serialization has at most three nested bounded buffers. Their
+        // geometric capacities (each <2*binding limit) fit one wire-size slot.
+        const ROUTING_SCRATCH: usize = 3 * 2 * MAX_RELAY_BINDING_BYTES;
         if ciphertext_bytes == 0 || ciphertext_bytes > nocterm_hub_model::cloud::MAX_ENVELOPE_BYTES
         {
             return Err(CloudError::Protocol);
         }
-        const FRAMES: usize = MAX_RELAY_QUEUE_FRAMES + 2;
         // Verified chunks cannot collectively exceed the original declared bytes.
         let data = ciphertext_bytes.min(FRAMES * MAX_RELAY_FRAME_BYTES);
-        // Routing serialization has at most three nested bounded buffers. Their
-        // geometric capacities (each <2*binding limit) fit one wire-size slot.
-        const ROUTING_SCRATCH: usize = 3 * 2 * MAX_RELAY_BINDING_BYTES;
         [
             data,
             FRAMES * std::mem::size_of::<v1::CloudPublishFrame>(),

@@ -4,12 +4,12 @@ use nocterm_hub_model::cloud::payload::BeginSession;
 fn begin_window(start: &mut BeginSession<'_>, now: i64, duration: u64) {
     match start {
         BeginSession::Local { binding, .. } => {
-            binding.issued_ms = now as u64;
-            binding.expires_ms = now as u64 + duration;
+            binding.issued_ms = now.cast_unsigned();
+            binding.expires_ms = now.cast_unsigned() + duration;
         }
         BeginSession::Ssh { binding, .. } => {
-            binding.issued_ms = now as u64;
-            binding.expires_ms = now as u64 + duration;
+            binding.issued_ms = now.cast_unsigned();
+            binding.expires_ms = now.cast_unsigned() + duration;
         }
     }
 }
@@ -54,7 +54,7 @@ async fn session_start_sealing_requires_negotiation_and_actual_original_hard_dea
             chat_id: [4; 16],
             command_id: [5; 16],
         };
-        check_start_boundaries(&invocation, &old, &keyset, &runner, route, now, &bytes)?;
+        check_start_boundaries(&invocation, &old, &keyset, &runner, &route, now, &bytes)?;
     }
     client.sign_out();
     assert!(matches!(
@@ -69,7 +69,7 @@ fn check_start_boundaries(
     old: &nocterm_hub_client::cloud::CloudClient,
     keyset: &nocterm_hub_client::Keyset,
     runner: &RunnerEncryptionKey,
-    route: CloudRoute,
+    route: &CloudRoute,
     now: i64,
     bytes: &[u8],
 ) -> TestResult {
@@ -105,7 +105,7 @@ fn check_start_boundaries(
         context,
         &payload,
     )?;
-    let opened = open_command(&runner, &keyset.public_key(), &route, prepared.ciphertext())?;
+    let opened = open_command(runner, &keyset.public_key(), route, prepared.ciphertext())?;
     assert_eq!(
         CloudCommandPayload::from_command(&opened.command()?)?,
         payload

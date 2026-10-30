@@ -18,7 +18,7 @@ async fn retained_unary_body_keeps_work_after_request_transfer_and_through_eof()
         .await
         .ok_or("missing queued frame")??;
     assert_eq!(
-        frame.data_ref().map(|bytes| bytes.as_ref()),
+        frame.data_ref().map(std::convert::AsRef::as_ref),
         Some(b"queued unary data".as_slice())
     );
     drop(frame);
@@ -49,7 +49,7 @@ async fn retained_response_body_keeps_receive_work_after_service_future_handoff(
         .await
         .ok_or("missing response")??;
     assert_eq!(
-        frame.data_ref().map(|bytes| bytes.as_ref()),
+        frame.data_ref().map(std::convert::AsRef::as_ref),
         Some(b"queued response".as_slice())
     );
     drop(frame);
