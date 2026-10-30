@@ -13,6 +13,10 @@ pub const CLOUD_FEATURE_CHAT_KEY_MATERIAL: u64 = 8;
 pub const CLOUD_FEATURE_FRESH_HEAD: u64 = 16;
 /// Optional additive BeginSession9 and AuthenticationRequested12/SessionState13.
 pub const CLOUD_FEATURE_SESSION_START: u64 = 32;
+/// Optional additive receipt reclaim: publications may carry `retry_until_ms`, chats can be
+/// retired and revoked runners compacted into 32-byte tombstones (`cloud::reclaim`). Bit 32 is
+/// taken by session start, so reclaim is bit 64. A peer without the bit keeps its old behaviour.
+pub const CLOUD_FEATURE_RECEIPT_RECLAIM: u64 = 64;
 pub const CLOUD_REQUIRED_FEATURES: u64 = 1 | 2 | 4; // E2EE commands, replay, scoped runners.
 pub const MAX_CAPABILITY_CLAIM_BYTES: usize = 512;
 const MAX_WINDOW_MS: i64 = 60_000;

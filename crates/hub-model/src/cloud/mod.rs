@@ -14,6 +14,7 @@ mod material;
 pub mod native_chat_head;
 pub mod payload;
 pub mod provider;
+pub mod reclaim;
 mod record;
 pub mod relay;
 mod route;

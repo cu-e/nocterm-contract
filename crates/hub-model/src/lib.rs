@@ -12,6 +12,10 @@
 //! fresh stable-authority capabilities, scoped runner proofs, finite boot descriptors
 //! and bounded nonce-bound read-only catalog/head/receipt witnesses. Native
 //! per-chat head contexts remain independent of content-key generations.
+//! Also owns the vocabulary of managed agents (`agents`): scopes, instance roles, listings,
+//! resource requests, typed refusal reasons, the pool key bundle, the host attestation of a
+//! runner setup document and the shared length limits; and the Cloud receipt-reclaim contract
+//! (`cloud::reclaim`): retry horizons and retired-stream tombstone hashes.
 //! Does not own: transport, storage, private cryptographic keys, authorization decisions
 //! (`nocterm-access`) or the client-side `HubRef`.
 //! Ports used/provided: none. Settings: none. Globals: none.
@@ -22,15 +26,19 @@
 //! Public contract crate: it builds for `wasm32` and mobile targets and is licensed so it can
 //! move into the public client repository unchanged.
 
+pub mod agents;
 pub mod cloud;
 mod ids;
 mod permission;
 pub mod pop;
 
 pub use ids::{
-    AccountId, AttachId, CollectionId, DeviceId, IdParseError, NodeId, ObjectId, OrgId, SessionId,
+    AccountId, AgentId, AttachId, CollectionId, DeviceId, HostId, IdParseError, InstanceId, NodeId,
+    ObjectId, OrgId, PoolId, SessionId,
 };
-pub use permission::{Assurance, Permission, Role, RoleParseError};
+pub use permission::{
+    Assurance, InstanceRole, InstanceRoleParseError, Permission, Role, RoleParseError,
+};
 
 /// Version of the wire protocol spoken between clients, hubs and nodes.
 ///

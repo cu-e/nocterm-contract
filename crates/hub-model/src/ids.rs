@@ -111,6 +111,27 @@ uuid_id!(
     "object"
 );
 
+uuid_id!(
+    /// A managed agent definition shown to accounts (personal, organization or server scope).
+    AgentId,
+    "agent"
+);
+uuid_id!(
+    /// A pool of agent hosts with one pinned key pair.
+    PoolId,
+    "pool"
+);
+uuid_id!(
+    /// One agent host (a node with the agents capability) inside a pool.
+    HostId,
+    "host"
+);
+uuid_id!(
+    /// One seat: the persistent runner identity of one account for one agent.
+    InstanceId,
+    "instance"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

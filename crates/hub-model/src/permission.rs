@@ -54,6 +54,63 @@ impl FromStr for Role {
     }
 }
 
+/// Role of an account on the whole hub instance, independent of any organization.
+///
+/// It decides who administers server-scope agents, pools and quotas. Organization roles
+/// ([`Role`]) never imply an instance role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InstanceRole {
+    /// An ordinary account.
+    None,
+    /// Manages server-scope agents, pools and quotas.
+    Admin,
+    /// Everything an admin does, and grants or revokes instance roles.
+    Owner,
+}
+
+impl InstanceRole {
+    /// Every instance role, from the least to the most privileged.
+    pub const ALL: [InstanceRole; 3] =
+        [InstanceRole::None, InstanceRole::Admin, InstanceRole::Owner];
+
+    /// Stable lowercase name used in storage, configuration and the API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InstanceRole::None => "none",
+            InstanceRole::Admin => "admin",
+            InstanceRole::Owner => "owner",
+        }
+    }
+
+    /// Whether the role may administer the instance (admin or owner).
+    pub fn is_administrator(self) -> bool {
+        self >= InstanceRole::Admin
+    }
+}
+
+impl fmt::Display for InstanceRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Text that names no instance role.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown instance role `{0}`")]
+pub struct InstanceRoleParseError(String);
+
+impl FromStr for InstanceRole {
+    type Err = InstanceRoleParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        InstanceRole::ALL
+            .into_iter()
+            .find(|role| role.as_str() == s)
+            .ok_or_else(|| InstanceRoleParseError(s.to_owned()))
+    }
+}
+
 /// An organization-level capability checked before an operation runs.
 ///
 /// Resource-level rules (for example "only the owner of a session may type into it") are
@@ -77,6 +134,12 @@ pub enum Permission {
     CollectionCreate,
     /// Read the audit log of the organization.
     AuditRead,
+    /// Start instances of agents the account may use.
+    AgentsUse,
+    /// Create, change and delete agents of a scope.
+    AgentsManage,
+    /// Create pools, enrol hosts and pin pool keys of a scope.
+    PoolsManage,
 }
 
 impl Permission {
@@ -91,6 +154,9 @@ impl Permission {
             Permission::SessionCreate => "session_create",
             Permission::CollectionCreate => "collection_create",
             Permission::AuditRead => "audit_read",
+            Permission::AgentsUse => "agents_use",
+            Permission::AgentsManage => "agents_manage",
+            Permission::PoolsManage => "pools_manage",
         }
     }
 }
@@ -141,6 +207,24 @@ mod tests {
             assert_eq!(role.as_str().parse::<Role>().unwrap(), role);
         }
         assert!("root".parse::<Role>().is_err());
+    }
+
+    #[test]
+    fn instance_roles_parse_and_order_by_privilege() {
+        for role in InstanceRole::ALL {
+            assert_eq!(role.as_str().parse::<InstanceRole>().unwrap(), role);
+        }
+        assert!("root".parse::<InstanceRole>().is_err());
+        assert!(InstanceRole::Owner > InstanceRole::Admin);
+        assert!(InstanceRole::Admin.is_administrator());
+        assert!(!InstanceRole::None.is_administrator());
+    }
+
+    #[test]
+    fn agent_permissions_have_stable_names() {
+        assert_eq!(Permission::AgentsUse.as_str(), "agents_use");
+        assert_eq!(Permission::AgentsManage.as_str(), "agents_manage");
+        assert_eq!(Permission::PoolsManage.as_str(), "pools_manage");
     }
 
     #[test]
