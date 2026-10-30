@@ -15,6 +15,7 @@ nocterm-hub-proto = { path = "crates/hub-proto" }
 nocterm-hub-grpc = { path = "crates/hub-grpc" }
 nocterm-hub-client = { path = "crates/hub-client" }
 nocterm-keys = { path = "crates/keys" }
+nocterm-keys-wasm = { path = "crates/keys-wasm" }
 nocterm-link = { path = "crates/link" }
 
 argon2 = { version = "0.6", features = ["zeroize"] }
@@ -45,6 +46,7 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
+wasm-bindgen = "0.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 webpki-roots = "1"
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }

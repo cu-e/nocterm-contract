@@ -438,9 +438,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -855,6 +857,19 @@ dependencies = [
  "uuid",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "nocterm-keys-wasm"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "nocterm-hub-model",
+ "nocterm-keys",
+ "serde_json",
+ "thiserror",
+ "uuid",
+ "wasm-bindgen",
 ]
 
 [[package]]
