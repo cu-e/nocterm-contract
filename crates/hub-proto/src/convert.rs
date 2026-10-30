@@ -66,6 +66,7 @@ mod tests {
             "FleetService",
             "NodeService",
             "AuditService",
+            "AgentService",
         ] {
             assert!(set.contains(service), "missing {service}");
         }

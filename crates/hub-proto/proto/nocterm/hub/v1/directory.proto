@@ -26,6 +26,8 @@ message Me {
   string display_name = 3;
   string device_id = 4;
   repeated Membership memberships = 5;
+  // Instance-wide role; absent from older hubs, which read as NONE.
+  InstanceRole instance_role = 6;
 }
 
 message Membership {

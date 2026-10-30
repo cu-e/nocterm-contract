@@ -164,6 +164,11 @@ impl CloudService for CloudPeer {
             self.0.heads.next(request.into_inner()).await?,
         ))
     }
+    async fn retire_chat(&self, _: Request<v1::CloudRetireChat>) -> Reply<v1::CloudChatRetired> {
+        Err(Status::unimplemented(
+            "receipt reclaim is not part of this peer",
+        ))
+    }
     async fn reply_head_probe(
         &self,
         request: Request<v1::CloudHeadProbeReply>,

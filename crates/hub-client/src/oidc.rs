@@ -166,6 +166,7 @@ impl HubClient {
                 redirect_uri: redirect_uri.clone(),
                 code_challenge: challenge,
                 state: state.clone(),
+                redirect_kind: v1::OidcRedirectKind::Loopback as i32,
             })
             .await?
             .into_inner();

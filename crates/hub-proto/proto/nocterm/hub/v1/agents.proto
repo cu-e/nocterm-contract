@@ -1,0 +1,431 @@
+syntax = "proto3";
+
+package nocterm.hub.v1;
+
+import "nocterm/hub/v1/common.proto";
+
+// Managed agents: storefront listings, definitions sealed to pool keys, pools of agent hosts,
+// per-account instances ("seats") and usage. New additive service; a hub that lacks it answers
+// UNIMPLEMENTED and clients hide the Cloud agents tab. Requires an access token.
+//
+// A listing is descriptive. What a host executes is the sealed definition, opened with the
+// pool's private key and verified against the owner's pinned key, so the hub stays blind.
+//
+// Errors: a `PutAgent`/`DeleteAgent` whose `expected_version` is stale fails with ABORTED,
+// ERROR_CODE_CONFLICT and the current version in `x-nocterm-current-version`. A refused seat or
+// lease fails with RESOURCE_EXHAUSTED, ERROR_CODE_QUOTA_REFUSED and an encoded `Refusal` in the
+// `x-nocterm-refusal-bin` metadata entry.
+service AgentService {
+  // Every agent the account may see, in every scope, with its availability.
+  rpc ListAgents(ListAgentsRequest) returns (AgentList);
+  // Lossy hints that the agent list or an availability changed; relist on a hint.
+  rpc WatchAgents(WatchAgentsRequest) returns (stream AgentHint);
+  rpc GetAgent(AgentRef) returns (AgentDetail);
+  // Creates (expected_version = 0) or replaces an agent and its sealed envelopes, one per pool.
+  rpc PutAgent(PutAgentRequest) returns (AgentDetail);
+  rpc DeleteAgent(DeleteAgentRequest) returns (Empty);
+  rpc ListPools(ListPoolsRequest) returns (PoolList);
+  // The keys a pool is pinned by. Clients pin them on first use (TOFU, with the fingerprint).
+  rpc GetPoolKey(PoolRef) returns (PoolKeys);
+  // Reserves a seat for the caller and an agent (idempotent per account and agent).
+  rpc StartInstance(StartInstanceRequest) returns (Instance);
+  rpc GetInstance(InstanceRef) returns (Instance);
+  rpc WatchInstances(WatchInstancesRequest) returns (stream InstanceHint);
+  // The device verified the host attestation, imported the runner setup and obtained a runner
+  // grant ticket; the hub hands the ticket to the host.
+  rpc CompleteEnrolment(CompleteEnrolmentRequest) returns (Instance);
+  rpc SuspendInstance(InstanceRef) returns (Instance);
+  rpc DeleteInstance(InstanceRef) returns (Empty);
+  rpc GetUsage(GetUsageRequest) returns (UsageReport);
+  // Active access of agents to the account's resources (broker tokens, SSH certificates).
+  rpc ListAccessGrants(ListAccessGrantsRequest) returns (AccessGrantList);
+  rpc RevokeAccessGrant(RevokeAccessGrantRequest) returns (Empty);
+}
+
+enum ScopeKind {
+  SCOPE_KIND_UNSPECIFIED = 0;
+  SCOPE_KIND_ACCOUNT = 1;
+  SCOPE_KIND_ORG = 2;
+  SCOPE_KIND_INSTANCE = 3;
+}
+
+// Owner area. `org_id` is set for SCOPE_KIND_ORG only; the account of a personal scope is the
+// caller.
+message AgentScope {
+  ScopeKind kind = 1;
+  string org_id = 2;
+}
+
+enum AgentAvailability {
+  AGENT_AVAILABILITY_UNSPECIFIED = 0;
+  AGENT_AVAILABILITY_READY = 1;
+  AGENT_AVAILABILITY_SLEEPING = 2;
+  AGENT_AVAILABILITY_STARTING = 3;
+  AGENT_AVAILABILITY_NO_CAPACITY = 4;
+  AGENT_AVAILABILITY_NEEDS_KEY = 5;
+  AGENT_AVAILABILITY_NEEDS_POOL_TRUST = 6;
+  AGENT_AVAILABILITY_DISABLED = 7;
+}
+
+enum InstanceState {
+  INSTANCE_STATE_UNSPECIFIED = 0;
+  INSTANCE_STATE_PROVISIONING = 1;
+  INSTANCE_STATE_AWAITING_ENROLMENT = 2;
+  INSTANCE_STATE_READY = 3;
+  INSTANCE_STATE_SUSPENDED = 4;
+  INSTANCE_STATE_DELETING = 5;
+  INSTANCE_STATE_FAILED = 6;
+}
+
+enum RefusalKind {
+  REFUSAL_KIND_UNSPECIFIED = 0;
+  REFUSAL_KIND_HOST_CAPACITY = 1;
+  REFUSAL_KIND_SCOPE_QUOTA = 2;
+  REFUSAL_KIND_MEMBER_QUOTA = 3;
+  REFUSAL_KIND_BUDGET = 4;
+}
+
+// Typed reason of a refused seat or lease, carried in `x-nocterm-refusal-bin`.
+message Refusal {
+  RefusalKind kind = 1;
+  // The scope whose quota refused; set for REFUSAL_KIND_SCOPE_QUOTA.
+  AgentScope scope = 2;
+}
+
+message ResourceRequest {
+  uint32 cpu_milli = 1;
+  uint32 mem_mib = 2;
+  uint32 disk_mib = 3;
+  uint32 max_parallel_runs = 4;
+}
+
+message AccountIds {
+  repeated string account_ids = 1;
+}
+
+message AgentAccess {
+  oneof access {
+    // Members of the scope with at least this organization role.
+    Role min_role = 1;
+    // Every account that can see the scope.
+    Empty everyone = 2;
+    // Only these accounts.
+    AccountIds accounts = 3;
+  }
+}
+
+// Hub-visible storefront. Descriptive only.
+message AgentListing {
+  string agent_id = 1;
+  AgentScope scope = 2;
+  uint64 version = 3;
+  string name = 4;
+  string description = 5;
+  string icon = 6;
+  string color = 7;
+  string provider_kind = 8;
+  repeated string models = 9;
+  ResourceRequest resources = 10;
+  uint32 idle_ttl_s = 11;
+  AgentAccess access = 12;
+  bool allow_personal_on_pool = 13;
+  bool enabled = 14;
+  repeated string pool_ids = 15;
+  // From the caller's point of view; ignored in `PutAgent`.
+  AgentAvailability availability = 16;
+}
+
+// A definition sealed by the owner to one pool's encryption key
+// (`nocterm_keys::agents::seal_definition`). The hub stores and forwards it unread.
+message SealedDefinition {
+  string pool_id = 1;
+  bytes envelope = 2;
+  // SHA-256 of the envelope; filled by the hub.
+  bytes digest = 3;
+  // Account that sealed it; filled by the hub.
+  string sealed_by_account_id = 4;
+}
+
+message AgentDetail {
+  AgentListing listing = 1;
+  repeated SealedDefinition definitions = 2;
+  string owner_account_id = 3;
+  int64 created_at_ms = 4;
+  int64 updated_at_ms = 5;
+}
+
+message ListAgentsRequest {
+  optional AgentScope scope = 1;
+  // Opaque cursor of the previous page, at most 256 bytes.
+  string after = 2;
+  // 1..256; zero asks for the hub's default.
+  uint32 limit = 3;
+}
+
+message AgentList {
+  repeated AgentListing agents = 1;
+  string next = 2;
+}
+
+message WatchAgentsRequest {}
+
+message AgentHint {
+  uint64 revision = 1;
+}
+
+message AgentRef {
+  string agent_id = 1;
+}
+
+message PutAgentRequest {
+  AgentListing listing = 1;
+  // At most 16, one per pool; each at most 128 KiB.
+  repeated SealedDefinition envelopes = 2;
+  // Version being replaced; zero creates.
+  uint64 expected_version = 3;
+}
+
+message DeleteAgentRequest {
+  string agent_id = 1;
+  uint64 expected_version = 2;
+}
+
+enum PoolState {
+  POOL_STATE_UNSPECIFIED = 0;
+  POOL_STATE_ACTIVE = 1;
+  POOL_STATE_CORDONED = 2;
+  POOL_STATE_DRAINING = 3;
+}
+
+// The two public keys a pool is pinned by. `encryption_public_key` (X25519) receives sealed
+// definitions; `signing_public_key` (Ed25519) signs host attestations.
+message PoolKeys {
+  bytes encryption_public_key = 1;
+  bytes signing_public_key = 2;
+}
+
+message PoolInfo {
+  string pool_id = 1;
+  AgentScope scope = 2;
+  string name = 3;
+  PoolKeys keys = 4;
+  PoolState state = 5;
+  uint32 hosts_online = 6;
+  uint32 hosts_total = 7;
+}
+
+message ListPoolsRequest {
+  optional AgentScope scope = 1;
+}
+
+message PoolList {
+  repeated PoolInfo pools = 1;
+}
+
+message PoolRef {
+  string pool_id = 1;
+}
+
+message StartInstanceRequest {
+  string agent_id = 1;
+  // Pool to use; empty lets the hub choose among the agent's pools.
+  string pool_id = 2;
+}
+
+message InstanceRef {
+  string instance_id = 1;
+}
+
+message Instance {
+  string instance_id = 1;
+  string agent_id = 2;
+  string pool_id = 3;
+  string host_id = 4;
+  // Cloud runner id (16 bytes), once the host created it.
+  bytes runner_id = 5;
+  InstanceState state = 6;
+  uint32 disk_mib = 7;
+  int64 last_active_ms = 8;
+  // Public runner setup document, set from AWAITING_ENROLMENT on.
+  bytes setup_document = 9;
+  // Canonical `HostRunnerAttestation` and its pool-key signature over the setup document.
+  bytes attestation = 10;
+  bytes attestation_signature = 11;
+  uint64 revision = 12;
+}
+
+message WatchInstancesRequest {
+  // Empty watches every instance of the caller.
+  string agent_id = 1;
+}
+
+message InstanceHint {
+  string instance_id = 1;
+  InstanceState state = 2;
+  uint64 revision = 3;
+}
+
+message CompleteEnrolmentRequest {
+  string instance_id = 1;
+  // Runner grant ticket for `nocterm-runner enrol`; one use, at most 60 seconds, at most 4 KiB.
+  string ticket = 2;
+}
+
+message GetUsageRequest {
+  AgentScope scope = 1;
+  optional string agent_id = 2;
+  // Restrict to one account; an administrator only.
+  optional string account_id = 3;
+  // Inclusive days since the Unix epoch (UTC).
+  uint32 from_day = 4;
+  uint32 to_day = 5;
+}
+
+message UsageRow {
+  uint32 day = 1;
+  string agent_id = 2;
+  string account_id = 3;
+  uint64 runs = 4;
+  uint64 input_tokens = 5;
+  uint64 output_tokens = 6;
+  uint64 spend_micros = 7;
+}
+
+// Quota limits; an absent field means no limit.
+message ScopeLimits {
+  optional uint32 max_instances = 1;
+  optional uint32 max_active_leases = 2;
+  optional uint64 max_cpu_milli = 3;
+  optional uint64 max_mem_mib = 4;
+  optional uint64 max_disk_mib = 5;
+  optional uint64 monthly_spend_micros = 6;
+}
+
+message UsageReport {
+  repeated UsageRow rows = 1;
+  ScopeLimits limits = 2;
+  uint64 spent_this_month_micros = 3;
+}
+
+enum AccessGrantKind {
+  ACCESS_GRANT_KIND_UNSPECIFIED = 0;
+  // A virtual provider token of the credential broker.
+  ACCESS_GRANT_KIND_BROKER_TOKEN = 1;
+  // A short-lived SSH certificate for an ephemeral runner key.
+  ACCESS_GRANT_KIND_SSH_CERTIFICATE = 2;
+}
+
+// Metadata of one active access of an agent's chat; never the token or certificate itself.
+message AccessGrant {
+  string grant_id = 1;
+  AccessGrantKind kind = 2;
+  string agent_id = 3;
+  string instance_id = 4;
+  // Opaque chat id (16 bytes); the hub never learns its title.
+  bytes chat_id = 5;
+  // Short labels (for example the SSH connection names the device chose).
+  repeated string targets = 6;
+  int64 issued_at_ms = 7;
+  int64 expires_at_ms = 8;
+}
+
+message ListAccessGrantsRequest {
+  string after = 1;
+  uint32 limit = 2;
+}
+
+message AccessGrantList {
+  repeated AccessGrant grants = 1;
+  string next = 2;
+}
+
+message RevokeAccessGrantRequest {
+  string grant_id = 1;
+}
+
+// ---------------------------------------------------------------------------------------
+// Host messages. They travel in `NodeService.Connect` (see fleet.proto) next to the existing
+// frames, so a node without the agents capability is unaffected.
+
+// Capacity a host reports in its hello; zero everywhere means "no agents capability".
+message AgentsCapacity {
+  uint32 cap_cpu_milli = 1;
+  uint32 cap_mem_mib = 2;
+  uint32 cap_disk_mib = 3;
+  uint32 cap_instances = 4;
+  // Disk quota mode the host runs with (`xfs-quota`, `loop` or `soft`), for display.
+  string storage_mode = 5;
+  // Pool the host serves.
+  string pool_id = 6;
+}
+
+message ProvisionInstance {
+  uint64 request_id = 1;
+  string instance_id = 2;
+  string agent_id = 3;
+  string pool_id = 4;
+  // Account of the seat (the runner is bound to this account).
+  string account_id = 5;
+  uint32 disk_mib = 6;
+  ResourceRequest resources = 7;
+  // Version and sealed envelope of the definition for this pool.
+  uint64 definition_version = 8;
+  bytes sealed_definition = 9;
+  AgentScope scope = 10;
+}
+
+message InstanceProvisioned {
+  uint64 request_id = 1;
+  string instance_id = 2;
+  bool ok = 3;
+  string error = 4;
+  bytes setup_document = 5;
+  // Canonical `HostRunnerAttestation` and its pool signing-key signature.
+  bytes attestation = 6;
+  bytes attestation_signature = 7;
+}
+
+message StartLease {
+  string lease_id = 1;
+  string instance_id = 2;
+  uint32 cpu_milli = 3;
+  uint32 mem_mib = 4;
+  uint32 idle_ttl_s = 5;
+}
+
+message StopLease {
+  string lease_id = 1;
+  string instance_id = 2;
+  // Also remove the instance volume (instance deletion).
+  bool remove_volume = 3;
+}
+
+message DeliverTicket {
+  string instance_id = 1;
+  string ticket = 2;
+}
+
+enum LeasePhase {
+  LEASE_PHASE_UNSPECIFIED = 0;
+  LEASE_PHASE_STARTED = 1;
+  LEASE_PHASE_STOPPED = 2;
+  LEASE_PHASE_FAILED = 3;
+}
+
+message LeaseState {
+  string lease_id = 1;
+  string instance_id = 2;
+  LeasePhase phase = 3;
+  string message = 4;
+}
+
+// Usage counters of one instance over a window; metadata only, never content.
+message InstanceUsage {
+  string instance_id = 1;
+  int64 window_start_ms = 2;
+  int64 window_end_ms = 3;
+  uint64 runs = 4;
+  uint64 input_tokens = 5;
+  uint64 output_tokens = 6;
+  uint64 spend_micros = 7;
+}

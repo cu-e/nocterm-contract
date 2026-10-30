@@ -19,8 +19,14 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/nocterm.hub.v1.rs"));
 }
 
+mod agents;
 mod cloud_secrets;
 mod convert;
+
+pub use agents::{
+    WireError, availability_from_wire, instance_role_from_wire, instance_role_to_wire,
+    instance_state_from_wire,
+};
 
 pub use convert::{assurance_from_wire, assurance_to_wire, role_from_wire, role_to_wire};
 

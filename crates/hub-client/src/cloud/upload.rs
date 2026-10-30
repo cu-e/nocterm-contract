@@ -115,6 +115,9 @@ impl CloudUpload {
             binding: metadata.binding().canonical_bytes()?,
             total_bytes: metadata.total_bytes(),
             ciphertext_sha256: metadata.digest().to_vec(),
+            // Old format: no retry horizon, so the hub keeps the receipt. A producer that
+            // negotiated receipt reclaim sets it through its own publication path.
+            retry_until_ms: 0,
         };
         sender
             .try_send(v1::CloudPublishFrame {

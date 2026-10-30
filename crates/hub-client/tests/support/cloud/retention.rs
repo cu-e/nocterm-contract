@@ -180,6 +180,7 @@ impl Retention {
                             .map_err(|_| Status::internal("binding"))?,
                         total_bytes: meta.total_bytes(),
                         ciphertext_sha256: meta.digest().to_vec(),
+                        retry_until_ms: 0,
                     }),
                     cursor,
                     origin: Some(v1::CloudPublicationOrigin {

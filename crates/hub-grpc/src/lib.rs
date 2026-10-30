@@ -37,6 +37,8 @@ pub mod metadata {
     pub const RUNNER_CLAIM: &str = "x-nocterm-runner-claim-bin";
     /// Runner PoP signature; never interpreted as an ordinary account-device proof.
     pub const RUNNER_PROOF: &str = "x-nocterm-runner-proof-bin";
+    /// Encoded `Refusal` of a seat or lease refused with `RESOURCE_EXHAUSTED` (binary metadata).
+    pub const REFUSAL: &str = "x-nocterm-refusal-bin";
     /// `ErrorCode` name of a failed call (`ERROR_CODE_TOKEN_EXPIRED`, …).
     pub const ERROR_CODE: &str = "x-nocterm-error";
     /// Current version of an object after a version conflict.

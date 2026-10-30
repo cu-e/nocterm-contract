@@ -80,6 +80,15 @@ message StartOidcLoginRequest {
   string code_challenge = 3;
   // Opaque client state echoed back in the redirect.
   string state = 4;
+  // Where the browser returns. Unset (LOOPBACK) keeps the desktop behaviour.
+  OidcRedirectKind redirect_kind = 5;
+}
+
+enum OidcRedirectKind {
+  // `redirect_uri` is a loopback address of a native client.
+  OIDC_REDIRECT_KIND_LOOPBACK = 0;
+  // `redirect_uri` is on the hub's `public_url` (the web panel); loopback is refused.
+  OIDC_REDIRECT_KIND_WEB = 1;
 }
 
 message StartOidcLoginResponse {

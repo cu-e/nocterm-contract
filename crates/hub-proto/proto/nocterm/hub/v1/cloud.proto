@@ -28,6 +28,10 @@ service CloudService {
   rpc ProbeHead(CloudHeadProbe) returns (CloudHeadProbeReply);
   rpc NextHeadProbe(CloudNextHeadProbe) returns (CloudHeadProbeDelivery);
   rpc ReplyHeadProbe(CloudHeadProbeReply) returns (CloudHeadProbeReplied);
+  // Capability bit 64, runner only: the runner announces the explicit deletion of a chat with
+  // its signed tombstone; once every reader acknowledged, the hub compacts the stream into a
+  // 32-byte retired hash that cannot be accepted again.
+  rpc RetireChat(CloudRetireChat) returns (CloudChatRetired);
 }
 
 message CloudCapabilitiesRequest { bytes nonce = 1; } // Exact16.
@@ -86,6 +90,9 @@ message CloudPublication {
   bytes binding = 2; // Strict canonical public routing binding, <=4096.
   uint32 total_bytes = 3; // Positive, <=32MiB+78 before allocation or quota admission.
   bytes ciphertext_sha256 = 4; // Exact32, never a plaintext-body digest.
+  // Capability bit 64. The publisher promises not to retry after this Unix millisecond
+  // (<= 30 days ahead). Zero is the old format: the receipt is kept forever.
+  int64 retry_until_ms = 5;
 }
 message CloudPublishFinished {} // Followed only by request EOF; otherwise refuse.
 message CloudDeliveryReceipt {
@@ -218,3 +225,13 @@ message CloudHeadProbeReplied { bool delivered = 1; }
 // <=10seconds and removes cancelled/answered entries. Its ACK is not a head witness.
 // Reply is separately R-signed and sealed to the account key, not to a ChatKey,
 // so a deleted chat can prove its tombstone without resurrecting key/history.
+
+message CloudRetireChat {
+  CloudSelector selector = 1; // The chat stream; inbox selectors are refused.
+  bytes tombstone = 2; // Canonical ChatDeletionTombstone, <=1KiB.
+  bytes signature = 3; // Runner signature, exact64.
+}
+message CloudChatRetired {
+  // False while a reader has not acknowledged yet; the runner calls again later.
+  bool compacted = 1;
+}

@@ -16,6 +16,7 @@ const FILES: &[&str] = &[
     "nocterm/hub/v1/fleet.proto",
     "nocterm/hub/v1/audit.proto",
     "nocterm/hub/v1/cloud.proto",
+    "nocterm/hub/v1/agents.proto",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

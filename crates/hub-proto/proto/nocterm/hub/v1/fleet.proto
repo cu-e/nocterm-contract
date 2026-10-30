@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nocterm.hub.v1;
 
+import "nocterm/hub/v1/agents.proto";
 import "nocterm/hub/v1/common.proto";
 import "nocterm/hub/v1/link.proto";
 import "nocterm/hub/v1/sessions.proto";
@@ -87,6 +88,10 @@ message NodeUp {
     RouteApplied applied = 6;
     RouteDetached detached = 7;
     Pong pong = 8;
+    // Agent host frames; a node without the agents capability never sends them.
+    InstanceProvisioned instance_provisioned = 9;
+    LeaseState lease_state = 10;
+    InstanceUsage instance_usage = 11;
   }
 }
 
@@ -102,6 +107,11 @@ message NodeDown {
     Ping ping = 8;
     // A relay asks the node to dial a target inside its network.
     TunnelRequest tunnel_request = 9;
+    // Agent host commands; sent only to nodes that reported agents capacity.
+    ProvisionInstance provision_instance = 10;
+    StartLease start_lease = 11;
+    StopLease stop_lease = 12;
+    DeliverTicket deliver_ticket = 13;
   }
 }
 
@@ -157,6 +167,8 @@ message NodeHello {
   string hostname = 6;
   // Sessions still alive on the node (after a hub restart or reconnect).
   repeated LiveSession live_sessions = 7;
+  // Present when the node is an agent host.
+  AgentsCapacity agents = 8;
 }
 
 message LiveSession {

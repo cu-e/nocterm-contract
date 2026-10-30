@@ -37,6 +37,15 @@ enum ErrorCode {
   ERROR_CODE_RELAY_DENIED = 7;
   // A relay limit of the hub (streams per account, rate) is reached.
   ERROR_CODE_RELAY_LIMIT = 8;
+  // A seat or lease was refused; the typed reason is in `x-nocterm-refusal-bin`.
+  ERROR_CODE_QUOTA_REFUSED = 9;
+}
+
+// Role of an account on the whole hub instance, independent of organizations.
+enum InstanceRole {
+  INSTANCE_ROLE_NONE = 0;
+  INSTANCE_ROLE_ADMIN = 1;
+  INSTANCE_ROLE_OWNER = 2;
 }
 
 message OrgRef {

@@ -809,6 +809,7 @@ dependencies = [
  "prost",
  "prost-build",
  "protox",
+ "thiserror",
 ]
 
 [[package]]
