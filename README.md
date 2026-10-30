@@ -11,6 +11,7 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
 | `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals |
 | `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants |
+| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: unlock an account, seal an agent definition to a pool key, pool fingerprint, runner attestation check |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
 
 The protobuf schema is compiled with [protox](https://crates.io/crates/protox), so no system
@@ -181,6 +182,25 @@ alone. A valid older database remains cryptographically valid. Account-level
 runner setup, key delivery/storage and record semantic decoders are consumers.
 Independent vectors are in `fixtures/cloud-material-v1/`.
 
+## Managed agents
+
+`AgentService` lists, edits and runs agents that execute on pool hosts. The hub stores an
+`AgentListing` (name, resources, access, availability) and an opaque envelope per pool; the
+definition itself, `nocterm_keys::agents::AgentDefinitionV1`, is sealed by the owner to the
+pool's encryption key and opened only on the host. Writes are compare-and-swap on the version
+(`AgentError::Conflict` carries the current one); a refused start carries a typed
+`RefusalReason`. A pool is pinned by the fingerprint of its two keys
+(`nocterm_hub_model::agents::check_pool_keys`); a runner setup document is trusted only with a
+host attestation signed by the pinned pool key (`nocterm_hub_client::agents::verify_instance_setup`).
+Real provider keys reach only the host's credential broker; the runner holds a virtual token
+(`nocterm_keys::agents::VirtualToken`). Servers trust the user's SSH CA through one
+`authorized_keys` line (`CaLine`) and receive short-lived `SshCaGrant`s. See
+[ADR 0001](docs/adr/0001-managed-agents.md) for the formats and their reasons.
+
+All of it is additive: a hub without `AgentService` answers `UNIMPLEMENTED`, read as
+`AgentError::Unsupported`. Receipt reclaim (`retry_until_ms`, capability bit 64, chat deletion
+tombstone) is additive too.
+
 ## Relays
 
 `RelayService.Open` carries a byte stream from the client to a TCP target through the hub, and
@@ -196,6 +216,7 @@ of the bytes is always explicit.
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo build --target wasm32-unknown-unknown -p nocterm-keys-wasm
 ```
 
 Minimum supported Rust version: 1.89.
