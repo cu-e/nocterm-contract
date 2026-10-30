@@ -23,9 +23,11 @@ chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 ed25519-dalek = { version = "3", features = ["zeroize"] }
 getrandom = "0.4"
 hex = "0.4"
+hmac = "0.13"
 hkdf = "0.13"
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body = "1"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 prost = "0.14"
 prost-build = "0.14"
 prost-types = "0.14"

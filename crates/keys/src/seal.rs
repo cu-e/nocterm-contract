@@ -35,6 +35,8 @@ pub(crate) enum Purpose {
     CloudHeadQuery = 16,
     CloudHeadWitness = 17,
     CloudNativeChatHead = 18,
+    AgentDefinition = 19,
+    BrokerSecret = 20,
 }
 
 impl Purpose {
@@ -58,6 +60,8 @@ impl Purpose {
             Purpose::CloudHeadQuery => b"cloud-read-only-head-query",
             Purpose::CloudHeadWitness => b"cloud-read-only-head-witness",
             Purpose::CloudNativeChatHead => b"cloud-native-chat-head",
+            Purpose::AgentDefinition => b"agent-definition",
+            Purpose::BrokerSecret => b"agent-broker-secret",
         }
     }
 }

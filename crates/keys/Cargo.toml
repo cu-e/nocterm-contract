@@ -11,6 +11,11 @@ repository.workspace = true
 [dependencies]
 nocterm-hub-model.workspace = true
 hex.workspace = true
+base64.workspace = true
+hmac.workspace = true
+postcard.workspace = true
+serde.workspace = true
+uuid.workspace = true
 argon2.workspace = true
 chacha20poly1305.workspace = true
 ed25519-dalek.workspace = true

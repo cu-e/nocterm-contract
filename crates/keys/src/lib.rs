@@ -14,6 +14,8 @@
 //! Native head cells use a distinct runner-derived key and finite purpose18 blob.
 //! Provider credentials use a separate non-restorable boot recipient with finite
 //! stable-runner attestation; opening returns a zeroizing secret owner.
+//! Also owns the managed-agent formats ([`agents`]): definitions sealed to a pool key, broker
+//! virtual tokens and broker-sealed secrets, SSH CA grants and the `agent_ssh_trust` rules.
 //! Does not own: storage of keys on the device, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants:
@@ -36,6 +38,7 @@
 //!
 //! The control plane must never depend on this crate (blindness hygiene, checked by xtask).
 
+pub mod agents;
 mod authenticated_box;
 pub mod cloud;
 mod device;
