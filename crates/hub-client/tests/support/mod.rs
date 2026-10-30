@@ -3,6 +3,7 @@
 
 #![allow(clippy::expect_used, dead_code)]
 
+pub mod agents;
 pub mod cloud;
 
 use std::net::SocketAddr;
@@ -402,24 +403,34 @@ pub struct FakeHub {
     addr: SocketAddr,
     _stop: oneshot::Sender<()>,
     cloud: Option<cloud::CloudHarness>,
+    pub agents: Arc<agents::AgentState>,
 }
 
 impl FakeHub {
     /// A hub with the auth and store services, and the relay service when `relay` is set (one
     /// without it answers `UNIMPLEMENTED`, like an older hub).
     pub async fn start(relay: bool) -> Self {
-        Self::start_services(relay, None).await
+        Self::start_services(relay, None, false).await
+    }
+
+    /// A hub that also offers the agents service.
+    pub async fn start_agents() -> Self {
+        Self::start_services(false, None, true).await
     }
 
     pub async fn start_cloud() -> Self {
-        Self::start_services(false, Some(cloud::CloudHarness::new())).await
+        Self::start_services(false, Some(cloud::CloudHarness::new()), false).await
     }
 
     pub fn cloud(&self) -> Option<&cloud::CloudHarness> {
         self.cloud.as_ref()
     }
 
-    async fn start_services(relay: bool, cloud: Option<cloud::CloudHarness>) -> Self {
+    async fn start_services(
+        relay: bool,
+        cloud: Option<cloud::CloudHarness>,
+        with_agents: bool,
+    ) -> Self {
         let seen = Arc::new(Seen::default());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("address");
@@ -429,9 +440,12 @@ impl FakeHub {
             .add_service(StoreServiceServer::new(Store(Arc::clone(&seen))));
         let relay_service = relay.then(|| RelayServiceServer::new(Relay(Arc::clone(&seen))));
         let cloud_service = cloud.clone().map(cloud::service);
+        let agents = Arc::new(agents::AgentState::default());
+        let agent_service = with_agents.then(|| agents::service(Arc::clone(&agents)));
         let router = server
             .add_optional_service(relay_service)
-            .add_optional_service(cloud_service);
+            .add_optional_service(cloud_service)
+            .add_optional_service(agent_service);
         tokio::spawn(async move {
             let _ = router
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
@@ -444,6 +458,7 @@ impl FakeHub {
             addr,
             _stop: stop,
             cloud,
+            agents,
         }
     }
 

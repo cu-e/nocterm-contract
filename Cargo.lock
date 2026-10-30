@@ -753,6 +753,7 @@ name = "nocterm-hub-client"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "ed25519-dalek",
  "hex",
  "http-body",
  "hyper-util",
@@ -761,6 +762,7 @@ dependencies = [
  "nocterm-hub-proto",
  "nocterm-keys",
  "nocterm-link",
+ "prost",
  "rustls",
  "serde",
  "sha2",

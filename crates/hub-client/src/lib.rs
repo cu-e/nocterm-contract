@@ -25,6 +25,7 @@
 //! the exact certificate fingerprint; [`HubEndpoint::probe`] trusts nothing and sends no
 //! credentials; the library reads no environment.
 
+pub mod agents;
 mod client;
 pub mod cloud;
 mod connect;
