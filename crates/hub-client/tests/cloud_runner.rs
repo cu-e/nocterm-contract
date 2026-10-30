@@ -17,6 +17,8 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[path = "cloud_runner/lifetimes.rs"]
 mod lifetimes;
+#[path = "cloud_runner/reclaim.rs"]
+mod reclaim;
 #[path = "cloud_runner/status.rs"]
 mod status;
 

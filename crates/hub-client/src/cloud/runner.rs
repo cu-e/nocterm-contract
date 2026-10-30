@@ -154,6 +154,68 @@ impl CloudRunner {
     ) -> Result<CloudUpload, CloudError> {
         CloudUpload::start_with_residency(self.access(), metadata, Some(residency))
     }
+    /// Whether this hub negotiated receipt reclaim (capability bit 64).
+    pub fn supports_receipt_reclaim(&self) -> bool {
+        super::receipt_reclaim_negotiated(self.limits)
+    }
+    /// Like [`Self::begin_publication`] with a retry horizon; see
+    /// [`super::CloudClient::begin_publication_with_retry_until`].
+    pub fn begin_publication_with_retry_until(
+        &self,
+        metadata: PublicationMetadata,
+        retry_until_ms: i64,
+    ) -> Result<CloudUpload, CloudError> {
+        CloudUpload::start_with_retry(self.access(), metadata, None, retry_until_ms)
+    }
+    /// [`Self::begin_publication_with_retry_until`] retaining the caller's allocation owner.
+    pub fn begin_publication_with_retry_until_and_residency(
+        &self,
+        metadata: PublicationMetadata,
+        retry_until_ms: i64,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<CloudUpload, CloudError> {
+        CloudUpload::start_with_retry(self.access(), metadata, Some(residency), retry_until_ms)
+    }
+    /// Signs the deletion of a chat of this runner at `key_epoch` with the runner's proof
+    /// key; `requested_by` is the device that asked for it.
+    pub fn sign_chat_deletion(
+        &self,
+        key_epoch: u64,
+        chat_id: [u8; 16],
+        requested_by: nocterm_hub_model::cloud::CloudTextId,
+        deleted_at_ms: i64,
+    ) -> Result<super::SignedChatDeletion, CloudError> {
+        self.check_source()?;
+        let subject = self.subject();
+        let tombstone = super::chat_deletion(
+            subject.namespace.clone(),
+            nocterm_hub_model::cloud::RunnerCoordinate {
+                id: subject.runner_id,
+                key_epoch,
+            },
+            chat_id,
+            requested_by,
+            deleted_at_ms,
+        );
+        Ok(self.credentials.sign_deletion(tombstone)?)
+    }
+    /// Announces the deletion of a chat. The tombstone signature authenticates the call, so
+    /// it goes without a runner session proof; `compacted == false` means retry later.
+    pub async fn retire_chat(
+        &self,
+        deletion: &super::SignedChatDeletion,
+    ) -> Result<super::ChatRetirement, super::RetireChatError> {
+        if deletion.namespace() != &self.subject().namespace {
+            return Err(super::RetireChatError::Namespace);
+        }
+        if !self.supports_receipt_reclaim() {
+            return Err(super::RetireChatError::Unsupported);
+        }
+        let request = deletion.request()?;
+        let response = unsigned(self.channel.clone()).retire_chat(request).await;
+        self.check_source()?;
+        super::reclaim::answer(response)
+    }
     pub async fn replay(
         &self,
         selector: CloudSelector,

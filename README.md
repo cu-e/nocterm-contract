@@ -199,7 +199,12 @@ Real provider keys reach only the host's credential broker; the runner holds a v
 
 All of it is additive: a hub without `AgentService` answers `UNIMPLEMENTED`, read as
 `AgentError::Unsupported`. Receipt reclaim (`retry_until_ms`, capability bit 64, chat deletion
-tombstone) is additive too.
+tombstone) is additive too. `CloudClient`/`CloudRunner::supports_receipt_reclaim` reads bit 64;
+`begin_publication_with_retry_until` sets the horizon (validated by `validate_retry_until`;
+`begin_publication` keeps `0`, no horizon); `CloudRunner::sign_chat_deletion` produces a
+`SignedChatDeletion` and `retire_chat` announces it, answering `ChatRetirement { compacted }` or a
+typed `RetireChatError` (`Unsupported`, `Namespace`, `Retired`, `Bounds`). The tombstone signature
+authenticates the call; no runner session proof is attached.
 
 ## Relays
 

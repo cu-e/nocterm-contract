@@ -121,6 +121,12 @@ impl RunnerCredentials {
             refreshing: tokio::sync::Mutex::new(()),
         })
     }
+    pub(super) fn sign_deletion(
+        &self,
+        tombstone: nocterm_hub_model::cloud::reclaim::ChatDeletionTombstone,
+    ) -> Result<super::SignedChatDeletion, nocterm_hub_model::cloud::reclaim::ReclaimError> {
+        super::SignedChatDeletion::sign(tombstone, &self.key)
+    }
     pub(super) fn check(&self) -> Result<(), CloudError> {
         if self
             .session

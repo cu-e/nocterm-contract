@@ -102,6 +102,17 @@ impl CloudUpload {
         metadata: PublicationMetadata,
         residency: Option<Arc<dyn Send + Sync>>,
     ) -> Result<Self, CloudError> {
+        Self::start_with_retry(client, metadata, residency, 0)
+    }
+    /// `retry_until_ms == 0` keeps the receipt forever; a horizon needs bit 64.
+    pub(super) fn start_with_retry(
+        client: RelayAccess,
+        metadata: PublicationMetadata,
+        residency: Option<Arc<dyn Send + Sync>>,
+        retry_until_ms: i64,
+    ) -> Result<Self, CloudError> {
+        let retry_until_ms =
+            super::reclaim::checked_retry_until(client.limits(), crate::now_ms(), retry_until_ms)?;
         client.check_source()?;
         if !client.can_publish(metadata.binding())
             || metadata.total_bytes() > client.limits().max_envelope_bytes
@@ -115,9 +126,8 @@ impl CloudUpload {
             binding: metadata.binding().canonical_bytes()?,
             total_bytes: metadata.total_bytes(),
             ciphertext_sha256: metadata.digest().to_vec(),
-            // Old format: no retry horizon, so the hub keeps the receipt. A producer that
-            // negotiated receipt reclaim sets it through its own publication path.
-            retry_until_ms: 0,
+            // Zero: no retry horizon, so the hub keeps the receipt.
+            retry_until_ms,
         };
         sender
             .try_send(v1::CloudPublishFrame {

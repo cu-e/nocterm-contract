@@ -8,6 +8,7 @@ pub use probe::{
     ResidentHeadWitness, RunnerHeadProbes, head_decoded_metadata_bytes, head_query_work_bytes,
     head_reply_work_bytes,
 };
+mod reclaim;
 mod replay;
 pub(crate) mod resident_channel;
 mod runner;
@@ -23,6 +24,9 @@ pub use status::{
     MAX_STATUS_BYTES, MAX_STATUS_WIRE_BYTES, ResidentRunnerStatus, status_work_bytes,
 };
 mod upload;
+pub use reclaim::{
+    ChatRetirement, RetireChatError, SignedChatDeletion, chat_deletion, receipt_reclaim_negotiated,
+};
 pub use replay::{
     CloudDeliveryOrigin, CloudIncomingRecord, CloudReplay, CloudReplayItem, CloudSelector,
 };
@@ -427,6 +431,58 @@ impl CloudClient {
             Some(residency),
         )
     }
+    /// Whether this hub negotiated receipt reclaim (capability bit 64).
+    pub fn supports_receipt_reclaim(&self) -> bool {
+        receipt_reclaim_negotiated(self.limits())
+    }
+    /// Like [`Self::begin_publication`] with a retry horizon: the producer promises not to
+    /// retry this publication after `retry_until_ms` (Unix ms, 1 ms to 30 days ahead), so
+    /// the hub may later reclaim its receipt. `0` means none. A nonzero horizon needs
+    /// [`Self::supports_receipt_reclaim`], otherwise [`CloudError::Unsupported`].
+    pub fn begin_publication_with_retry_until(
+        &self,
+        metadata: PublicationMetadata,
+        retry_until_ms: i64,
+    ) -> Result<CloudUpload, CloudError> {
+        CloudUpload::start_with_retry(
+            transport::RelayAccess::device(self),
+            metadata,
+            None,
+            retry_until_ms,
+        )
+    }
+    /// [`Self::begin_publication_with_retry_until`] retaining the caller's allocation owner.
+    pub fn begin_publication_with_retry_until_and_residency(
+        &self,
+        metadata: PublicationMetadata,
+        retry_until_ms: i64,
+        residency: Arc<dyn Send + Sync>,
+    ) -> Result<CloudUpload, CloudError> {
+        CloudUpload::start_with_retry(
+            transport::RelayAccess::device(self),
+            metadata,
+            Some(residency),
+            retry_until_ms,
+        )
+    }
+    /// Sends the runner-signed deletion of a chat. The signature, not this session,
+    /// authenticates it. `compacted == false` means a reader has not acknowledged yet and the
+    /// call is repeated later.
+    pub async fn retire_chat(
+        &self,
+        deletion: &SignedChatDeletion,
+    ) -> Result<ChatRetirement, RetireChatError> {
+        if deletion.namespace() != self.namespace() {
+            return Err(RetireChatError::Namespace);
+        }
+        if !self.supports_receipt_reclaim() {
+            return Err(RetireChatError::Unsupported);
+        }
+        let request = deletion.request()?;
+        let response = self.service()?.retire_chat(request).await;
+        self.check_source()?;
+        reclaim::answer(response)
+    }
     pub async fn replay(
         &self,
         selector: CloudSelector,
@@ -714,6 +770,8 @@ pub enum CloudError {
     Capability(#[from] CapabilityError),
     #[error("the Cloud relay format was refused")]
     Relay(#[from] RelayFormatError),
+    #[error("the retry horizon or chat deletion was refused")]
+    Reclaim(#[from] nocterm_hub_model::cloud::reclaim::ReclaimError),
     #[error("the Cloud command format was refused")]
     Command(#[from] CommandError),
     #[error("the Cloud key material was refused")]

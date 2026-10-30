@@ -49,6 +49,9 @@ belongs to the consumer.
 `CLOUD_FEATURE_RECEIPT_RECLAIM` (64), a signed `ChatDeletionTombstone` and 32-byte hashes of a
 retired stream and a revoked runner are additive: clients that do not know them keep working
 (`tests/agents_contract.rs`). The design's bit 32 was already taken by session start.
+`nocterm-hub-client` sets a horizon only on request and only when the hub advertises bit 64
+(otherwise `CloudError::Unsupported`); `RetireChat` is authenticated by the signed tombstone
+alone, so the runner calls it without a session proof and repeats it while `compacted` is false.
 
 ## Consequences
 

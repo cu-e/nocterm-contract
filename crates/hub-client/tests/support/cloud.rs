@@ -1,5 +1,6 @@
 //! Scripted Cloud peer for actual gRPC framing and backpressure tests.
 mod head;
+mod reclaim;
 mod retention;
 mod runner;
 mod status;
@@ -13,6 +14,8 @@ use nocterm_hub_model::cloud::{
 };
 use nocterm_hub_proto::v1::{self, cloud_publish_frame::Frame};
 use nocterm_keys::DeviceKey;
+#[allow(unused_imports)]
+pub use reclaim::{Retirement, SeenRetirement};
 use std::{
     fmt,
     pin::Pin,
@@ -49,6 +52,7 @@ pub struct CloudHarness {
     authority: Arc<DeviceKey>,
     heads: head::HeadLane,
     status: Arc<status::StatusLane>,
+    reclaim: Arc<reclaim::ReclaimLane>,
 }
 impl CloudHarness {
     pub fn new() -> Self {
@@ -60,6 +64,7 @@ impl CloudHarness {
             authority: Arc::new(DeviceKey::from_seed(&[0x91; 32])),
             heads: head::HeadLane::default(),
             status: Arc::new(status::StatusLane::default()),
+            reclaim: Arc::new(reclaim::ReclaimLane::default()),
         }
     }
     pub fn enable_key_material(&self) {
@@ -122,6 +127,15 @@ pub fn service(harness: CloudHarness) -> CloudServiceServer<CloudPeer> {
 #[derive(Clone, Debug)]
 pub struct CloudPeer(CloudHarness);
 impl CloudPeer {
+    fn require_reclaim(&self) -> Result<(), Status> {
+        if lock(&self.0.state).additional_capabilities
+            & nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_RECEIPT_RECLAIM
+            == 0
+        {
+            return Err(Status::unimplemented("receipt reclaim"));
+        }
+        Ok(())
+    }
     fn require_heads(&self) -> Result<(), Status> {
         if lock(&self.0.state).additional_capabilities
             & nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRESH_HEAD
@@ -169,10 +183,12 @@ impl CloudService for CloudPeer {
             self.0.heads.next(request.into_inner()).await?,
         ))
     }
-    async fn retire_chat(&self, _: Request<v1::CloudRetireChat>) -> Reply<v1::CloudChatRetired> {
-        Err(Status::unimplemented(
-            "receipt reclaim is not part of this peer",
-        ))
+    async fn retire_chat(
+        &self,
+        request: Request<v1::CloudRetireChat>,
+    ) -> Reply<v1::CloudChatRetired> {
+        self.require_reclaim()?;
+        Ok(Response::new(self.0.reclaim.retire(request)?))
     }
     async fn reply_head_probe(
         &self,
@@ -232,6 +248,7 @@ impl CloudService for CloudPeer {
         else {
             return Err(Status::invalid_argument("header"));
         };
+        self.0.reclaim.horizon(header.retry_until_ms);
         let id = header
             .publication_id
             .as_slice()
