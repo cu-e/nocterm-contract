@@ -112,6 +112,8 @@ message NodeDown {
     StartLease start_lease = 11;
     StopLease stop_lease = 12;
     DeliverTicket deliver_ticket = 13;
+    // Issue or revoke the broker's virtual token of one chat (identifiers only).
+    ChatAccess chat_access = 14;
   }
 }
 

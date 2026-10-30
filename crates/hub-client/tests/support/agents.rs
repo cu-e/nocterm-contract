@@ -24,6 +24,7 @@ pub struct AgentState {
     pub puts: Mutex<Vec<v1::PutAgentRequest>>,
     pub refusal: Mutex<Option<RefusalReason>>,
     pub listing: Mutex<Vec<v1::AgentListing>>,
+    pub usage: Mutex<Vec<v1::UsageRow>>,
 }
 
 pub struct AgentPeer(pub Arc<AgentState>);
@@ -152,7 +153,16 @@ impl AgentService for AgentPeer {
         unsupported()
     }
     async fn get_usage(&self, _: Request<v1::GetUsageRequest>) -> Reply<v1::UsageReport> {
-        unsupported()
+        let rows = self
+            .0
+            .usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Ok(Response::new(v1::UsageReport {
+            rows,
+            ..Default::default()
+        }))
     }
     async fn list_access_grants(
         &self,

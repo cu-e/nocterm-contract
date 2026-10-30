@@ -289,6 +289,8 @@ message UsageRow {
   uint64 input_tokens = 5;
   uint64 output_tokens = 6;
   uint64 spend_micros = 7;
+  // Model id the counters belong to; empty on rows recorded before per-model usage.
+  string model = 8;
 }
 
 // Quota limits; an absent field means no limit.
@@ -357,6 +359,15 @@ message AgentsCapacity {
   string storage_mode = 5;
   // Pool the host serves.
   string pool_id = 6;
+  // Leases the host currently runs, so the hub can reconcile after a reconnect or restart.
+  repeated RunningLease running_leases = 7;
+}
+
+message RunningLease {
+  string lease_id = 1;
+  string instance_id = 2;
+  // Chat the lease serves, when it was started for one.
+  optional string chat_id = 3;
 }
 
 message ProvisionInstance {
@@ -391,6 +402,22 @@ message StartLease {
   uint32 cpu_milli = 3;
   uint32 mem_mib = 4;
   uint32 idle_ttl_s = 5;
+  // Chat this lease serves. The runner's access lives and dies with the chat.
+  optional string chat_id = 6;
+}
+
+// Asks the host's credential broker to issue or revoke the virtual token of one chat. The hub
+// sends identifiers only: the broker mints the token, hands it to the runner on the host and
+// never reports it back, so no token material crosses the hub.
+message ChatAccess {
+  enum Op {
+    OP_UNSPECIFIED = 0;
+    OP_ISSUE = 1;
+    OP_REVOKE = 2;
+  }
+  string lease_id = 1;
+  string chat_id = 2;
+  Op op = 3;
 }
 
 message StopLease {
@@ -428,4 +455,7 @@ message InstanceUsage {
   uint64 input_tokens = 5;
   uint64 output_tokens = 6;
   uint64 spend_micros = 7;
+  // Model id the counters belong to; empty when the host cannot attribute them. A window
+  // with several models is sent as one message per model.
+  string model = 8;
 }

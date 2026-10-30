@@ -510,4 +510,53 @@ mod tests {
         let request = v1::StartOidcLoginRequest::decode(&[0x0a, 1, b'p'][..]).unwrap();
         assert_eq!(request.redirect_kind, v1::OidcRedirectKind::Loopback as i32);
     }
+
+    #[test]
+    fn host_and_usage_additions_decode_from_messages_without_them() {
+        // Old `UsageRow { day = 3 }`, `InstanceUsage { instance_id = "i" }`, `StartLease
+        // { lease_id = "l" }` and an `AgentsCapacity { cap_cpu_milli = 1 }`.
+        assert_eq!(v1::UsageRow::decode(&[0x08, 3][..]).unwrap().model, "");
+        assert_eq!(
+            v1::InstanceUsage::decode(&[0x0a, 1, b'i'][..])
+                .unwrap()
+                .model,
+            ""
+        );
+        let lease = v1::StartLease::decode(&[0x0a, 1, b'l'][..]).unwrap();
+        assert_eq!(lease.chat_id, None);
+        let capacity = v1::AgentsCapacity::decode(&[0x08, 1][..]).unwrap();
+        assert!(capacity.running_leases.is_empty());
+    }
+
+    #[test]
+    fn running_leases_and_chat_access_round_trip_as_identifiers_only() {
+        let hello = v1::NodeHello {
+            agents: Some(v1::AgentsCapacity {
+                running_leases: vec![v1::RunningLease {
+                    lease_id: "l1".into(),
+                    instance_id: "i1".into(),
+                    chat_id: Some("c1".into()),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let back = v1::NodeHello::decode(hello.encode_to_vec().as_slice()).unwrap();
+        let lease = &back.agents.unwrap().running_leases[0];
+        assert_eq!(lease.chat_id.as_deref(), Some("c1"));
+
+        let down = v1::NodeDown {
+            frame: Some(v1::node_down::Frame::ChatAccess(v1::ChatAccess {
+                lease_id: "l1".into(),
+                chat_id: "c1".into(),
+                op: v1::chat_access::Op::Revoke as i32,
+            })),
+        };
+        let back = v1::NodeDown::decode(down.encode_to_vec().as_slice()).unwrap();
+        assert!(matches!(
+            back.frame,
+            Some(v1::node_down::Frame::ChatAccess(ref a))
+                if a.op == v1::chat_access::Op::Revoke as i32 && a.chat_id == "c1"
+        ));
+    }
 }

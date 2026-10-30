@@ -1,7 +1,7 @@
 //! WebAssembly bindings of the Nocterm agent formats.
 //!
 //! Owns: the browser-facing surface that lets the web panel unlock an account from its
-//! password, seal an agent definition to a pool's encryption key, compare a pool's key
+//! password (login or vault), derive the login value for the hub, seal an agent definition to a pool's encryption key, compare a pool's key
 //! fingerprint and verify a host's runner attestation. All cryptography is `nocterm-keys`;
 //! this crate only converts text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
@@ -16,6 +16,7 @@ use nocterm_keys::agents::{
 };
 use nocterm_keys::{
     AccountKey, AccountKeyPair, LoginError, LoginSecrets, OpenError, PublicKey, PublicKeyError,
+    UnlockKdf, UnlockKey,
 };
 use wasm_bindgen::prelude::*;
 
@@ -25,6 +26,9 @@ pub enum WebError {
     /// An identifier or enum is not in its text form.
     #[error("invalid {0}")]
     Argument(&'static str),
+    /// The keyset's key derivation parameters or salt are not acceptable.
+    #[error(transparent)]
+    Kdf(#[from] nocterm_keys::KdfParseError),
     /// The password could not be turned into keys.
     #[error(transparent)]
     Login(#[from] LoginError),
@@ -101,6 +105,32 @@ impl WebAccount {
         .map_err(JsError::from)
     }
 
+    /// Unlocks with a separate vault password, using the derivation the keyset records
+    /// (`kdf` as `argon2id;m=…;t=…;p=…` and its `salt`). Weak or excessive parameters are
+    /// refused, so a hostile hub cannot downgrade the derivation.
+    #[wasm_bindgen(js_name = unlockWithPassword)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn unlock_with_password(
+        password: &str,
+        kdf: &str,
+        salt: &[u8],
+        account_id: &str,
+        sealed_account_key: &[u8],
+        sealed_private_key: &[u8],
+        public_key: &[u8],
+    ) -> Result<WebAccount, JsError> {
+        Self::open_vault(
+            password,
+            kdf,
+            salt,
+            account_id,
+            sealed_account_key,
+            sealed_private_key,
+            public_key,
+        )
+        .map_err(JsError::from)
+    }
+
     /// The account's public key.
     #[wasm_bindgen(js_name = publicKey)]
     pub fn public_key(&self) -> Vec<u8> {
@@ -151,6 +181,24 @@ impl WebAccount {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn open_vault(
+        password: &str,
+        kdf: &str,
+        salt: &[u8],
+        account_id: &str,
+        sealed_account_key: &[u8],
+        sealed_private_key: &[u8],
+        public_key: &[u8],
+    ) -> Result<Self, WebError> {
+        let kdf = UnlockKdf::parse(kdf, salt)?;
+        let unlock = UnlockKey::from_vault_password(password, &kdf)?;
+        let account = AccountKey::open(&unlock, account_id, sealed_account_key)?;
+        let public = PublicKey::from_bytes(public_key)?;
+        let pair = AccountKeyPair::open(&account, account_id, sealed_private_key, &public)?;
+        Ok(Self { pair })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn seal(
         &self,
         definition_json: &str,
@@ -172,6 +220,19 @@ impl WebAccount {
         let pool = PublicKey::from_bytes(pool_encryption_key)?;
         Ok(seal_definition(&self.pair, &pool, &context, &definition)?)
     }
+}
+
+/// The value a client sends to the hub where it expects the password (`login-v1`, 64 hex
+/// characters). The unlock key derived beside it never leaves WebAssembly. Costs 64 MiB and a
+/// few hundred milliseconds: call it from a worker.
+#[wasm_bindgen(js_name = loginAuth)]
+pub fn login_auth(password: &str, hub_id: &str, username: &str) -> Result<String, JsError> {
+    let derive = || -> Result<String, WebError> {
+        Ok(LoginSecrets::derive(password, hub_id, username)?
+            .auth()
+            .to_owned())
+    };
+    derive().map_err(JsError::from)
 }
 
 /// The fingerprint people compare to confirm a pool's keys.
@@ -272,5 +333,44 @@ mod tests {
         };
         let opened = open_definition(&pool_pair, &pair.public_key(), &context, &sealed).unwrap();
         assert_eq!(opened.name, "A");
+    }
+
+    #[test]
+    fn a_vault_password_unlocks_only_with_the_recorded_derivation() {
+        let kdf = UnlockKdf::random().unwrap();
+        let unlock = UnlockKey::from_vault_password("vault password!", &kdf).unwrap();
+        let (account_id, account) = ("acc-2", AccountKey::generate().unwrap());
+        let pair = AccountKeyPair::generate().unwrap();
+        let sealed_account = account.seal(&unlock, account_id).unwrap();
+        let sealed_pair = pair.seal(&account, account_id).unwrap();
+        let public = pair.public_key().to_bytes();
+        let open = |password: &str, description: &str| {
+            WebAccount::open_vault(
+                password,
+                description,
+                kdf.salt(),
+                account_id,
+                &sealed_account,
+                &sealed_pair,
+                &public,
+            )
+        };
+
+        let web = open("vault password!", &kdf.description()).unwrap();
+        assert_eq!(web.pair.public_key().to_bytes(), public);
+        assert!(open("another password", &kdf.description()).is_err());
+        assert!(open("vault password!", "argon2id;m=8;t=1;p=1").is_err());
+    }
+
+    #[test]
+    fn login_auth_is_the_native_clients_value() {
+        let secrets = LoginSecrets::derive("correct horse battery", "hub-0001", "alice").unwrap();
+        assert_eq!(secrets.auth().len(), 64);
+        assert_eq!(
+            LoginSecrets::derive("correct horse battery", "hub-0001", " alice ")
+                .unwrap()
+                .auth(),
+            secrets.auth()
+        );
     }
 }

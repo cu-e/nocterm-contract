@@ -162,3 +162,26 @@ async fn pool_keys_and_hints_arrive_typed() {
     assert_eq!(hints.next().await.unwrap(), Some(7));
     assert_eq!(hints.next().await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn usage_rows_carry_the_model_they_were_spent_on() {
+    let hub = FakeHub::start_agents().await;
+    for model in ["small", "large"] {
+        hub.agents.usage.lock().expect("lock").push(v1::UsageRow {
+            day: 20_000,
+            runs: 1,
+            model: model.into(),
+            ..Default::default()
+        });
+    }
+    let client = hub.signed_in_client().await;
+
+    let report = client
+        .agents()
+        .usage(v1::GetUsageRequest::default())
+        .await
+        .unwrap();
+
+    let models: Vec<_> = report.rows.iter().map(|row| row.model.as_str()).collect();
+    assert_eq!(models, ["small", "large"]);
+}
