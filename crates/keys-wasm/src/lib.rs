@@ -1,13 +1,16 @@
 //! WebAssembly bindings of the Nocterm agent formats.
 //!
-//! Owns: the browser-facing surface that lets the web panel unlock an account from its
-//! password (login or vault), derive the login value for the hub, seal an agent definition to a pool's encryption key, compare a pool's key
-//! fingerprint and verify a host's runner attestation. All cryptography is `nocterm-keys`;
-//! this crate only converts text and bytes at the JavaScript boundary.
+//! Owns: the browser-facing surface that lets the web panel create the first keyset of an
+//! account (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an
+//! account from its password (login or vault), derive the login value for the hub, seal an
+//! agent definition to a pool's encryption key, compare a pool's key fingerprint and verify a
+//! host's runner attestation. All cryptography is `nocterm-keys`; this crate only converts
+//! text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants: secrets never cross into JavaScript (only public keys, fingerprints and sealed
-//! bytes); errors are typed here and become strings only at the boundary.
+//! bytes), except the recovery key of a new keyset, which the page shows the user once;
+//! errors are typed here and become strings only at the boundary.
 
 use nocterm_hub_model::agents::{AgentScope, PoolKeys, ScopeKind, SignedHostRunnerAttestation};
 use nocterm_hub_model::{AgentId, InstanceId, OrgId, PoolId};
@@ -15,8 +18,9 @@ use nocterm_keys::agents::{
     AgentDefinitionV1, DefinitionContext, DefinitionError, SealDefinitionError, seal_definition,
 };
 use nocterm_keys::{
-    AccountKey, AccountKeyPair, LoginError, LoginSecrets, OpenError, PublicKey, PublicKeyError,
-    UnlockKdf, UnlockKey,
+    AccountKey, AccountKeyPair, CreatedKeyset, KeyError, KeysetMaterialError, LoginError,
+    LoginSecrets, OpenError, PublicKey, PublicKeyError, UnlockKdf, UnlockKey, UnlockSource,
+    create_keyset,
 };
 use wasm_bindgen::prelude::*;
 
@@ -50,6 +54,12 @@ pub enum WebError {
     /// The attestation does not verify.
     #[error(transparent)]
     Attestation(#[from] nocterm_hub_model::agents::AttestationError),
+    /// No randomness for a new salt or key.
+    #[error(transparent)]
+    Key(#[from] KeyError),
+    /// A new keyset could not be built.
+    #[error(transparent)]
+    Keyset(#[from] KeysetMaterialError),
 }
 
 fn uuid(text: &str, what: &'static str) -> Result<uuid::Uuid, WebError> {
@@ -222,6 +232,116 @@ impl WebAccount {
     }
 }
 
+/// A keyset created in the browser: the values `PutAccountKeyset` stores (send them with
+/// `expected_version = 0`), the recovery key to show once, and the unlocked account.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct WebNewKeyset {
+    created: CreatedKeyset,
+}
+
+#[wasm_bindgen]
+impl WebNewKeyset {
+    /// `kdf` of the keyset (`argon2id;m=…;t=…;p=…`).
+    pub fn kdf(&self) -> String {
+        self.created.material.kdf.clone()
+    }
+
+    /// `salt` of the keyset.
+    pub fn salt(&self) -> Vec<u8> {
+        self.created.material.salt.clone()
+    }
+
+    /// `wrapped_account_key`: the account key sealed by the unlock key.
+    #[wasm_bindgen(js_name = wrappedAccountKey)]
+    pub fn wrapped_account_key(&self) -> Vec<u8> {
+        self.created.material.wrapped_account_key.clone()
+    }
+
+    /// `public_key`: the account's X25519 public key.
+    #[wasm_bindgen(js_name = publicKey)]
+    pub fn public_key(&self) -> Vec<u8> {
+        self.created.material.public_key.to_bytes().to_vec()
+    }
+
+    /// `sealed_private_key`: the private key sealed by the account key.
+    #[wasm_bindgen(js_name = sealedPrivateKey)]
+    pub fn sealed_private_key(&self) -> Vec<u8> {
+        self.created.material.sealed_private_key.clone()
+    }
+
+    /// `recovery_wrapped_account_key`: the account key sealed by the recovery key.
+    #[wasm_bindgen(js_name = recoveryWrappedAccountKey)]
+    pub fn recovery_wrapped_account_key(&self) -> Vec<u8> {
+        self.created.material.recovery_wrapped_account_key.clone()
+    }
+
+    /// `unlock_kind` as its wire number: 1 = login password, 2 = vault password.
+    #[wasm_bindgen(js_name = unlockKind)]
+    pub fn unlock_kind(&self) -> u32 {
+        match self.created.material.unlock_source {
+            UnlockSource::LoginPassword => 1,
+            UnlockSource::VaultPassword => 2,
+        }
+    }
+
+    /// The recovery key in its display form. Show it to the user once and keep it nowhere.
+    #[wasm_bindgen(js_name = recoveryKey)]
+    pub fn recovery_key(&self) -> String {
+        self.created.recovery.display().to_string()
+    }
+
+    /// The unlocked account of the new keyset, for sealing right after creation. Consumes
+    /// the keyset object: read the material first.
+    #[wasm_bindgen(js_name = intoAccount)]
+    pub fn into_account(self) -> WebAccount {
+        WebAccount {
+            pair: self.created.pair,
+        }
+    }
+}
+
+/// Creates the first keyset of an account that signs in with a password: the unlock key comes
+/// from the login password (`login-v1`, bound to the hub and user name), as on a native
+/// client. Costs 64 MiB and a few hundred milliseconds: call it from a worker.
+#[wasm_bindgen(js_name = createKeysetWithLoginPassword)]
+pub fn create_keyset_with_login_password(
+    password: &str,
+    hub_id: &str,
+    username: &str,
+    account_id: &str,
+) -> Result<WebNewKeyset, JsError> {
+    new_login_keyset(password, hub_id, username, account_id).map_err(JsError::from)
+}
+
+/// Creates the first keyset of an account with a separate vault password (an account that
+/// signs in through an identity provider): fresh salt, minimum Argon2id parameters.
+#[wasm_bindgen(js_name = createKeysetWithVaultPassword)]
+pub fn create_keyset_with_vault_password(
+    password: &str,
+    account_id: &str,
+) -> Result<WebNewKeyset, JsError> {
+    new_vault_keyset(password, account_id).map_err(JsError::from)
+}
+
+fn new_login_keyset(
+    password: &str,
+    hub_id: &str,
+    username: &str,
+    account_id: &str,
+) -> Result<WebNewKeyset, WebError> {
+    let secrets = LoginSecrets::derive(password, hub_id, username)?;
+    let created = create_keyset(account_id, secrets.unlock(), secrets.kdf())?;
+    Ok(WebNewKeyset { created })
+}
+
+fn new_vault_keyset(password: &str, account_id: &str) -> Result<WebNewKeyset, WebError> {
+    let kdf = UnlockKdf::random()?;
+    let unlock = UnlockKey::from_vault_password(password, &kdf)?;
+    let created = create_keyset(account_id, &unlock, &kdf)?;
+    Ok(WebNewKeyset { created })
+}
+
 /// The value a client sends to the hub where it expects the password (`login-v1`, 64 hex
 /// characters). The unlock key derived beside it never leaves WebAssembly. Costs 64 MiB and a
 /// few hundred milliseconds: call it from a worker.
@@ -360,6 +480,51 @@ mod tests {
         assert_eq!(web.pair.public_key().to_bytes(), public);
         assert!(open("another password", &kdf.description()).is_err());
         assert!(open("vault password!", "argon2id;m=8;t=1;p=1").is_err());
+    }
+
+    #[test]
+    fn a_keyset_created_in_the_browser_unlocks_like_a_native_one() {
+        let (hub, user, account_id) = ("hub", "ann", "acc-3");
+        let created = new_login_keyset("correct horse battery", hub, user, account_id).unwrap();
+        assert_eq!(created.unlock_kind(), 1);
+        assert_eq!(created.kdf(), "argon2id;m=65536;t=3;p=4");
+        let web = WebAccount::open(
+            "correct horse battery",
+            hub,
+            user,
+            account_id,
+            &created.wrapped_account_key(),
+            &created.sealed_private_key(),
+            &created.public_key(),
+        )
+        .unwrap();
+        assert_eq!(web.public_key(), created.public_key());
+        let recovery = nocterm_keys::RecoveryKey::parse(&created.recovery_key()).unwrap();
+        recovery
+            .unwrap(account_id, &created.recovery_wrapped_account_key())
+            .unwrap();
+        assert_eq!(created.into_account().public_key(), web.public_key());
+    }
+
+    #[test]
+    fn a_vault_keyset_records_its_derivation_and_refuses_short_passwords() {
+        let created = new_vault_keyset("vault password!", "acc-4").unwrap();
+        assert_eq!(created.unlock_kind(), 2);
+        let web = WebAccount::open_vault(
+            "vault password!",
+            &created.kdf(),
+            &created.salt(),
+            "acc-4",
+            &created.wrapped_account_key(),
+            &created.sealed_private_key(),
+            &created.public_key(),
+        )
+        .unwrap();
+        assert_eq!(web.public_key(), created.public_key());
+        assert!(matches!(
+            new_vault_keyset("short", "acc-4"),
+            Err(WebError::Login(LoginError::PasswordTooShort { .. }))
+        ));
     }
 
     #[test]

@@ -2,7 +2,9 @@
 //!
 //! Owns: device signing keys (Ed25519) used for proof of possession; the derivation of the
 //! login value the hub verifies and of the unlock key it never sees (`login-v1`, from one
-//! password); the recovery key; the key hierarchy unlock key → account key → collection key;
+//! password); the recovery key; the key hierarchy unlock key → account key → collection key
+//! and the sealed material of a first account keyset (`create_keyset`, shared by native and
+//! web clients);
 //! the account's X25519 pair with collection key grants authenticated by the granter's key; the
 //! pins (trust on first use) of the public keys of other accounts; account-authenticated,
 //! device-signed Cloud command boxes with a pinned runner, its separately
@@ -43,6 +45,7 @@ mod authenticated_box;
 pub mod cloud;
 mod device;
 mod kdf;
+mod keyset;
 mod login;
 mod pins;
 mod random;
@@ -52,6 +55,7 @@ mod sealed;
 
 pub use device::DeviceKey;
 pub use kdf::{KdfParams, KdfParseError};
+pub use keyset::{CreatedKeyset, KeysetMaterial, KeysetMaterialError, create_keyset, seal_keyset};
 pub use login::{LoginError, LoginSecrets, MIN_PASSWORD_CHARS, UnlockKdf, UnlockKey, UnlockSource};
 pub use nocterm_hub_model::pop::{SignatureError, verify as verify_signature};
 pub use pins::{PinError, PinnedKeys, TrustedKey};

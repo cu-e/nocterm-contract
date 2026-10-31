@@ -7,8 +7,9 @@
 
 use nocterm_hub_proto::v1;
 use nocterm_keys::{
-    AccountKey, AccountKeyPair, CollectionKey, KdfParseError, KeyError, OpenError, PublicKey,
-    PublicKeyError, RecoveryKey, SealError, TrustedKey, UnlockKdf, UnlockKey, UnlockSource,
+    AccountKey, AccountKeyPair, CollectionKey, KdfParseError, KeyError, KeysetMaterial,
+    KeysetMaterialError, OpenError, PublicKey, PublicKeyError, RecoveryKey, SealError, TrustedKey,
+    UnlockKdf, UnlockKey, UnlockSource, create_keyset, seal_keyset,
 };
 
 use crate::{ClientError, HubClient, StatusCode};
@@ -112,6 +113,32 @@ fn kind_of(source: UnlockSource) -> v1::UnlockKind {
     }
 }
 
+impl From<KeysetMaterialError> for KeysetError {
+    fn from(err: KeysetMaterialError) -> Self {
+        match err {
+            KeysetMaterialError::WrongUnlockSource { stored, given } => {
+                Self::WrongUnlockSource { stored, given }
+            }
+            KeysetMaterialError::Key(err) => Self::Key(err),
+            KeysetMaterialError::Seal(err) => Self::Seal(err),
+        }
+    }
+}
+
+/// The hub write of sealed keyset material.
+fn put_request(expected_version: u64, material: KeysetMaterial) -> v1::PutAccountKeysetRequest {
+    v1::PutAccountKeysetRequest {
+        expected_version,
+        kdf: material.kdf,
+        salt: material.salt,
+        wrapped_account_key: material.wrapped_account_key,
+        public_key: material.public_key.to_bytes().to_vec(),
+        sealed_private_key: material.sealed_private_key,
+        recovery_wrapped_account_key: material.recovery_wrapped_account_key,
+        unlock_kind: kind_of(material.unlock_source).into(),
+    }
+}
+
 /// The open keys of an account.
 #[derive(Debug)]
 pub struct Keyset {
@@ -209,17 +236,21 @@ impl Keyset {
         unlock: &UnlockKey,
         kdf: &UnlockKdf,
     ) -> Result<(NewKeyset, v1::PutAccountKeysetRequest), KeysetError> {
-        let account_key = AccountKey::generate()?;
-        let pair = AccountKeyPair::generate()?;
-        let recovery = RecoveryKey::generate()?;
-        let request = Self::request(0, account_id, &account_key, &pair, unlock, kdf, &recovery)?;
+        let created = create_keyset(account_id, unlock, kdf)?;
+        let request = put_request(0, created.material);
         let keyset = Keyset {
             account_id: account_id.to_owned(),
             version: 0,
-            account_key,
-            pair,
+            account_key: created.account_key,
+            pair: created.pair,
         };
-        Ok((NewKeyset { keyset, recovery }, request))
+        Ok((
+            NewKeyset {
+                keyset,
+                recovery: created.recovery,
+            },
+            request,
+        ))
     }
 
     fn request(
@@ -231,22 +262,8 @@ impl Keyset {
         kdf: &UnlockKdf,
         recovery: &RecoveryKey,
     ) -> Result<v1::PutAccountKeysetRequest, KeysetError> {
-        if unlock.source() != kdf.source() {
-            return Err(KeysetError::WrongUnlockSource {
-                stored: kdf.source(),
-                given: unlock.source(),
-            });
-        }
-        Ok(v1::PutAccountKeysetRequest {
-            expected_version,
-            kdf: kdf.description(),
-            salt: kdf.salt().to_vec(),
-            wrapped_account_key: account_key.seal(unlock, account_id)?,
-            public_key: pair.public_key().to_bytes().to_vec(),
-            sealed_private_key: pair.seal(account_key, account_id)?,
-            recovery_wrapped_account_key: recovery.wrap(account_key, account_id)?,
-            unlock_kind: kind_of(unlock.source()).into(),
-        })
+        let material = seal_keyset(account_id, account_key, pair, unlock, kdf, recovery)?;
+        Ok(put_request(expected_version, material))
     }
 
     /// Opens the key pair of a keyset whose account key is already open.
