@@ -12,7 +12,7 @@ use nocterm_hub_model::agents::{
     AgentListing, AgentScope, CHAT_ID_BYTES, PoolKeys, chat_id_to_wire, limits,
 };
 use nocterm_hub_model::{AgentId, InstanceId, PoolId};
-use nocterm_hub_proto::v1;
+use nocterm_hub_proto::{org_name_from_wire, v1};
 use tonic::Streaming;
 
 pub use error::AgentError;
@@ -32,6 +32,17 @@ pub struct PoolEnvelope {
     pub pool: PoolId,
     /// Output of `nocterm_keys::agents::seal_definition`.
     pub envelope: Vec<u8>,
+}
+
+/// A listing with the display name of its organization, as the hub sent it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedAgent {
+    /// The listing.
+    pub listing: AgentListing,
+    /// Display name of the owning organization; `None` outside an organization scope, from a
+    /// hub that does not send names, or when the name exceeds
+    /// [`limits::MAX_ORG_NAME_BYTES`].
+    pub org_name: Option<String>,
 }
 
 /// Lossy change hints of the agent list or of instances. A hint means "list again".
@@ -85,6 +96,20 @@ impl AgentClient {
         &self,
         scope: Option<AgentScope>,
     ) -> Result<Vec<AgentListing>, AgentError> {
+        Ok(self
+            .list_agents_with_org_names(scope)
+            .await?
+            .into_iter()
+            .map(|agent| agent.listing)
+            .collect())
+    }
+
+    /// Like [`AgentClient::list_agents`], with the display name of each listing's
+    /// organization when the hub sends one.
+    pub async fn list_agents_with_org_names(
+        &self,
+        scope: Option<AgentScope>,
+    ) -> Result<Vec<ListedAgent>, AgentError> {
         let mut agents = Vec::new();
         let mut after = String::new();
         for _ in 0..MAX_PAGES {
@@ -98,7 +123,10 @@ impl AgentClient {
                 .await?
                 .into_inner();
             for wire in &page.agents {
-                agents.push(AgentListing::try_from(wire)?);
+                agents.push(ListedAgent {
+                    listing: AgentListing::try_from(wire)?,
+                    org_name: org_name_from_wire(wire),
+                });
             }
             if page.next.is_empty() {
                 return Ok(agents);

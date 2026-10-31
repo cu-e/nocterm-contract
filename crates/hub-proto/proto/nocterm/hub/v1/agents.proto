@@ -133,6 +133,11 @@ message AgentListing {
   repeated string pool_ids = 15;
   // From the caller's point of view; ignored in `PutAgent`.
   AgentAvailability availability = 16;
+  // Display name of the organization that owns a SCOPE_KIND_ORG listing, filled by the hub
+  // in responses so a client need not resolve `scope.org_id` itself. At most
+  // `limits::MAX_ORG_NAME_BYTES` UTF-8 bytes; empty for other scopes or when the hub does not
+  // say; ignored in `PutAgent`. Descriptive only: clients key on `scope.org_id`.
+  string org_name = 17;
 }
 
 // A definition sealed by the owner to one pool's encryption key

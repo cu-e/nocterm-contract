@@ -204,3 +204,30 @@ async fn a_chat_bound_start_names_the_chat_as_lowercase_hex() {
     assert_eq!(starts[1].chat_id.as_deref(), Some("c4".repeat(16).as_str()));
     assert_eq!(starts[1].agent_id, agent.to_string());
 }
+
+#[tokio::test]
+async fn org_listings_carry_the_organization_name_the_hub_sent() {
+    let hub = FakeHub::start_agents().await;
+    let mut named = v1::AgentListing::from(&listing(1));
+    named.org_name = "Acme Research".into();
+    let mut personal = v1::AgentListing::from(&listing(2));
+    personal.scope = Some(AgentScope::Account.into());
+    personal.org_name = "ignored".into();
+    let unnamed = v1::AgentListing::from(&listing(3));
+    hub.agents
+        .listing
+        .lock()
+        .expect("lock")
+        .extend([named, personal, unnamed]);
+    let client = hub.signed_in_client().await;
+
+    let agents = client
+        .agents()
+        .list_agents_with_org_names(None)
+        .await
+        .unwrap();
+
+    let names: Vec<_> = agents.iter().map(|a| a.org_name.as_deref()).collect();
+    assert_eq!(names, [Some("Acme Research"), None, None]);
+    assert_eq!(agents[2].listing.version, 3);
+}

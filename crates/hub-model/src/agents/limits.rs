@@ -41,6 +41,8 @@ pub const MAX_GRANT_LABEL_BYTES: usize = 256;
 pub const MAX_ACCESS_TOKEN_BYTES: usize = 128;
 /// Maximum bytes of one host-to-runner chat access frame, length prefix included.
 pub const MAX_CHAT_ACCESS_FRAME_BYTES: usize = 256;
+/// Maximum UTF-8 bytes of an organization's display name in an agent listing.
+pub const MAX_ORG_NAME_BYTES: usize = 256;
 
 /// One named limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +81,7 @@ limits!(
     MAX_GRANT_LABEL_BYTES,
     MAX_ACCESS_TOKEN_BYTES,
     MAX_CHAT_ACCESS_FRAME_BYTES,
+    MAX_ORG_NAME_BYTES,
 );
 
 #[cfg(test)]
@@ -93,7 +96,7 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len());
-        assert_eq!(before, 20);
+        assert_eq!(before, 21);
     }
 
     #[test]

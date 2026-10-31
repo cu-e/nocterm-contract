@@ -6,7 +6,7 @@
 
 use nocterm_hub_model::agents::{
     AgentAccess, AgentListing, AgentScope, Availability, InstanceState, PoolKeys, RefusalReason,
-    ResourceRequest, ScopeError, ScopeKind, ScopeLimits,
+    ResourceRequest, ScopeError, ScopeKind, ScopeLimits, limits,
 };
 use nocterm_hub_model::{AccountId, AgentId, InstanceRole, OrgId, PoolId};
 
@@ -313,8 +313,22 @@ impl From<&AgentListing> for v1::AgentListing {
             enabled: listing.enabled,
             pool_ids: listing.pools.iter().map(ToString::to_string).collect(),
             availability: v1::AgentAvailability::from(listing.availability) as i32,
+            org_name: String::new(),
         }
     }
+}
+
+/// The organization display name a hub sent with a listing: `None` unless the listing is in
+/// an organization scope and the name is non-empty and within
+/// [`limits::MAX_ORG_NAME_BYTES`]. A name out of bounds is dropped, not an error: it is only
+/// descriptive.
+pub fn org_name_from_wire(wire: &v1::AgentListing) -> Option<String> {
+    let org_scope = wire
+        .scope
+        .as_ref()
+        .is_some_and(|scope| scope.kind == v1::ScopeKind::Org as i32);
+    (org_scope && !wire.org_name.is_empty() && wire.org_name.len() <= limits::MAX_ORG_NAME_BYTES)
+        .then(|| wire.org_name.clone())
 }
 
 impl TryFrom<&v1::AgentListing> for AgentListing {
@@ -405,6 +419,23 @@ mod tests {
             let decoded = v1::AgentListing::decode(bytes.as_slice()).unwrap();
             assert_eq!(AgentListing::try_from(&decoded), Ok(original));
         }
+    }
+
+    #[test]
+    fn an_org_name_is_read_only_for_org_listings_within_its_limit() {
+        let mut wire = v1::AgentListing::from(&listing(AgentScope::Org(OrgId::new())));
+        assert_eq!(org_name_from_wire(&wire), None);
+        wire.org_name = "Acme".into();
+        let back = v1::AgentListing::decode(wire.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(org_name_from_wire(&back), Some("Acme".to_owned()));
+        wire.org_name = "x".repeat(limits::MAX_ORG_NAME_BYTES + 1);
+        assert_eq!(org_name_from_wire(&wire), None);
+        let mut personal = v1::AgentListing::from(&listing(AgentScope::Account));
+        personal.org_name = "Acme".into();
+        assert_eq!(org_name_from_wire(&personal), None);
+        // A listing from a hub without the field has no name.
+        let old = v1::AgentListing::decode(&[0x0a, 1, b'a'][..]).unwrap();
+        assert_eq!(org_name_from_wire(&old), None);
     }
 
     #[test]
