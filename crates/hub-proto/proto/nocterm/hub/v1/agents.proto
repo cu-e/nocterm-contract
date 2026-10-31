@@ -230,6 +230,12 @@ message StartInstanceRequest {
   string agent_id = 1;
   // Pool to use; empty lets the hub choose among the agent's pools.
   string pool_id = 2;
+  // Chat the caller starts the instance for, in the encoding of `StartLease.chat_id` (the
+  // chat's 16 bytes as 32 lowercase hex characters). The lease then serves that chat with a
+  // token of its own; when the instance already runs, the chat gets a token in that lease
+  // (`ChatAccess` ISSUE). Absent keeps the previous meaning: a seat without a chat. A hub
+  // that does not know the field ignores it.
+  optional string chat_id = 3;
 }
 
 message InstanceRef {
@@ -402,7 +408,8 @@ message StartLease {
   uint32 cpu_milli = 3;
   uint32 mem_mib = 4;
   uint32 idle_ttl_s = 5;
-  // Chat this lease serves. The runner's access lives and dies with the chat.
+  // Chat this lease serves. The runner's access lives and dies with the chat. The chat's
+  // 16 bytes as 32 lowercase hex characters, as in every `chat_id` text of this file.
   optional string chat_id = 6;
 }
 

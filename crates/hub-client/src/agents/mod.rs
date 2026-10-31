@@ -8,7 +8,9 @@ mod error;
 mod setup;
 
 use nocterm_hub_grpc::agent_service_client::AgentServiceClient;
-use nocterm_hub_model::agents::{AgentListing, AgentScope, PoolKeys, limits};
+use nocterm_hub_model::agents::{
+    AgentListing, AgentScope, CHAT_ID_BYTES, PoolKeys, chat_id_to_wire, limits,
+};
 use nocterm_hub_model::{AgentId, InstanceId, PoolId};
 use nocterm_hub_proto::v1;
 use tonic::Streaming;
@@ -216,11 +218,34 @@ impl AgentClient {
         agent: AgentId,
         pool: Option<PoolId>,
     ) -> Result<v1::Instance, AgentError> {
+        self.start(agent, pool, None).await
+    }
+
+    /// Like [`AgentClient::start_instance`], for one chat: the lease serves `chat` with a
+    /// broker token of its own, or, when the instance already runs, the chat gets a token in
+    /// that lease. A hub that does not know chat-bound starts ignores the chat and behaves
+    /// like [`AgentClient::start_instance`].
+    pub async fn start_instance_for_chat(
+        &self,
+        agent: AgentId,
+        pool: Option<PoolId>,
+        chat: [u8; CHAT_ID_BYTES],
+    ) -> Result<v1::Instance, AgentError> {
+        self.start(agent, pool, Some(chat)).await
+    }
+
+    async fn start(
+        &self,
+        agent: AgentId,
+        pool: Option<PoolId>,
+        chat: Option<[u8; CHAT_ID_BYTES]>,
+    ) -> Result<v1::Instance, AgentError> {
         Ok(self
             .rpc()
             .start_instance(v1::StartInstanceRequest {
                 agent_id: agent.to_string(),
                 pool_id: pool.map(|p| p.to_string()).unwrap_or_default(),
+                chat_id: chat.as_ref().map(chat_id_to_wire),
             })
             .await?
             .into_inner())

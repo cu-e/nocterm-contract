@@ -6,6 +6,7 @@
 //! executes.
 
 mod attestation;
+mod chat_id;
 pub mod limits;
 mod listing;
 mod pin;
@@ -14,6 +15,7 @@ mod resources;
 mod scope;
 
 pub use attestation::{AttestationError, HostRunnerAttestation, SignedHostRunnerAttestation};
+pub use chat_id::{CHAT_ID_BYTES, ChatIdError, chat_id_from_wire, chat_id_to_wire};
 pub use listing::{AgentAccess, AgentListing, Availability, InstanceState, ListingError};
 pub use pin::{PoolKeyChanged, PoolTrust, check_pool_keys};
 pub use refusal::{QuotaScope, RefusalReason};

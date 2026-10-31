@@ -185,3 +185,22 @@ async fn usage_rows_carry_the_model_they_were_spent_on() {
     let models: Vec<_> = report.rows.iter().map(|row| row.model.as_str()).collect();
     assert_eq!(models, ["small", "large"]);
 }
+
+#[tokio::test]
+async fn a_chat_bound_start_names_the_chat_as_lowercase_hex() {
+    let hub = FakeHub::start_agents().await;
+    *hub.agents.refusal.lock().expect("lock") = Some(RefusalReason::Budget);
+    let client = hub.signed_in_client().await;
+    let agent = AgentId::new();
+
+    let _ = client.agents().start_instance(agent, None).await;
+    let _ = client
+        .agents()
+        .start_instance_for_chat(agent, None, [0xc4; 16])
+        .await;
+
+    let starts = hub.agents.starts.lock().expect("lock");
+    assert_eq!(starts[0].chat_id, None);
+    assert_eq!(starts[1].chat_id.as_deref(), Some("c4".repeat(16).as_str()));
+    assert_eq!(starts[1].agent_id, agent.to_string());
+}

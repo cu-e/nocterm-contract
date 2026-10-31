@@ -524,6 +524,8 @@ mod tests {
         );
         let lease = v1::StartLease::decode(&[0x0a, 1, b'l'][..]).unwrap();
         assert_eq!(lease.chat_id, None);
+        let start = v1::StartInstanceRequest::decode(&[0x0a, 1, b'a'][..]).unwrap();
+        assert_eq!(start.chat_id, None);
         let capacity = v1::AgentsCapacity::decode(&[0x08, 1][..]).unwrap();
         assert!(capacity.running_leases.is_empty());
     }

@@ -25,6 +25,7 @@ pub struct AgentState {
     pub refusal: Mutex<Option<RefusalReason>>,
     pub listing: Mutex<Vec<v1::AgentListing>>,
     pub usage: Mutex<Vec<v1::UsageRow>>,
+    pub starts: Mutex<Vec<v1::StartInstanceRequest>>,
 }
 
 pub struct AgentPeer(pub Arc<AgentState>);
@@ -114,7 +115,15 @@ impl AgentService for AgentPeer {
             signing_public_key: vec![2; 32],
         }))
     }
-    async fn start_instance(&self, _: Request<v1::StartInstanceRequest>) -> Reply<v1::Instance> {
+    async fn start_instance(
+        &self,
+        request: Request<v1::StartInstanceRequest>,
+    ) -> Reply<v1::Instance> {
+        self.0
+            .starts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.into_inner());
         let reason = *self
             .0
             .refusal
