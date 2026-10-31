@@ -209,7 +209,11 @@ authenticates the call; no runner session proof is attached.
 Access is bound to the chat ([ADR 0002](docs/adr/0002-chat-bound-agent-access.md)):
 `StartLease.chat_id`, `NodeDown.chat_access` (`ChatAccess` issues or revokes a chat's broker
 token; identifiers only), `NodeHello.agents.running_leases`, and a `model` on `InstanceUsage`
-and `UsageRow`.
+and `UsageRow`. `StartInstanceRequest.chat_id` (`AgentClient::start_instance_for_chat`) starts a
+seat for one chat; chat ids are 16 bytes as lowercase hex (`chat_id_to_wire`). A host states
+`NodeHello.agents.agents_protocol` (`AGENTS_PROTOCOL_RUNNING_LEASES`); at 0 its empty
+`running_leases` says nothing. The host hands chat tokens to its runner as
+`ChatAccessFrame`s on a private control channel ([ADR 0003](docs/adr/0003-host-to-runner-chat-access-frames.md)).
 
 ## Relays
 

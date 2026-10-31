@@ -325,6 +325,23 @@ mod tests {
     }
 
     #[test]
+    fn an_issued_token_travels_in_a_chat_access_frame() {
+        use nocterm_hub_model::agents::{ChatAccessFrame, ChatAccessToken, limits};
+        const { assert!(MAX_TOKEN_TEXT_BYTES <= limits::MAX_ACCESS_TOKEN_BYTES) };
+        let key = BrokerKey::from_bytes([1; 32]);
+        let token = VirtualToken::issue(&key, &claims()).unwrap();
+        let frame = ChatAccessFrame::Issue {
+            chat: [3; 16],
+            token: ChatAccessToken::new(token.to_text()).unwrap(),
+        };
+        let back = ChatAccessFrame::decode(&frame.encode()).unwrap();
+        let ChatAccessFrame::Issue { token: text, .. } = back else {
+            panic!("an issue frame reads back as an issue");
+        };
+        assert_eq!(VirtualToken::parse(text.expose()).unwrap(), token);
+    }
+
+    #[test]
     fn the_token_matches_the_independent_vector() {
         let key = BrokerKey::from_bytes([1; 32]);
         let token = VirtualToken::issue_with_id(&key, &claims(), [9; 16]).unwrap();
