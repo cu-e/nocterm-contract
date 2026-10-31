@@ -49,6 +49,16 @@ service AgentService {
   // Active access of agents to the account's resources (broker tokens, SSH certificates).
   rpc ListAccessGrants(ListAccessGrantsRequest) returns (AccessGrantList);
   rpc RevokeAccessGrant(RevokeAccessGrantRequest) returns (Empty);
+  // Checks that an agent's provider accepts its key, from a host of the agent's pool: the hub
+  // sends the sealed definition to an online host (`NodeDown.probe_provider`) whose
+  // `agents_protocol` is at least `AGENTS_PROTOCOL_PROVIDER_PROBE`, and the host's credential
+  // broker opens it, calls the provider and reports `NodeUp.probe_result`. Needs the right to
+  // write the agent. No secret and no provider text is ever returned: `error_code` is a short
+  // code (`nocterm_hub_model::agents::ProbeFailure`). Without such a host the result is
+  // `host_unavailable`; a host that does not answer within `PROVIDER_PROBE_TIMEOUT_MS` gives
+  // `timeout`. A hub may refuse frequent probes with RESOURCE_EXHAUSTED. A hub that lacks the
+  // RPC answers UNIMPLEMENTED.
+  rpc ProbeProvider(ProbeProviderRequest) returns (ProbeResult);
 }
 
 enum ScopeKind {
@@ -407,6 +417,26 @@ message RevokeAccessGrantRequest {
   string grant_id = 1;
 }
 
+message ProbeProviderRequest {
+  string agent_id = 1;
+  // Pool whose host probes; absent lets the hub choose among the agent's pools.
+  optional string pool_id = 2;
+}
+
+// The outcome of one provider probe. Bounded: at most `limits::MAX_PROBE_MODELS` model ids of at
+// most `limits::MAX_MODEL_ID_BYTES` each, an error code of at most
+// `limits::MAX_PROBE_ERROR_CODE_BYTES` in `[a-z0-9_]`.
+message ProbeResult {
+  // The provider accepted the key.
+  bool ok = 1;
+  // From the host's request to the provider's answer; zero when no request was made.
+  uint32 latency_ms = 2;
+  // Model ids the provider offers, when `ok` and the provider lists them.
+  repeated string models = 3;
+  // Empty when `ok`; otherwise a `ProbeFailure` code such as `unauthorized`.
+  string error_code = 4;
+}
+
 // ---------------------------------------------------------------------------------------
 // Host messages. They travel in `NodeService.Connect` (see fleet.proto) next to the existing
 // frames, so a node without the agents capability is unaffected.
@@ -428,8 +458,11 @@ message AgentsCapacity {
   // nothing about what runs and the hub must not stop leases because of it; it keeps the
   // reconcile it used before. 1 (`AGENTS_PROTOCOL_RUNNING_LEASES`) and above: the host lists
   // every lease it runs, and an empty list means none runs, so the hub may stop leases the
-  // host no longer has. Levels only grow; a hub treats a level above the one it knows as the
-  // highest it knows.
+  // host no longer has. 2 (`AGENTS_PROTOCOL_DEFINITION_V2`): the host also opens definition
+  // envelopes of format version 2; a hub provisions a format 2 envelope (its first byte, see
+  // `sealed_definition_version`) only on such hosts. 3 (`AGENTS_PROTOCOL_PROVIDER_PROBE`): the
+  // host answers `probe_provider`. Levels only grow; a hub treats a level above the one it
+  // knows as the highest it knows.
   uint32 agents_protocol = 8;
 }
 
@@ -489,6 +522,29 @@ message ChatAccess {
   string lease_id = 1;
   string chat_id = 2;
   Op op = 3;
+}
+
+// Asks a host to probe the provider of an agent's definition. The host opens the envelope with
+// the pool key for the owner it pinned for (`scope`, `account_id`), exactly as for
+// `ProvisionInstance`, uses the API key only inside its credential broker and answers with
+// `ProviderProbeReport` under the same `request_id`. It neither keeps the definition nor starts
+// a runner.
+message ProbeProvider {
+  uint64 request_id = 1;
+  string agent_id = 2;
+  string pool_id = 3;
+  AgentScope scope = 4;
+  // Account that sealed the envelope (`SealedDefinition.sealed_by_account_id`).
+  string account_id = 5;
+  uint64 definition_version = 6;
+  // The pool's envelope, at most `limits::MAX_ENVELOPE_BYTES`.
+  bytes sealed_definition = 7;
+}
+
+// A host's answer to `ProbeProvider`; the hub validates and forwards `result` unchanged.
+message ProviderProbeReport {
+  uint64 request_id = 1;
+  ProbeResult result = 2;
 }
 
 message StopLease {

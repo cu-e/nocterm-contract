@@ -56,6 +56,10 @@ pub const MAX_PRICE_MICROS_PER_MTOK: usize = 4_000_000_000;
 pub const MAX_AGENT_TURNS: usize = 10_000;
 /// Maximum output tokens an agent definition may allow in one model call.
 pub const MAX_AGENT_OUTPUT_TOKENS: usize = 1_000_000;
+/// Maximum model ids a provider probe reports.
+pub const MAX_PROBE_MODELS: usize = 256;
+/// Maximum bytes of a provider probe's error code.
+pub const MAX_PROBE_ERROR_CODE_BYTES: usize = 64;
 
 /// One named limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +105,8 @@ limits!(
     MAX_PRICE_MICROS_PER_MTOK,
     MAX_AGENT_TURNS,
     MAX_AGENT_OUTPUT_TOKENS,
+    MAX_PROBE_MODELS,
+    MAX_PROBE_ERROR_CODE_BYTES,
 );
 
 #[cfg(test)]
@@ -115,7 +121,7 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len());
-        assert_eq!(before, 27);
+        assert_eq!(before, 29);
     }
 
     #[test]

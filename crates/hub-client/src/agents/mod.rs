@@ -10,7 +10,7 @@ mod versions;
 
 use nocterm_hub_grpc::agent_service_client::AgentServiceClient;
 use nocterm_hub_model::agents::{
-    AgentListing, AgentScope, CHAT_ID_BYTES, PoolKeys, chat_id_to_wire, limits,
+    AgentListing, AgentScope, CHAT_ID_BYTES, PoolKeys, ProviderProbe, chat_id_to_wire, limits,
 };
 use nocterm_hub_model::{AgentId, InstanceId, PoolId};
 use nocterm_hub_proto::{org_name_from_wire, v1};
@@ -429,6 +429,26 @@ impl AgentClient {
             after = page.next;
         }
         Err(AgentError::TooManyPages)
+    }
+
+    /// Asks a host of the agent's pool (`pool`, or one the hub chooses) to check that the
+    /// agent's provider accepts its key. A failed probe is an `Ok` result with
+    /// [`nocterm_hub_model::agents::ProbeOutcome::Failed`]; errors are reserved for the call
+    /// itself. The result never carries a secret or provider text.
+    pub async fn probe_provider(
+        &self,
+        agent: AgentId,
+        pool: Option<PoolId>,
+    ) -> Result<ProviderProbe, AgentError> {
+        let result = self
+            .rpc()
+            .probe_provider(v1::ProbeProviderRequest {
+                agent_id: agent.to_string(),
+                pool_id: pool.map(|p| p.to_string()),
+            })
+            .await?
+            .into_inner();
+        Ok(ProviderProbe::try_from(&result)?)
     }
 
     /// Revokes one access at once; the broker stops honouring it and renewal stops.

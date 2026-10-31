@@ -29,6 +29,8 @@ pub struct AgentState {
     pub instances: Mutex<Vec<v1::Instance>>,
     pub versions: Mutex<Vec<v1::AgentVersion>>,
     pub version_requests: Mutex<Vec<v1::ListAgentVersionsRequest>>,
+    pub probe: Mutex<Option<v1::ProbeResult>>,
+    pub probes: Mutex<Vec<v1::ProbeProviderRequest>>,
 }
 
 pub struct AgentPeer(pub Arc<AgentState>);
@@ -240,5 +242,24 @@ impl AgentService for AgentPeer {
         _: Request<v1::RevokeAccessGrantRequest>,
     ) -> Reply<v1::Empty> {
         unsupported()
+    }
+    async fn probe_provider(
+        &self,
+        request: Request<v1::ProbeProviderRequest>,
+    ) -> Reply<v1::ProbeResult> {
+        self.0
+            .probes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.into_inner());
+        let result = self
+            .0
+            .probe
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        result
+            .map(Response::new)
+            .ok_or_else(|| Status::unimplemented("no probe"))
     }
 }

@@ -22,6 +22,7 @@ pub mod v1 {
 mod agents;
 mod cloud_secrets;
 mod convert;
+mod probe;
 
 pub use agents::{
     WireError, availability_from_wire, instance_role_from_wire, instance_role_to_wire,

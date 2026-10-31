@@ -6,7 +6,8 @@ mod support;
 
 use nocterm_hub_client::agents::{AgentError, PoolEnvelope};
 use nocterm_hub_model::agents::{
-    AgentAccess, AgentListing, AgentScope, Availability, PoolKeys, RefusalReason, ResourceRequest,
+    AgentAccess, AgentListing, AgentScope, Availability, PoolKeys, ProbeFailure, ProbeOutcome,
+    RefusalReason, ResourceRequest,
 };
 use nocterm_hub_model::{AccountId, AgentId, OrgId, PoolId};
 use nocterm_hub_proto::v1;
@@ -374,4 +375,78 @@ async fn agent_versions_on_a_hub_without_agents_are_unsupported() {
         .unwrap_err();
 
     assert!(matches!(err, AgentError::Unsupported));
+}
+
+#[tokio::test]
+async fn a_probe_reports_reachability_and_models_for_a_chosen_pool() {
+    let hub = FakeHub::start_agents().await;
+    *hub.agents.probe.lock().expect("lock") = Some(v1::ProbeResult {
+        ok: true,
+        latency_ms: 180,
+        models: vec!["gpt-a".into()],
+        error_code: String::new(),
+    });
+    let client = hub.signed_in_client().await;
+    let (agent, pool) = (AgentId::new(), PoolId::new());
+
+    let probe = client
+        .agents()
+        .probe_provider(agent, Some(pool))
+        .await
+        .unwrap();
+
+    assert_eq!(probe.latency_ms, 180);
+    assert_eq!(
+        probe.outcome,
+        ProbeOutcome::Ok {
+            models: vec!["gpt-a".into()]
+        }
+    );
+    let sent = hub.agents.probes.lock().expect("lock").clone();
+    assert_eq!(sent[0].agent_id, agent.to_string());
+    assert_eq!(sent[0].pool_id, Some(pool.to_string()));
+}
+
+#[tokio::test]
+async fn a_failed_probe_is_a_result_with_its_code_not_an_error() {
+    let hub = FakeHub::start_agents().await;
+    *hub.agents.probe.lock().expect("lock") = Some(v1::ProbeResult {
+        ok: false,
+        latency_ms: 0,
+        models: vec![],
+        error_code: "host_unavailable".into(),
+    });
+    let client = hub.signed_in_client().await;
+
+    let probe = client
+        .agents()
+        .probe_provider(AgentId::new(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        probe.outcome,
+        ProbeOutcome::Failed(ProbeFailure::HostUnavailable)
+    );
+    assert_eq!(hub.agents.probes.lock().expect("lock")[0].pool_id, None);
+}
+
+#[tokio::test]
+async fn a_probe_result_with_provider_text_is_refused() {
+    let hub = FakeHub::start_agents().await;
+    *hub.agents.probe.lock().expect("lock") = Some(v1::ProbeResult {
+        ok: false,
+        latency_ms: 3,
+        models: vec![],
+        error_code: "401 Incorrect API key provided: sk-abc".into(),
+    });
+    let client = hub.signed_in_client().await;
+
+    let err = client
+        .agents()
+        .probe_provider(AgentId::new(), None)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, AgentError::Wire(_)));
 }

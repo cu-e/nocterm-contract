@@ -92,6 +92,8 @@ message NodeUp {
     InstanceProvisioned instance_provisioned = 9;
     LeaseState lease_state = 10;
     InstanceUsage instance_usage = 11;
+    // Answer to `NodeDown.probe_provider`; never carries a secret or provider text.
+    ProviderProbeReport probe_result = 12;
   }
 }
 
@@ -114,6 +116,9 @@ message NodeDown {
     DeliverTicket deliver_ticket = 13;
     // Issue or revoke the broker's virtual token of one chat (identifiers only).
     ChatAccess chat_access = 14;
+    // Probe an agent's provider from this host's credential broker; sent only to hosts whose
+    // `agents_protocol` is at least `AGENTS_PROTOCOL_PROVIDER_PROBE`.
+    ProbeProvider probe_provider = 15;
   }
 }
 
