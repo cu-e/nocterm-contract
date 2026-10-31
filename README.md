@@ -220,6 +220,17 @@ organization of an org-scoped listing. A keyset made in a browser
 (`nocterm_keys::create_keyset`, exported by `nocterm-keys-wasm`) is the one a native client
 makes with `HubClient::create_keyset`.
 
+Definition format 2 (`AgentDefinitionV2`, `seal_definition_v2`, `sealDefinitionV2`) adds a tool
+policy, per-run and per-chat limits and the owner's model prices to the version 1 fields; a
+host reads either with `open_definition_any`, chosen by `sealed_definition_version`, and states
+`AGENTS_PROTOCOL_DEFINITION_V2` so the hub sends it format 2 envelopes.
+`ListAgentVersions` (`AgentClient::list_agent_versions`) pages through an agent's past public
+listings, never its envelopes. `ProbeProvider` (`AgentClient::probe_provider`) has a host of
+the pool (`AGENTS_PROTOCOL_PROVIDER_PROBE`, frames `NodeDown.probe_provider` and
+`NodeUp.probe_result`) check the provider key and returns latency, models and a short error
+code, never provider text. `UsageReport.in_use` reports a scope's current use beside its
+limits. See [ADR 0004](docs/adr/0004-agent-definition-v2-history-probe.md).
+
 ## Relays
 
 `RelayService.Open` carries a byte stream from the client to a TCP target through the hub, and
