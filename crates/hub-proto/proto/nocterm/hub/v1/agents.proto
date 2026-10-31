@@ -24,6 +24,11 @@ service AgentService {
   // Creates (expected_version = 0) or replaces an agent and its sealed envelopes, one per pool.
   rpc PutAgent(PutAgentRequest) returns (AgentDetail);
   rpc DeleteAgent(DeleteAgentRequest) returns (Empty);
+  // The versions of an agent's public listing, newest first, in pages. Needs the right to see
+  // the agent. Only the hub-visible listing as it was written: never envelopes, digests or
+  // anything sealed. A hub that keeps no history returns the current version only; a hub that
+  // lacks the RPC answers UNIMPLEMENTED.
+  rpc ListAgentVersions(ListAgentVersionsRequest) returns (AgentVersionList);
   rpc ListPools(ListPoolsRequest) returns (PoolList);
   // The keys a pool is pinned by. Clients pin them on first use (TOFU, with the fingerprint).
   rpc GetPoolKey(PoolRef) returns (PoolKeys);
@@ -197,6 +202,31 @@ message PutAgentRequest {
 message DeleteAgentRequest {
   string agent_id = 1;
   uint64 expected_version = 2;
+}
+
+message ListAgentVersionsRequest {
+  string agent_id = 1;
+  // Opaque cursor of the previous page, at most 256 bytes.
+  string after = 2;
+  // 1..256; zero asks for the hub's default.
+  uint32 limit = 3;
+}
+
+// One written version of an agent's listing.
+message AgentVersion {
+  // Equals `listing.version`.
+  uint64 version = 1;
+  // The listing as `PutAgent` stored it for this version. `availability` is unspecified and
+  // `org_name` may be empty: they describe the present, not the version.
+  AgentListing listing = 2;
+  int64 updated_at_ms = 3;
+  // Account whose `PutAgent` wrote the version.
+  string updated_by_account_id = 4;
+}
+
+message AgentVersionList {
+  repeated AgentVersion versions = 1;
+  string next = 2;
 }
 
 enum PoolState {

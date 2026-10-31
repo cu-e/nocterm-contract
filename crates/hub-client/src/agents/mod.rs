@@ -6,6 +6,7 @@
 
 mod error;
 mod setup;
+mod versions;
 
 use nocterm_hub_grpc::agent_service_client::AgentServiceClient;
 use nocterm_hub_model::agents::{
@@ -17,6 +18,7 @@ use tonic::Streaming;
 
 pub use error::AgentError;
 pub use setup::{SetupError, VerifiedSetup, verify_instance_setup};
+pub use versions::{AgentVersion, AgentVersionPage};
 
 use crate::{HubClient, Signed};
 
@@ -209,6 +211,33 @@ impl AgentClient {
             })
             .await?;
         Ok(())
+    }
+
+    /// One page of the versions of an agent's public listing, newest first. Pass `after` as
+    /// the previous page's [`AgentVersionPage::next`]; `limit` is clamped to
+    /// [`limits::MAX_PAGE_ENTRIES`] and zero asks for the hub's default. A hub that keeps no
+    /// history returns the current version only.
+    pub async fn list_agent_versions(
+        &self,
+        agent: AgentId,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<AgentVersionPage, AgentError> {
+        let after = after.unwrap_or_default();
+        if after.len() > versions::MAX_CURSOR_BYTES {
+            return Err(AgentError::EnvelopeLimit);
+        }
+        let max = u32::try_from(limits::MAX_PAGE_ENTRIES).unwrap_or(u32::MAX);
+        let page = self
+            .rpc()
+            .list_agent_versions(v1::ListAgentVersionsRequest {
+                agent_id: agent.to_string(),
+                after: after.to_owned(),
+                limit: limit.min(max),
+            })
+            .await?
+            .into_inner();
+        Ok(AgentVersionPage::try_from(&page)?)
     }
 
     /// Pools visible to the caller, optionally in one scope.

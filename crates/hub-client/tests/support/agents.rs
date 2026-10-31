@@ -27,6 +27,8 @@ pub struct AgentState {
     pub usage: Mutex<Vec<v1::UsageRow>>,
     pub starts: Mutex<Vec<v1::StartInstanceRequest>>,
     pub instances: Mutex<Vec<v1::Instance>>,
+    pub versions: Mutex<Vec<v1::AgentVersion>>,
+    pub version_requests: Mutex<Vec<v1::ListAgentVersionsRequest>>,
 }
 
 pub struct AgentPeer(pub Arc<AgentState>);
@@ -106,6 +108,36 @@ impl AgentService for AgentPeer {
     }
     async fn delete_agent(&self, _: Request<v1::DeleteAgentRequest>) -> Reply<v1::Empty> {
         unsupported()
+    }
+    async fn list_agent_versions(
+        &self,
+        request: Request<v1::ListAgentVersionsRequest>,
+    ) -> Reply<v1::AgentVersionList> {
+        let request = request.into_inner();
+        let all = self
+            .0
+            .versions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let after: usize = request.after.parse().unwrap_or(0);
+        let size = if request.limit == 0 {
+            2
+        } else {
+            request.limit as usize
+        };
+        let versions: Vec<_> = all.iter().skip(after).take(size).cloned().collect();
+        let next = if after + size < all.len() {
+            (after + size).to_string()
+        } else {
+            String::new()
+        };
+        self.0
+            .version_requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request);
+        Ok(Response::new(v1::AgentVersionList { versions, next }))
     }
     async fn list_pools(&self, _: Request<v1::ListPoolsRequest>) -> Reply<v1::PoolList> {
         unsupported()

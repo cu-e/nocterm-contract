@@ -30,8 +30,9 @@ pub enum AgentError {
     /// The listing to write is outside its bounds; nothing was sent.
     #[error("the agent listing is invalid")]
     Listing(#[from] ListingError),
-    /// An envelope, ticket or envelope count is outside its bounds; nothing was sent.
-    #[error("an envelope, ticket or the envelope count exceeds its limit")]
+    /// An envelope, ticket, page cursor or envelope count is outside its bounds; nothing was
+    /// sent.
+    #[error("an envelope, ticket, cursor or the envelope count exceeds its limit")]
     EnvelopeLimit,
     /// The hub kept returning pages beyond the client's bound.
     #[error("the hub returned too many pages")]

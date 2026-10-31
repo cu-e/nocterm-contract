@@ -8,7 +8,7 @@ use nocterm_hub_client::agents::{AgentError, PoolEnvelope};
 use nocterm_hub_model::agents::{
     AgentAccess, AgentListing, AgentScope, Availability, PoolKeys, RefusalReason, ResourceRequest,
 };
-use nocterm_hub_model::{AgentId, OrgId, PoolId};
+use nocterm_hub_model::{AccountId, AgentId, OrgId, PoolId};
 use nocterm_hub_proto::v1;
 use support::FakeHub;
 
@@ -263,6 +263,115 @@ async fn listing_instances_on_a_hub_without_agents_is_unsupported() {
     let client = hub.signed_in_client().await;
 
     let err = client.agents().list_instances(None).await.unwrap_err();
+
+    assert!(matches!(err, AgentError::Unsupported));
+}
+
+fn written(listing: &AgentListing, by: AccountId) -> v1::AgentVersion {
+    v1::AgentVersion {
+        version: listing.version,
+        listing: Some(v1::AgentListing::from(listing)),
+        updated_at_ms: 1_000 * i64::try_from(listing.version).expect("small"),
+        updated_by_account_id: by.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn agent_versions_arrive_in_pages_with_their_author() {
+    let hub = FakeHub::start_agents().await;
+    let author = AccountId::new();
+    let current = listing(3);
+    for version in (1..=3).rev() {
+        let mut old = current.clone();
+        old.version = version;
+        old.name = format!("Helper v{version}");
+        hub.agents
+            .versions
+            .lock()
+            .expect("lock")
+            .push(written(&old, author));
+    }
+    let client = hub.signed_in_client().await;
+    let agents = client.agents();
+
+    let first = agents
+        .list_agent_versions(current.id, None, 0)
+        .await
+        .unwrap();
+    let second = agents
+        .list_agent_versions(current.id, first.next.as_deref(), 0)
+        .await
+        .unwrap();
+
+    let versions: Vec<_> = first
+        .versions
+        .iter()
+        .chain(&second.versions)
+        .map(|v| (v.version, v.listing.name.as_str(), v.updated_by))
+        .collect();
+    assert_eq!(
+        versions,
+        [
+            (3, "Helper v3", author),
+            (2, "Helper v2", author),
+            (1, "Helper v1", author)
+        ]
+    );
+    assert_eq!(second.next, None);
+    assert_eq!(second.versions[0].updated_at_ms, 1_000);
+    let requests = hub.agents.version_requests.lock().expect("lock").clone();
+    assert_eq!(requests[0].agent_id, current.id.to_string());
+    assert_eq!(requests[1].after, "2");
+}
+
+#[tokio::test]
+async fn a_version_whose_listing_disagrees_is_a_wire_error() {
+    let hub = FakeHub::start_agents().await;
+    let mut wire = written(&listing(2), AccountId::new());
+    wire.version = 5;
+    hub.agents.versions.lock().expect("lock").push(wire);
+    let client = hub.signed_in_client().await;
+
+    let err = client
+        .agents()
+        .list_agent_versions(AgentId::new(), None, 10)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, AgentError::Wire(_)));
+}
+
+#[tokio::test]
+async fn the_version_page_size_is_clamped_and_a_long_cursor_is_not_sent() {
+    let hub = FakeHub::start_agents().await;
+    let client = hub.signed_in_client().await;
+    let agents = client.agents();
+
+    agents
+        .list_agent_versions(AgentId::new(), None, u32::MAX)
+        .await
+        .unwrap();
+    let err = agents
+        .list_agent_versions(AgentId::new(), Some(&"c".repeat(257)), 1)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, AgentError::EnvelopeLimit));
+    let requests = hub.agents.version_requests.lock().expect("lock").clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].limit, 256);
+}
+
+#[tokio::test]
+async fn agent_versions_on_a_hub_without_agents_are_unsupported() {
+    let hub = FakeHub::start(false).await;
+    let client = hub.signed_in_client().await;
+
+    let err = client
+        .agents()
+        .list_agent_versions(AgentId::new(), None, 0)
+        .await
+        .unwrap_err();
 
     assert!(matches!(err, AgentError::Unsupported));
 }
