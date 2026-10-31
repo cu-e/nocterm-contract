@@ -4,16 +4,18 @@
 //! account (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an
 //! account from its password (login or vault), derive the login value for the hub, seal an
 //! agent definition (format 1 `sealDefinition`, format 2 `sealDefinitionV2`) to a pool's
-//! encryption key, compare a pool's key fingerprint and verify a
-//! host's runner attestation. All cryptography is `nocterm-keys`; this crate only converts
-//! text and bytes at the JavaScript boundary.
+//! encryption key, compare a pool's key fingerprint, check offered pool keys against a pin
+//! (`checkPoolKeys`) and verify a host's runner attestation. All cryptography is
+//! `nocterm-keys`; this crate only converts text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants: secrets never cross into JavaScript (only public keys, fingerprints and sealed
 //! bytes), except the recovery key of a new keyset, which the page shows the user once;
 //! errors are typed here and become strings only at the boundary.
 
-use nocterm_hub_model::agents::{AgentScope, PoolKeys, ScopeKind, SignedHostRunnerAttestation};
+use nocterm_hub_model::agents::{
+    AgentScope, PoolKeys, PoolTrust, ScopeKind, SignedHostRunnerAttestation, check_pool_keys,
+};
 use nocterm_hub_model::{AgentId, InstanceId, OrgId, PoolId};
 use nocterm_keys::agents::{
     AgentDefinitionV1, AgentDefinitionV2, DefinitionContext, DefinitionError, SealDefinitionError,
@@ -427,6 +429,67 @@ pub fn pool_fingerprint(encryption_key: &[u8], signing_key: &[u8]) -> Result<Str
     Ok(keys.fingerprint())
 }
 
+/// Compares the keys a hub offers for a pool with this browser's pin (trust on first use), as
+/// `nocterm_hub_model::agents::check_pool_keys` decides: `"first_use"` when nothing is pinned
+/// (pass neither pinned key), `"pinned"` when both keys equal the pin, `"changed"` otherwise.
+/// Seal nothing to a pool that is not `"pinned"`.
+#[wasm_bindgen(js_name = checkPoolKeys)]
+pub fn check_pool_keys_js(
+    pinned_encryption_key: Option<Vec<u8>>,
+    pinned_signing_key: Option<Vec<u8>>,
+    offered_encryption_key: &[u8],
+    offered_signing_key: &[u8],
+) -> Result<String, JsError> {
+    let check = || -> Result<&'static str, WebError> {
+        let pinned = pin_pair(pinned_encryption_key, pinned_signing_key)?;
+        pool_trust(
+            pinned.as_ref().map(|(e, s)| (e.as_slice(), s.as_slice())),
+            offered_encryption_key,
+            offered_signing_key,
+        )
+    };
+    check().map(str::to_owned).map_err(JsError::from)
+}
+
+/// A pinned encryption and signing key, as JavaScript passes them.
+type PinnedPair = (Vec<u8>, Vec<u8>);
+
+/// Both pinned keys or neither.
+fn pin_pair(
+    encryption: Option<Vec<u8>>,
+    signing: Option<Vec<u8>>,
+) -> Result<Option<PinnedPair>, WebError> {
+    match (encryption, signing) {
+        (None, None) => Ok(None),
+        (Some(encryption), Some(signing)) => Ok(Some((encryption, signing))),
+        _ => Err(WebError::Argument("pin (both keys or neither)")),
+    }
+}
+
+fn pool_trust(
+    pinned: Option<(&[u8], &[u8])>,
+    offered_encryption: &[u8],
+    offered_signing: &[u8],
+) -> Result<&'static str, WebError> {
+    let pinned = pinned
+        .map(|(encryption, signing)| -> Result<PoolKeys, WebError> {
+            Ok(PoolKeys {
+                encryption: bytes32(encryption, "pinned encryption key")?,
+                signing: bytes32(signing, "pinned signing key")?,
+            })
+        })
+        .transpose()?;
+    let offered = PoolKeys {
+        encryption: bytes32(offered_encryption, "encryption key")?,
+        signing: bytes32(offered_signing, "signing key")?,
+    };
+    Ok(match check_pool_keys(pinned.as_ref(), &offered) {
+        Ok(PoolTrust::FirstUse) => "first_use",
+        Ok(PoolTrust::Pinned) => "pinned",
+        Err(_) => "changed",
+    })
+}
+
 /// Verifies a host's runner attestation under the pinned pool signing key.
 #[wasm_bindgen(js_name = verifyRunnerAttestation)]
 pub fn verify_runner_attestation(
@@ -569,6 +632,18 @@ mod tests {
             ),
             Err(WebError::Seal(_))
         ));
+    }
+
+    #[test]
+    fn pool_keys_are_first_use_pinned_or_changed() {
+        let (enc, sign) = ([1u8; 32], [2u8; 32]);
+        let pin = Some((&enc[..], &sign[..]));
+        assert_eq!(pool_trust(None, &enc, &sign).unwrap(), "first_use");
+        assert_eq!(pool_trust(pin, &enc, &sign).unwrap(), "pinned");
+        assert_eq!(pool_trust(pin, &enc, &[9; 32]).unwrap(), "changed");
+        assert!(pool_trust(None, &enc[..31], &sign).is_err());
+        assert!(pin_pair(Some(enc.to_vec()), None).is_err());
+        assert!(pin_pair(None, None).unwrap().is_none());
     }
 
     #[test]
