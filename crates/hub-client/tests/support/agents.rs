@@ -26,6 +26,7 @@ pub struct AgentState {
     pub listing: Mutex<Vec<v1::AgentListing>>,
     pub usage: Mutex<Vec<v1::UsageRow>>,
     pub starts: Mutex<Vec<v1::StartInstanceRequest>>,
+    pub instances: Mutex<Vec<v1::Instance>>,
 }
 
 pub struct AgentPeer(pub Arc<AgentState>);
@@ -141,6 +142,29 @@ impl AgentService for AgentPeer {
     }
     async fn get_instance(&self, _: Request<v1::InstanceRef>) -> Reply<v1::Instance> {
         unsupported()
+    }
+    async fn list_instances(
+        &self,
+        request: Request<v1::ListInstancesRequest>,
+    ) -> Reply<v1::InstanceList> {
+        let request = request.into_inner();
+        let all: Vec<_> = self
+            .0
+            .instances
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|i| request.agent_id.is_empty() || i.agent_id == request.agent_id)
+            .cloned()
+            .collect();
+        let after: usize = request.after.parse().unwrap_or(0);
+        let instances: Vec<_> = all.iter().skip(after).take(2).cloned().collect();
+        let next = if after + 2 < all.len() {
+            (after + 2).to_string()
+        } else {
+            String::new()
+        };
+        Ok(Response::new(v1::InstanceList { instances, next }))
     }
     type WatchInstancesStream = Hints<v1::InstanceHint>;
     async fn watch_instances(

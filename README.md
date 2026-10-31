@@ -11,7 +11,7 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
 | `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals |
 | `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants |
-| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key, pool fingerprint, runner attestation check |
+| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key, pool fingerprint, runner attestation check |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
 
 The protobuf schema is compiled with [protox](https://crates.io/crates/protox), so no system
@@ -214,6 +214,11 @@ seat for one chat; chat ids are 16 bytes as lowercase hex (`chat_id_to_wire`). A
 `NodeHello.agents.agents_protocol` (`AGENTS_PROTOCOL_RUNNING_LEASES`); at 0 its empty
 `running_leases` says nothing. The host hands chat tokens to its runner as
 `ChatAccessFrame`s on a private control channel ([ADR 0003](docs/adr/0003-host-to-runner-chat-access-frames.md)).
+`ListInstances` (`AgentClient::list_instances`) lists the caller's own seats without an
+administrator right, and `AgentListing.org_name` (`list_agents_with_org_names`) names the
+organization of an org-scoped listing. A keyset made in a browser
+(`nocterm_keys::create_keyset`, exported by `nocterm-keys-wasm`) is the one a native client
+makes with `HubClient::create_keyset`.
 
 ## Relays
 

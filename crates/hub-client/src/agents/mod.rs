@@ -290,6 +290,35 @@ impl AgentClient {
             .into_inner())
     }
 
+    /// The caller's own instances, optionally of one agent (no administrator right needed).
+    /// A listed instance may lack its setup document and attestation; read those with
+    /// [`AgentClient::get_instance`].
+    pub async fn list_instances(
+        &self,
+        agent: Option<AgentId>,
+    ) -> Result<Vec<v1::Instance>, AgentError> {
+        let agent_id = agent.map(|a| a.to_string()).unwrap_or_default();
+        let mut instances = Vec::new();
+        let mut after = String::new();
+        for _ in 0..MAX_PAGES {
+            let page = self
+                .rpc()
+                .list_instances(v1::ListInstancesRequest {
+                    agent_id: agent_id.clone(),
+                    after: after.clone(),
+                    limit: 0,
+                })
+                .await?
+                .into_inner();
+            instances.extend(page.instances);
+            if page.next.is_empty() {
+                return Ok(instances);
+            }
+            after = page.next;
+        }
+        Err(AgentError::TooManyPages)
+    }
+
     /// Hints about the caller's instances, optionally of one agent.
     pub async fn watch_instances(
         &self,

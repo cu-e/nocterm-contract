@@ -231,3 +231,38 @@ async fn org_listings_carry_the_organization_name_the_hub_sent() {
     assert_eq!(names, [Some("Acme Research"), None, None]);
     assert_eq!(agents[2].listing.version, 3);
 }
+
+#[tokio::test]
+async fn own_instances_are_listed_across_pages_and_by_agent() {
+    let hub = FakeHub::start_agents().await;
+    let (mine, other) = (AgentId::new(), AgentId::new());
+    for (n, agent) in [mine, other, mine, mine, other].into_iter().enumerate() {
+        hub.agents
+            .instances
+            .lock()
+            .expect("lock")
+            .push(v1::Instance {
+                instance_id: format!("i{n}"),
+                agent_id: agent.to_string(),
+                ..Default::default()
+            });
+    }
+    let client = hub.signed_in_client().await;
+
+    let all = client.agents().list_instances(None).await.unwrap();
+    let of_agent = client.agents().list_instances(Some(mine)).await.unwrap();
+
+    assert_eq!(all.len(), 5);
+    let ids: Vec<_> = of_agent.iter().map(|i| i.instance_id.as_str()).collect();
+    assert_eq!(ids, ["i0", "i2", "i3"]);
+}
+
+#[tokio::test]
+async fn listing_instances_on_a_hub_without_agents_is_unsupported() {
+    let hub = FakeHub::start(false).await;
+    let client = hub.signed_in_client().await;
+
+    let err = client.agents().list_instances(None).await.unwrap_err();
+
+    assert!(matches!(err, AgentError::Unsupported));
+}

@@ -30,6 +30,10 @@ service AgentService {
   // Reserves a seat for the caller and an agent (idempotent per account and agent).
   rpc StartInstance(StartInstanceRequest) returns (Instance);
   rpc GetInstance(InstanceRef) returns (Instance);
+  // The caller's own instances, optionally of one agent, in pages. Needs no administrator
+  // right: the hub returns only seats of the calling account. A hub that lacks it answers
+  // UNIMPLEMENTED.
+  rpc ListInstances(ListInstancesRequest) returns (InstanceList);
   rpc WatchInstances(WatchInstancesRequest) returns (stream InstanceHint);
   // The device verified the host attestation, imported the runner setup and obtained a runner
   // grant ticket; the hub hands the ticket to the host.
@@ -263,6 +267,23 @@ message Instance {
   bytes attestation = 10;
   bytes attestation_signature = 11;
   uint64 revision = 12;
+}
+
+message ListInstancesRequest {
+  // Empty lists every instance of the caller.
+  string agent_id = 1;
+  // Opaque cursor of the previous page, at most 256 bytes.
+  string after = 2;
+  // 1..256; zero asks for the hub's default.
+  uint32 limit = 3;
+}
+
+// A page of the caller's instances. A listed instance may leave `setup_document`,
+// `attestation` and `attestation_signature` empty to keep pages small; `GetInstance` returns
+// them.
+message InstanceList {
+  repeated Instance instances = 1;
+  string next = 2;
 }
 
 message WatchInstancesRequest {
