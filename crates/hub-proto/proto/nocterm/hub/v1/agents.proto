@@ -375,10 +375,23 @@ message ScopeLimits {
   optional uint64 monthly_spend_micros = 6;
 }
 
+// What a scope uses now of the resources `ScopeLimits` bounds.
+message ScopeUse {
+  uint32 instances = 1;
+  uint32 active_leases = 2;
+  uint64 cpu_milli = 3;
+  uint64 mem_mib = 4;
+  uint64 disk_mib = 5;
+}
+
 message UsageReport {
   repeated UsageRow rows = 1;
   ScopeLimits limits = 2;
   uint64 spent_this_month_micros = 3;
+  // Current use counted against `limits`: of the scope, or of the account the request names
+  // (a member quota). Absent from a hub that does not report it; clients then show the limits
+  // alone.
+  ScopeUse in_use = 4;
 }
 
 enum AccessGrantKind {
