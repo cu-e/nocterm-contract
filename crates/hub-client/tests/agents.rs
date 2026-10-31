@@ -208,8 +208,8 @@ async fn a_chat_bound_start_names_the_chat_as_lowercase_hex() {
 #[tokio::test]
 async fn org_listings_carry_the_organization_name_the_hub_sent() {
     let hub = FakeHub::start_agents().await;
-    let mut named = v1::AgentListing::from(&listing(1));
-    named.org_name = "Acme Research".into();
+    let mut with_name = v1::AgentListing::from(&listing(1));
+    with_name.org_name = "Acme Research".into();
     let mut personal = v1::AgentListing::from(&listing(2));
     personal.scope = Some(AgentScope::Account.into());
     personal.org_name = "ignored".into();
@@ -218,7 +218,7 @@ async fn org_listings_carry_the_organization_name_the_hub_sent() {
         .listing
         .lock()
         .expect("lock")
-        .extend([named, personal, unnamed]);
+        .extend([with_name, personal, unnamed]);
     let client = hub.signed_in_client().await;
 
     let agents = client
