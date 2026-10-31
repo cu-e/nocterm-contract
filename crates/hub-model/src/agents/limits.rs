@@ -43,6 +43,19 @@ pub const MAX_ACCESS_TOKEN_BYTES: usize = 128;
 pub const MAX_CHAT_ACCESS_FRAME_BYTES: usize = 256;
 /// Maximum UTF-8 bytes of an organization's display name in an agent listing.
 pub const MAX_ORG_NAME_BYTES: usize = 256;
+/// Maximum tool names in the allow list of an agent definition's tool policy.
+pub const MAX_TOOL_POLICY_ENTRIES: usize = 64;
+/// Maximum UTF-8 bytes of one tool name in a tool policy.
+pub const MAX_TOOL_NAME_BYTES: usize = 128;
+/// Maximum UTF-8 bytes of a model price's pricing revision.
+pub const MAX_PRICING_REVISION_BYTES: usize = 64;
+/// Maximum price of a million tokens, in micro-units of the billing currency. Bounds the
+/// arithmetic of a spend estimate; fits a 32-bit `usize`.
+pub const MAX_PRICE_MICROS_PER_MTOK: usize = 4_000_000_000;
+/// Maximum turns an agent definition may allow in one run.
+pub const MAX_AGENT_TURNS: usize = 10_000;
+/// Maximum output tokens an agent definition may allow in one model call.
+pub const MAX_AGENT_OUTPUT_TOKENS: usize = 1_000_000;
 
 /// One named limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +95,12 @@ limits!(
     MAX_ACCESS_TOKEN_BYTES,
     MAX_CHAT_ACCESS_FRAME_BYTES,
     MAX_ORG_NAME_BYTES,
+    MAX_TOOL_POLICY_ENTRIES,
+    MAX_TOOL_NAME_BYTES,
+    MAX_PRICING_REVISION_BYTES,
+    MAX_PRICE_MICROS_PER_MTOK,
+    MAX_AGENT_TURNS,
+    MAX_AGENT_OUTPUT_TOKENS,
 );
 
 #[cfg(test)]
@@ -96,7 +115,7 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len());
-        assert_eq!(before, 21);
+        assert_eq!(before, 27);
     }
 
     #[test]

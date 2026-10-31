@@ -8,8 +8,30 @@ use crate::{AccountKeyPair, OpenError, PublicKey, SealError, random_bytes};
 
 const HEADER_LEN: usize = 2 + 32 + NONCE_LEN;
 
-/// `version ‖ purpose ‖ ephemeral public ‖ nonce ‖ ciphertext`.
+/// `version ‖ purpose ‖ ephemeral public ‖ nonce ‖ ciphertext`, at [`FORMAT_VERSION`].
 pub(crate) fn box_seal(
+    purpose: Purpose,
+    info: &[u8],
+    sender: &AccountKeyPair,
+    recipient: &PublicKey,
+    context: &[&str],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, SealError> {
+    box_seal_versioned(
+        FORMAT_VERSION,
+        purpose,
+        info,
+        sender,
+        recipient,
+        context,
+        plaintext,
+    )
+}
+
+/// [`box_seal`] with a format version byte of the caller's format. The version is not in the
+/// associated data: a format that has several versions gives each its own `info`.
+pub(crate) fn box_seal_versioned(
+    version: u8,
     purpose: Purpose,
     info: &[u8],
     sender: &AccountKeyPair,
@@ -33,7 +55,7 @@ pub(crate) fn box_seal(
     .key(&dh_ephemeral, &dh_sender, info)?;
     let ciphertext = encrypt(&key, purpose, context, &nonce, plaintext)?;
     let mut sealed = Vec::with_capacity(HEADER_LEN + ciphertext.len());
-    sealed.push(FORMAT_VERSION);
+    sealed.push(version);
     sealed.push(purpose as u8);
     sealed.extend_from_slice(ephemeral_public.as_bytes());
     sealed.extend_from_slice(&nonce);
@@ -49,7 +71,28 @@ pub(crate) fn box_open(
     context: &[&str],
     sealed: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, OpenError> {
-    if sealed.len() < HEADER_LEN || sealed[0] != FORMAT_VERSION || sealed[1] != purpose as u8 {
+    box_open_versioned(
+        FORMAT_VERSION,
+        purpose,
+        info,
+        recipient,
+        sender,
+        context,
+        sealed,
+    )
+}
+
+/// Opens what [`box_seal_versioned`] made at `version`.
+pub(crate) fn box_open_versioned(
+    version: u8,
+    purpose: Purpose,
+    info: &[u8],
+    recipient: &AccountKeyPair,
+    sender: &PublicKey,
+    context: &[&str],
+    sealed: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, OpenError> {
+    if sealed.len() < HEADER_LEN || sealed[0] != version || sealed[1] != purpose as u8 {
         return Err(OpenError::Malformed);
     }
     let ephemeral: [u8; 32] = sealed[2..34].try_into().map_err(|_| OpenError::Malformed)?;

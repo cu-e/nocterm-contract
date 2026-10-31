@@ -3,7 +3,8 @@
 //! Owns: the browser-facing surface that lets the web panel create the first keyset of an
 //! account (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an
 //! account from its password (login or vault), derive the login value for the hub, seal an
-//! agent definition to a pool's encryption key, compare a pool's key fingerprint and verify a
+//! agent definition (format 1 `sealDefinition`, format 2 `sealDefinitionV2`) to a pool's
+//! encryption key, compare a pool's key fingerprint and verify a
 //! host's runner attestation. All cryptography is `nocterm-keys`; this crate only converts
 //! text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
@@ -15,7 +16,8 @@
 use nocterm_hub_model::agents::{AgentScope, PoolKeys, ScopeKind, SignedHostRunnerAttestation};
 use nocterm_hub_model::{AgentId, InstanceId, OrgId, PoolId};
 use nocterm_keys::agents::{
-    AgentDefinitionV1, DefinitionContext, DefinitionError, SealDefinitionError, seal_definition,
+    AgentDefinitionV1, AgentDefinitionV2, DefinitionContext, DefinitionError, SealDefinitionError,
+    seal_definition, seal_definition_v2,
 };
 use nocterm_keys::{
     AccountKey, AccountKeyPair, CreatedKeyset, KeyError, KeysetMaterialError, LoginError,
@@ -171,6 +173,48 @@ impl WebAccount {
         )
         .map_err(JsError::from)
     }
+
+    /// Seals a version 2 definition (JSON of `AgentDefinitionV2`: the version 1 fields plus
+    /// `tools`, `limits` and `pricing`) to a pool's encryption key. Only a host that reads
+    /// definition format 2 opens the envelope.
+    #[wasm_bindgen(js_name = sealDefinitionV2)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_definition_v2(
+        &self,
+        definition_json: &str,
+        agent_id: &str,
+        scope_kind: &str,
+        org_id: Option<String>,
+        pool_id: &str,
+        version: u64,
+        pool_encryption_key: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.seal_v2(
+            definition_json,
+            agent_id,
+            scope_kind,
+            org_id,
+            pool_id,
+            version,
+            pool_encryption_key,
+        )
+        .map_err(JsError::from)
+    }
+}
+
+fn definition_context(
+    agent_id: &str,
+    scope_kind: &str,
+    org_id: Option<String>,
+    pool_id: &str,
+    version: u64,
+) -> Result<DefinitionContext, WebError> {
+    Ok(DefinitionContext {
+        agent: AgentId::from_uuid(uuid(agent_id, "agent id")?),
+        scope: scope(scope_kind, org_id)?,
+        pool: PoolId::from_uuid(uuid(pool_id, "pool id")?),
+        version,
+    })
 }
 
 impl WebAccount {
@@ -221,14 +265,32 @@ impl WebAccount {
     ) -> Result<Vec<u8>, WebError> {
         let definition: AgentDefinitionV1 =
             serde_json::from_str(definition_json).map_err(WebError::Json)?;
-        let context = DefinitionContext {
-            agent: AgentId::from_uuid(uuid(agent_id, "agent id")?),
-            scope: scope(scope_kind, org_id)?,
-            pool: PoolId::from_uuid(uuid(pool_id, "pool id")?),
-            version,
-        };
+        let context = definition_context(agent_id, scope_kind, org_id, pool_id, version)?;
         let pool = PublicKey::from_bytes(pool_encryption_key)?;
         Ok(seal_definition(&self.pair, &pool, &context, &definition)?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn seal_v2(
+        &self,
+        definition_json: &str,
+        agent_id: &str,
+        scope_kind: &str,
+        org_id: Option<String>,
+        pool_id: &str,
+        version: u64,
+        pool_encryption_key: &[u8],
+    ) -> Result<Vec<u8>, WebError> {
+        let definition: AgentDefinitionV2 =
+            serde_json::from_str(definition_json).map_err(WebError::Json)?;
+        let context = definition_context(agent_id, scope_kind, org_id, pool_id, version)?;
+        let pool = PublicKey::from_bytes(pool_encryption_key)?;
+        Ok(seal_definition_v2(
+            &self.pair,
+            &pool,
+            &context,
+            &definition,
+        )?)
     }
 }
 
@@ -453,6 +515,60 @@ mod tests {
         };
         let opened = open_definition(&pool_pair, &pair.public_key(), &context, &sealed).unwrap();
         assert_eq!(opened.name, "A");
+    }
+
+    #[test]
+    fn a_version_two_definition_from_json_opens_with_its_policy() {
+        use nocterm_keys::agents::{
+            AgentDefinition, DEFINITION_FORMAT_VERSION_V2, ToolApproval, open_definition_any,
+            sealed_definition_version,
+        };
+        let pair = AccountKeyPair::generate().unwrap();
+        let web = WebAccount { pair };
+        let pool_pair = AccountKeyPair::generate().unwrap();
+        let (agent, pool) = (AgentId::new(), PoolId::new());
+        let json = r#"{"name":"A","instructions":"","provider":{"kind":"k","endpoint":"","models":["m"],"api_key":null},"secrets":[],"allowed_hosts":[],"ssh_targets":[],
+            "tools":{"allowed":{"only":["read_file"]},"approval":"always"},
+            "limits":{"max_turns":20,"max_output_tokens":null,"max_spend_micros_per_run":null,"max_spend_micros_per_chat":1000000},
+            "pricing":[{"model":"m","input_micros_per_mtok":1,"output_micros_per_mtok":2,"cached_input_micros_per_mtok":null,"revision":"r1"}]}"#;
+        let sealed = web
+            .seal_v2(
+                json,
+                &agent.to_string(),
+                "account",
+                None,
+                &pool.to_string(),
+                4,
+                &pool_pair.public_key().to_bytes(),
+            )
+            .unwrap();
+        assert_eq!(
+            sealed_definition_version(&sealed),
+            Some(DEFINITION_FORMAT_VERSION_V2)
+        );
+        let context =
+            definition_context(&agent.to_string(), "account", None, &pool.to_string(), 4).unwrap();
+        let AgentDefinition::V2(opened) =
+            open_definition_any(&pool_pair, &web.pair.public_key(), &context, &sealed).unwrap()
+        else {
+            panic!("expected a version 2 definition");
+        };
+        assert_eq!(opened.tools.approval, ToolApproval::Always);
+        assert_eq!(opened.limits.max_turns, Some(20));
+        assert_eq!(opened.price("m").unwrap().revision, "r1");
+        let invalid = json.replace("\"max_turns\":20", "\"max_turns\":0");
+        assert!(matches!(
+            web.seal_v2(
+                &invalid,
+                &agent.to_string(),
+                "account",
+                None,
+                &pool.to_string(),
+                4,
+                &pool_pair.public_key().to_bytes(),
+            ),
+            Err(WebError::Seal(_))
+        ));
     }
 
     #[test]

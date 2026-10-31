@@ -1,6 +1,6 @@
-//! Managed-agent formats: the sealed definition of an agent, the credential broker's virtual
-//! tokens and sealed secrets, the SSH CA grant and `authorized_keys` line, and the pure rules
-//! of the `agent_ssh_trust` registry.
+//! Managed-agent formats: the sealed definition of an agent (versions 1 and 2), the credential
+//! broker's virtual tokens and sealed secrets, the SSH CA grant and `authorized_keys` line, and
+//! the pure rules of the `agent_ssh_trust` registry.
 //!
 //! The hub only ever stores the sealed definition; the pool host that holds the pool's
 //! encryption key opens it. See `docs/adr/0001-managed-agents.md`.
@@ -10,6 +10,7 @@ mod boxed;
 mod broker;
 mod canon;
 mod definition;
+mod definition_v2;
 mod sealing;
 mod ssh_grant;
 mod ssh_trust;
@@ -25,9 +26,14 @@ pub use definition::{
     AgentDefinitionV1, DefinitionError, MAX_DEFINITION_BYTES, MAX_DEFINITION_ENTRIES,
     ProviderBlock, SshTarget,
 };
+pub use definition_v2::{
+    AgentDefinitionV2, AgentLimits, ModelPrice, ToolApproval, ToolPolicy, ToolSelection,
+};
 pub use sealing::{
-    DEFINITION_FORMAT_VERSION, DefinitionContext, OpenDefinitionError, SealDefinitionError,
-    open_definition, seal_definition, sealed_definition_version,
+    AgentDefinition, DEFINITION_FORMAT_VERSION, DEFINITION_FORMAT_VERSION_V2,
+    DEFINITION_FORMAT_VERSIONS, DefinitionContext, OpenDefinitionError, SealDefinitionError,
+    open_definition, open_definition_any, seal_definition, seal_definition_v2,
+    sealed_definition_version,
 };
 pub use ssh_grant::{
     GrantError, MAX_GRANT_LIFETIME_MS, MAX_PRINCIPAL_BYTES, MAX_SOURCE_ADDRESS_BYTES,

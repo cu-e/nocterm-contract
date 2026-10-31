@@ -22,8 +22,12 @@ pub enum DefinitionError {
     /// A required field is empty.
     #[error("the agent definition lacks {0}")]
     Missing(&'static str),
-    /// The bytes are not a definition of this version.
-    #[error("the bytes are not an agent definition of version 1")]
+    /// A field holds a value its version does not allow (a zero limit, a duplicate, a price
+    /// for a model the provider does not list).
+    #[error("the agent definition has an invalid {0}")]
+    Invalid(&'static str),
+    /// The bytes are not a definition of the expected version.
+    #[error("the bytes are not an agent definition of the expected version")]
     Malformed(#[source] postcard::Error),
     /// The definition could not be serialized.
     #[error("the agent definition could not be serialized")]
@@ -99,78 +103,126 @@ impl fmt::Debug for AgentDefinitionV1 {
 impl AgentDefinitionV1 {
     /// Checks the limits that bound memory and the fields without which an agent cannot run.
     pub fn validate(&self) -> Result<(), DefinitionError> {
-        if self.name.is_empty() {
-            return Err(DefinitionError::Missing("a name"));
-        }
-        if self.provider.kind.is_empty() || self.provider.models.is_empty() {
-            return Err(DefinitionError::Missing("a provider and a model"));
-        }
-        let fits =
-            |ok: bool, what: &'static str| ok.then_some(()).ok_or(DefinitionError::TooLarge(what));
-        fits(self.name.len() <= MAX_NAME_BYTES, "name")?;
-        fits(
-            self.instructions.len() <= MAX_SYSTEM_PROMPT_BYTES,
-            "instructions",
-        )?;
-        fits(
-            self.provider.endpoint.len() <= MAX_ENDPOINT_BYTES,
-            "endpoint",
-        )?;
-        fits(self.provider.models.len() <= MAX_MODELS, "models")?;
-        fits(
-            self.provider
-                .models
-                .iter()
-                .all(|m| m.len() <= MAX_MODEL_ID_BYTES),
-            "model id",
-        )?;
-        fits(
-            self.provider
-                .api_key
-                .as_ref()
-                .is_none_or(|k| k.len() <= MAX_SECRET_BYTES),
-            "api key",
-        )?;
-        fits(self.secrets.len() <= MAX_DEFINITION_ENTRIES, "secrets")?;
-        fits(
-            self.secrets
-                .iter()
-                .all(|(n, v)| n.len() <= MAX_NAME_BYTES && v.len() <= MAX_SECRET_BYTES),
-            "secret",
-        )?;
-        fits(
-            self.allowed_hosts.len() <= MAX_DEFINITION_ENTRIES,
-            "allowed hosts",
-        )?;
-        fits(
-            self.allowed_hosts
-                .iter()
-                .all(|h| h.len() <= MAX_ENDPOINT_BYTES),
-            "allowed host",
-        )?;
-        fits(
-            self.ssh_targets.len() <= MAX_DEFINITION_ENTRIES,
-            "ssh targets",
-        )
+        validate_base(&BaseFields {
+            name: &self.name,
+            instructions: &self.instructions,
+            provider: &self.provider,
+            secrets: &self.secrets,
+            allowed_hosts: &self.allowed_hosts,
+            ssh_targets: &self.ssh_targets,
+        })
     }
 
     pub(crate) fn encode(&self) -> Result<Zeroizing<Vec<u8>>, DefinitionError> {
         self.validate()?;
-        let bytes = Zeroizing::new(postcard::to_stdvec(self).map_err(DefinitionError::Encode)?);
-        if bytes.len() > MAX_DEFINITION_BYTES {
-            return Err(DefinitionError::TooLarge("definition"));
-        }
-        Ok(bytes)
+        encode_bounded(self)
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, DefinitionError> {
-        if bytes.len() > MAX_DEFINITION_BYTES {
-            return Err(DefinitionError::TooLarge("definition"));
-        }
-        let definition: Self = postcard::from_bytes(bytes).map_err(DefinitionError::Malformed)?;
+        let definition: Self = decode_bounded(bytes)?;
         definition.validate()?;
         Ok(definition)
     }
+}
+
+/// Serializes a validated definition of any version and checks the total size.
+pub(super) fn encode_bounded<T: Serialize>(
+    definition: &T,
+) -> Result<Zeroizing<Vec<u8>>, DefinitionError> {
+    let bytes = Zeroizing::new(postcard::to_stdvec(definition).map_err(DefinitionError::Encode)?);
+    if bytes.len() > MAX_DEFINITION_BYTES {
+        return Err(DefinitionError::TooLarge("definition"));
+    }
+    Ok(bytes)
+}
+
+/// Deserializes a definition of any version after checking the total size and refuses bytes
+/// after its last field, so the bytes of one version never read as another. The caller
+/// validates the result.
+pub(super) fn decode_bounded<T: for<'de> Deserialize<'de>>(
+    bytes: &[u8],
+) -> Result<T, DefinitionError> {
+    if bytes.len() > MAX_DEFINITION_BYTES {
+        return Err(DefinitionError::TooLarge("definition"));
+    }
+    let (definition, rest) =
+        postcard::take_from_bytes(bytes).map_err(DefinitionError::Malformed)?;
+    if !rest.is_empty() {
+        return Err(DefinitionError::Invalid(
+            "length (bytes after the last field)",
+        ));
+    }
+    Ok(definition)
+}
+
+/// The fields every definition version starts with, in their wire order.
+pub(super) struct BaseFields<'a> {
+    pub(super) name: &'a str,
+    pub(super) instructions: &'a str,
+    pub(super) provider: &'a ProviderBlock,
+    pub(super) secrets: &'a [(String, String)],
+    pub(super) allowed_hosts: &'a [String],
+    pub(super) ssh_targets: &'a [SshTarget],
+}
+
+/// The checks of version 1, shared by every later version.
+pub(super) fn validate_base(base: &BaseFields<'_>) -> Result<(), DefinitionError> {
+    if base.name.is_empty() {
+        return Err(DefinitionError::Missing("a name"));
+    }
+    if base.provider.kind.is_empty() || base.provider.models.is_empty() {
+        return Err(DefinitionError::Missing("a provider and a model"));
+    }
+    fits(base.name.len() <= MAX_NAME_BYTES, "name")?;
+    fits(
+        base.instructions.len() <= MAX_SYSTEM_PROMPT_BYTES,
+        "instructions",
+    )?;
+    fits(
+        base.provider.endpoint.len() <= MAX_ENDPOINT_BYTES,
+        "endpoint",
+    )?;
+    fits(base.provider.models.len() <= MAX_MODELS, "models")?;
+    fits(
+        base.provider
+            .models
+            .iter()
+            .all(|m| m.len() <= MAX_MODEL_ID_BYTES),
+        "model id",
+    )?;
+    fits(
+        base.provider
+            .api_key
+            .as_ref()
+            .is_none_or(|k| k.len() <= MAX_SECRET_BYTES),
+        "api key",
+    )?;
+    fits(base.secrets.len() <= MAX_DEFINITION_ENTRIES, "secrets")?;
+    fits(
+        base.secrets
+            .iter()
+            .all(|(n, v)| n.len() <= MAX_NAME_BYTES && v.len() <= MAX_SECRET_BYTES),
+        "secret",
+    )?;
+    fits(
+        base.allowed_hosts.len() <= MAX_DEFINITION_ENTRIES,
+        "allowed hosts",
+    )?;
+    fits(
+        base.allowed_hosts
+            .iter()
+            .all(|h| h.len() <= MAX_ENDPOINT_BYTES),
+        "allowed host",
+    )?;
+    fits(
+        base.ssh_targets.len() <= MAX_DEFINITION_ENTRIES,
+        "ssh targets",
+    )
+}
+
+/// `Ok` when `ok`, otherwise the limit named `what` was exceeded.
+pub(super) fn fits(ok: bool, what: &'static str) -> Result<(), DefinitionError> {
+    ok.then_some(()).ok_or(DefinitionError::TooLarge(what))
 }
 
 #[cfg(test)]
