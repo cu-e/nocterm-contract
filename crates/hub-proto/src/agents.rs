@@ -528,6 +528,13 @@ mod tests {
         assert_eq!(start.chat_id, None);
         let capacity = v1::AgentsCapacity::decode(&[0x08, 1][..]).unwrap();
         assert!(capacity.running_leases.is_empty());
+        assert_eq!(
+            capacity.agents_protocol,
+            nocterm_hub_model::agents::AGENTS_PROTOCOL_LEGACY
+        );
+        assert!(!nocterm_hub_model::agents::reports_running_leases(
+            capacity.agents_protocol
+        ));
     }
 
     #[test]

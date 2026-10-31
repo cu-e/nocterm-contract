@@ -367,6 +367,14 @@ message AgentsCapacity {
   string pool_id = 6;
   // Leases the host currently runs, so the hub can reconcile after a reconnect or restart.
   repeated RunningLease running_leases = 7;
+  // Agents protocol level of the host (`nocterm_hub_model::agents::AGENTS_PROTOCOL_*`).
+  // 0 (absent) is a legacy host: it does not report `running_leases`, so an empty list says
+  // nothing about what runs and the hub must not stop leases because of it; it keeps the
+  // reconcile it used before. 1 (`AGENTS_PROTOCOL_RUNNING_LEASES`) and above: the host lists
+  // every lease it runs, and an empty list means none runs, so the hub may stop leases the
+  // host no longer has. Levels only grow; a hub treats a level above the one it knows as the
+  // highest it knows.
+  uint32 agents_protocol = 8;
 }
 
 message RunningLease {
