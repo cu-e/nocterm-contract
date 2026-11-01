@@ -445,6 +445,34 @@ impl AgentClient {
             .probe_provider(v1::ProbeProviderRequest {
                 agent_id: agent.to_string(),
                 pool_id: pool.map(|p| p.to_string()),
+                draft: None,
+            })
+            .await?
+            .into_inner();
+        Ok(ProviderProbe::try_from(&result)?)
+    }
+
+    /// Probes a definition that is not saved: `envelope` is sealed to `pool`'s key with the
+    /// context `agent`, `scope`, `pool` and `version` (the listing's next version, 1 for a new
+    /// agent), as for `PutAgent`. Results and errors as [`Self::probe_provider`].
+    pub async fn probe_draft(
+        &self,
+        agent: AgentId,
+        pool: PoolId,
+        scope: AgentScope,
+        version: u64,
+        envelope: Vec<u8>,
+    ) -> Result<ProviderProbe, AgentError> {
+        let result = self
+            .rpc()
+            .probe_provider(v1::ProbeProviderRequest {
+                agent_id: agent.to_string(),
+                pool_id: Some(pool.to_string()),
+                draft: Some(v1::ProbeDraft {
+                    scope: Some(v1::AgentScope::from(scope)),
+                    version,
+                    envelope,
+                }),
             })
             .await?
             .into_inner();

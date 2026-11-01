@@ -228,7 +228,9 @@ host reads either with `open_definition_any`, chosen by `sealed_definition_versi
 listings, never its envelopes. `ProbeProvider` (`AgentClient::probe_provider`) has a host of
 the pool (`AGENTS_PROTOCOL_PROVIDER_PROBE`, frames `NodeDown.probe_provider` and
 `NodeUp.probe_result`) check the provider key and returns latency, models and a short error
-code, never provider text. `UsageReport.in_use` reports a scope's current use beside its
+code, never provider text. With `ProbeDraft` (`AgentClient::probe_draft`) the caller sends a
+definition it sealed to the pool but has not saved, so a panel can list the provider's models
+while an agent is still being created. `UsageReport.in_use` reports a scope's current use beside its
 limits. See [ADR 0004](docs/adr/0004-agent-definition-v2-history-probe.md).
 
 ## Relays

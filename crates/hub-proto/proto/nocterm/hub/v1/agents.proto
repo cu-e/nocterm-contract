@@ -58,6 +58,13 @@ service AgentService {
   // `host_unavailable`; a host that does not answer within `PROVIDER_PROBE_TIMEOUT_MS` gives
   // `timeout`. A hub may refuse frequent probes with RESOURCE_EXHAUSTED. A hub that lacks the
   // RPC answers UNIMPLEMENTED.
+  //
+  // With `draft` the hub probes a definition that is not saved: the caller seals it to the
+  // pool's key exactly as for `PutAgent`, and the hub forwards that envelope instead of a stored
+  // one, so neither the hub nor the browser holds the key in the clear. It needs the right to
+  // write the agent (or, for an agent id the hub does not know, to create agents in
+  // `draft.scope`) and a pool that may hold an agent of that scope. A hub that predates drafts
+  // ignores the field and answers NOT_FOUND for an unsaved agent.
   rpc ProbeProvider(ProbeProviderRequest) returns (ProbeResult);
 }
 
@@ -432,8 +439,21 @@ message RevokeAccessGrantRequest {
 
 message ProbeProviderRequest {
   string agent_id = 1;
-  // Pool whose host probes; absent lets the hub choose among the agent's pools.
+  // Pool whose host probes; absent lets the hub choose among the agent's pools. Required with
+  // `draft`.
   optional string pool_id = 2;
+  // A definition not saved yet, probed instead of the stored one.
+  optional ProbeDraft draft = 3;
+}
+
+// An unsaved definition for `ProbeProvider`: an envelope sealed by the caller to the pool's key
+// with the context (`agent_id`, `scope`, `pool_id`, `version`) the host opens it with.
+message ProbeDraft {
+  AgentScope scope = 1;
+  // Version sealed into the envelope: the listing's next version, 1 for a new agent.
+  uint64 version = 2;
+  // At most `limits::MAX_ENVELOPE_BYTES`.
+  bytes envelope = 3;
 }
 
 // The outcome of one provider probe. Bounded: at most `limits::MAX_PROBE_MODELS` model ids of at
