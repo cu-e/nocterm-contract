@@ -353,11 +353,13 @@ The codec bounds standard SSH blobs; the native SSH verifier checks their comple
 structure, host signature and permitted purpose before reading a private key.
 
 `cloud::tool_arguments::ToolArguments` hashes the exact typed arguments for the existing
-eight terminal tools under a separate canonical purpose. It preserves literal argv
+eleven terminal tools (tags 1-11; tags 9-11 are the file transfer tools) under a separate
+canonical purpose. It preserves literal argv
 boundaries, ordering, nullable timing/stdin fields and the tool name without depending
 on JSON map order. The digest does not replace checking original full arguments, target,
 session, run and grant epochs at dispatch. Execution validation belongs to the terminal
-catalog. Independent payload/argument vectors are in `fixtures/cloud-payload-v1/`.
+catalog. Decoders that predate tags 9-11 refuse them with `UnsupportedKind`, so a run that
+uses transfer tools needs peers built against this revision. Independent payload/argument vectors are in `fixtures/cloud-payload-v1/`.
 
 ### Native account catalog integrity
 
@@ -446,7 +448,7 @@ keeps an optional real model StepId; a missing identity stays absent.
 Decoding borrows text, JSON and image bodies, checks closed tags and exact EOF,
 and shares one 32 MiB aggregate bound. Text fields are at most 1 MiB, JSON fields
 at most 4 MiB, and a snapshot contains at most 4096 observations. JSON remains
-presentation, while tool identities/digests come from the existing eight-tool
+presentation, while tool identities/digests come from the existing eleven-tool
 canonical arguments. Background observations bind their exact original intent
 and execution run. Unknown usage/cost remains absent, separately from zero.
 

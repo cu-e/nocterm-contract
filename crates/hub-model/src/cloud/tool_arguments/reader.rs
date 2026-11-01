@@ -1,5 +1,5 @@
-//! Borrowed inverse of the existing eight-tool canonical fingerprint layout.
-use super::{MAX_TOOL_ARGUMENT_BYTES, ToolArguments};
+//! Borrowed inverse of the canonical fingerprint layout.
+use super::{MAX_TOOL_ARGUMENT_BYTES, MAX_TRANSFER_SOURCES, ToolArguments};
 use crate::cloud::{CommandError, codec::Reader};
 
 pub(super) fn read(bytes: &[u8]) -> Result<ToolArguments<'_>, CommandError> {
@@ -55,6 +55,13 @@ impl<'a> ArgumentsReader<'a> {
         }
         (0..count).map(|_| self.text()).collect()
     }
+    fn sources(&mut self) -> Result<Vec<&'a str>, CommandError> {
+        let count = usize::from(u16::from_be_bytes(self.0.array()?));
+        if count == 0 || count > MAX_TRANSFER_SOURCES {
+            return Err(CommandError::Malformed);
+        }
+        (0..count).map(|_| self.text()).collect()
+    }
     fn arguments(&mut self) -> Result<ToolArguments<'a>, CommandError> {
         Ok(match self.0.array::<1>()? {
             [1] => ToolArguments::ListTerminals,
@@ -93,6 +100,21 @@ impl<'a> ArgumentsReader<'a> {
             [8] => ToolArguments::CancelCommand {
                 terminal_id: self.id()?,
                 command_id: self.id()?,
+            },
+            [9] => ToolArguments::TransferFiles {
+                source_terminal_id: self.id()?,
+                sources: self.sources()?,
+                destination_terminal_id: self.id()?,
+                destination: self.text()?,
+                overwrite: self.flag()?,
+                yield_ms: self.number()?,
+            },
+            [10] => ToolArguments::ReadTransfer {
+                transfer_id: self.id()?,
+                yield_ms: self.number()?,
+            },
+            [11] => ToolArguments::CancelTransfer {
+                transfer_id: self.id()?,
             },
             _ => return Err(CommandError::UnsupportedKind),
         })

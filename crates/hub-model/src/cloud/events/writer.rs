@@ -101,6 +101,9 @@ impl EventWriter {
                 | "exec_command"
                 | "read_command"
                 | "cancel_command"
+                | "transfer_files"
+                | "read_transfer"
+                | "cancel_transfer"
         ) {
             return Err(EventPayloadError::Value);
         }

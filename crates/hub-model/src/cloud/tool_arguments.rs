@@ -6,6 +6,8 @@ use core::fmt;
 mod reader;
 
 pub const MAX_TOOL_ARGUMENT_BYTES: usize = 128 * 1024;
+/// Most source paths one `transfer_files` call may name.
+pub const MAX_TRANSFER_SOURCES: usize = 64;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ToolArguments<'a> {
@@ -46,6 +48,21 @@ pub enum ToolArguments<'a> {
         terminal_id: &'a str,
         command_id: &'a str,
     },
+    TransferFiles {
+        source_terminal_id: &'a str,
+        sources: Vec<&'a str>,
+        destination_terminal_id: &'a str,
+        destination: &'a str,
+        overwrite: bool,
+        yield_ms: Option<u64>,
+    },
+    ReadTransfer {
+        transfer_id: &'a str,
+        yield_ms: Option<u64>,
+    },
+    CancelTransfer {
+        transfer_id: &'a str,
+    },
 }
 impl<'a> ToolArguments<'a> {
     /// Decode exact bounded semantic arguments. These historical/display values
@@ -63,6 +80,9 @@ impl<'a> ToolArguments<'a> {
             Self::ExecCommand { .. } => "exec_command",
             Self::ReadCommand { .. } => "read_command",
             Self::CancelCommand { .. } => "cancel_command",
+            Self::TransferFiles { .. } => "transfer_files",
+            Self::ReadTransfer { .. } => "read_transfer",
+            Self::CancelTransfer { .. } => "cancel_transfer",
         }
     }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, CommandError> {
@@ -145,20 +165,10 @@ impl<'a> ToolArguments<'a> {
                 timeout_ms,
                 yield_ms,
             } => {
-                if args.len() > 256 {
-                    return Err(CommandError::Malformed);
-                }
                 writer.tag(6)?;
                 writer.id(terminal_id)?;
                 writer.text(program)?;
-                writer.output.as_mut().extend(
-                    &u16::try_from(args.len())
-                        .map_err(|_| CommandError::Malformed)?
-                        .to_be_bytes(),
-                )?;
-                for arg in args {
-                    writer.text(arg)?;
-                }
+                writer.list(args, 256)?;
                 writer.tag(u8::from(stdin.is_some()))?;
                 if let Some(stdin) = stdin {
                     writer.text(stdin)?;
@@ -184,6 +194,49 @@ impl<'a> ToolArguments<'a> {
                 writer.id(terminal_id)?;
                 writer.id(command_id)
             }
+            Self::TransferFiles { .. }
+            | Self::ReadTransfer { .. }
+            | Self::CancelTransfer { .. } => self.encode_transfer(writer),
+        }
+    }
+    /// Tags 9-11, the file transfer tools.
+    fn encode_transfer<W: AsMut<BoundedWriter>>(
+        &self,
+        writer: &mut ArgumentWriter<W>,
+    ) -> Result<(), CommandError> {
+        match self {
+            Self::TransferFiles {
+                source_terminal_id,
+                sources,
+                destination_terminal_id,
+                destination,
+                overwrite,
+                yield_ms,
+            } => {
+                if sources.is_empty() {
+                    return Err(CommandError::Malformed);
+                }
+                writer.tag(9)?;
+                writer.id(source_terminal_id)?;
+                writer.list(sources, MAX_TRANSFER_SOURCES)?;
+                writer.id(destination_terminal_id)?;
+                writer.text(destination)?;
+                writer.tag(u8::from(*overwrite))?;
+                writer.number(*yield_ms)
+            }
+            Self::ReadTransfer {
+                transfer_id,
+                yield_ms,
+            } => {
+                writer.tag(10)?;
+                writer.id(transfer_id)?;
+                writer.number(*yield_ms)
+            }
+            Self::CancelTransfer { transfer_id } => {
+                writer.tag(11)?;
+                writer.id(transfer_id)
+            }
+            _ => Err(CommandError::UnsupportedKind),
         }
     }
 }
@@ -222,6 +275,15 @@ impl<W: AsMut<BoundedWriter>> ArgumentWriter<W> {
     }
     fn text(&mut self, value: &str) -> Result<(), CommandError> {
         self.output.as_mut().field(value.as_bytes())
+    }
+    /// A `u16` big-endian count followed by that many texts, at most `max`.
+    fn list(&mut self, items: &[&str], max: usize) -> Result<(), CommandError> {
+        if items.len() > max {
+            return Err(CommandError::Malformed);
+        }
+        let count = u16::try_from(items.len()).map_err(|_| CommandError::Malformed)?;
+        self.output.as_mut().extend(&count.to_be_bytes())?;
+        items.iter().try_for_each(|item| self.text(item))
     }
     fn number(&mut self, value: Option<u64>) -> Result<(), CommandError> {
         self.tag(u8::from(value.is_some()))?;

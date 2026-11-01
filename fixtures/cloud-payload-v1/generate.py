@@ -56,6 +56,9 @@ tools={
     "exec":tool(6,text("terminal")+text("/bin/printf")+pack(">H",2)+text("%s")+text("$(literal); *")+b"\x01"+text("")+optional(None)+optional(0)),
     "read-command":tool(7,text("terminal")+text("command")+optional(50)),
     "cancel":tool(8,text("terminal")+text("command")),
+    "transfer":tool(9,text("terminal")+pack(">H",2)+text("/srv/a")+text("/srv/dir b")+text("terminal-2")+text("/home/alice/in")+b"\x00"+optional(1000)),
+    "read-transfer":tool(10,text("0a0b0c0d-0e0f-1011-1213-141516171819")+optional(None)),
+    "cancel-transfer":tool(11,text("0a0b0c0d-0e0f-1011-1213-141516171819")),
 }
 for name,value in vectors.items(): (ROOT/f"{name}.hex").write_text(value.hex()+"\n")
 for name,value in tools.items():

@@ -539,6 +539,9 @@ fn each_tool_intent_preserves_its_exact_semantic_argument_digest_and_display_nam
         include_str!("../../../../../fixtures/cloud-payload-v1/tool-exec.hex"),
         include_str!("../../../../../fixtures/cloud-payload-v1/tool-read-command.hex"),
         include_str!("../../../../../fixtures/cloud-payload-v1/tool-cancel.hex"),
+        include_str!("../../../../../fixtures/cloud-payload-v1/tool-transfer.hex"),
+        include_str!("../../../../../fixtures/cloud-payload-v1/tool-read-transfer.hex"),
+        include_str!("../../../../../fixtures/cloud-payload-v1/tool-cancel-transfer.hex"),
     ];
     for vector in vectors {
         let bytes = hex::decode(vector.trim())?;
