@@ -26,6 +26,8 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
 pub const HUB_ID: &str = "hub-test";
+/// The web panel URL the fake hub states in `HubInfo.web_url`.
+pub const WEB_URL: &str = "https://hub.test/panel/";
 
 type Reply<T> = Result<Response<T>, Status>;
 
@@ -140,6 +142,7 @@ impl AuthService for Auth {
             protocol_version: PROTOCOL_VERSION,
             bootstrapped: true,
             password_login: true,
+            web_url: WEB_URL.to_owned(),
             ..v1::HubInfo::default()
         }))
     }

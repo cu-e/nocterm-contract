@@ -39,6 +39,11 @@ message HubInfo {
   repeated OidcProvider oidc_providers = 7;
   // Issuer identifier the client checks in authorization responses (RFC 9207).
   string issuer = 8;
+  // Public absolute URL (`https://…`) of the hub's web panel when the hub serves one, for
+  // example `https://hub.example.org/panel/`; empty when it serves none or a hub predates the
+  // field. Descriptive: a client offers it as a link to open in a browser and does not send
+  // credentials to it or trust it beyond that.
+  string web_url = 9;
 }
 
 message OidcProvider {

@@ -110,6 +110,12 @@ impl HubClient {
         &self.info
     }
 
+    /// The public URL of the hub's web panel, when the hub serves one and states a usable
+    /// `https://` URL (`HubInfo.web_url`, read with `nocterm_hub_proto::web_url_from_wire`).
+    pub fn web_url(&self) -> Option<&str> {
+        nocterm_hub_proto::web_url_from_wire(&self.info)
+    }
+
     pub fn channel(&self) -> Channel {
         self.channel.clone()
     }
