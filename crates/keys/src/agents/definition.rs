@@ -1,6 +1,7 @@
 //! The plaintext of an agent: what the owner configures and only the pool host may read.
 use std::fmt;
 
+use nocterm_hub_model::agents::ProviderKind;
 use nocterm_hub_model::agents::limits::{
     MAX_ENDPOINT_BYTES, MAX_MODEL_ID_BYTES, MAX_MODELS, MAX_NAME_BYTES, MAX_SECRET_BYTES,
     MAX_SYSTEM_PROMPT_BYTES,
@@ -37,7 +38,9 @@ pub enum DefinitionError {
 /// Where the agent reaches its model provider.
 #[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, PartialEq, Eq)]
 pub struct ProviderBlock {
-    /// Provider family, for example `openai_chat`.
+    /// Provider family as text: write [`ProviderKind::as_str`] (`openai_chat`,
+    /// `anthropic_messages`) and read with [`ProviderBlock::provider_kind`]. The sealed format
+    /// keeps any text, so envelopes sealed with the legacy `anthropic` still open.
     pub kind: String,
     /// Base URL; empty means the family default.
     pub endpoint: String,
@@ -74,6 +77,14 @@ pub struct AgentDefinitionV1 {
     pub allowed_hosts: Vec<String>,
     /// SSH targets.
     pub ssh_targets: Vec<SshTarget>,
+}
+
+impl ProviderBlock {
+    /// The provider kind this block names, reading the legacy alias `anthropic` as
+    /// [`ProviderKind::AnthropicMessages`]; `None` for a kind this contract does not name.
+    pub fn provider_kind(&self) -> Option<ProviderKind> {
+        ProviderKind::parse(&self.kind).ok()
+    }
 }
 
 impl fmt::Debug for ProviderBlock {
@@ -256,6 +267,26 @@ mod tests {
         let bytes = definition.encode().unwrap();
         assert_eq!(AgentDefinitionV1::decode(&bytes).unwrap(), definition);
         assert!(!format!("{definition:?}").contains("sk-secret"));
+    }
+
+    #[test]
+    fn the_provider_kind_reads_canonical_and_legacy_text_without_changing_the_bytes() {
+        let mut definition = sample();
+        assert_eq!(
+            definition.provider.provider_kind(),
+            Some(ProviderKind::OpenAiChat)
+        );
+        definition.provider.kind = "anthropic".into();
+        let bytes = definition.encode().unwrap();
+        let opened = AgentDefinitionV1::decode(&bytes).unwrap();
+        assert_eq!(opened.provider.kind, "anthropic");
+        assert_eq!(
+            opened.provider.provider_kind(),
+            Some(ProviderKind::AnthropicMessages)
+        );
+        definition.provider.kind = "custom".into();
+        assert!(definition.encode().is_ok());
+        assert_eq!(definition.provider.provider_kind(), None);
     }
 
     #[test]

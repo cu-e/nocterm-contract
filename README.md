@@ -242,6 +242,12 @@ without a pin for personal agents only, for other scopes only when its operator 
 refuses a seat whose pin disagrees. See
 [ADR 0005](docs/adr/0005-hub-stated-seat-account-keys.md).
 
+Provider kinds and tool names are shared words: editors seal `ProviderKind::as_str`
+(`openai_chat`, `anthropic_messages`) in `ProviderBlock::kind`, and readers use
+`ProviderKind::parse` (or `ProviderBlock::provider_kind`), which also reads the legacy
+`anthropic`. `MANAGED_TOOL_NAMES` lists the tools a managed runner offers, for suggestions and
+hints in a `ToolSelection::Only` list.
+
 ## Relays
 
 `RelayService.Open` carries a byte stream from the client to a TCP target through the hub, and
