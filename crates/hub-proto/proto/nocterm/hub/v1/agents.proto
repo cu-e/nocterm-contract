@@ -314,6 +314,14 @@ message Instance {
   bytes attestation = 10;
   bytes attestation_signature = 11;
   uint64 revision = 12;
+  // Why provisioning failed: a `nocterm_hub_model::agents::ProvisionFailure` code
+  // (`[a-z0-9_]`, at most `limits::MAX_PROVISION_ERROR_CODE_BYTES`) such as `owner_unpinned`,
+  // copied from the host's `InstanceProvisioned.error_code`, or set by the hub itself (for
+  // example `host_unreachable`). Set only when `state` is INSTANCE_STATE_FAILED, empty
+  // otherwise. Empty on a failed instance from a hub or host that predates the field: the
+  // client shows a generic failure. A client reads it with `ProvisionFailure::from_stored`,
+  // which keeps unknown codes and never displays a malformed one.
+  string failure_code = 13;
 }
 
 message ListInstancesRequest {
@@ -525,11 +533,20 @@ message InstanceProvisioned {
   uint64 request_id = 1;
   string instance_id = 2;
   bool ok = 3;
+  // Free text for the host's and the hub's logs; never shown to people, who see
+  // `error_code`.
   string error = 4;
   bytes setup_document = 5;
   // Canonical `HostRunnerAttestation` and its pool signing-key signature.
   bytes attestation = 6;
   bytes attestation_signature = 7;
+  // When `ok` is false: a `nocterm_hub_model::agents::ProvisionFailure` code (`[a-z0-9_]`, at
+  // most `limits::MAX_PROVISION_ERROR_CODE_BYTES`), never host or provider text. Empty when
+  // `ok`. The hub validates it and stores it as `Instance.failure_code`; it stores `unknown`
+  // for an empty or malformed code from a failed provision. A host that predates the field
+  // leaves it empty. Unknown well-formed codes are kept, so a newer host can name a reason an
+  // older hub or client does not know.
+  string error_code = 8;
 }
 
 message StartLease {

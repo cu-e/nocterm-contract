@@ -60,6 +60,8 @@ pub const MAX_AGENT_OUTPUT_TOKENS: usize = 1_000_000;
 pub const MAX_PROBE_MODELS: usize = 256;
 /// Maximum bytes of a provider probe's error code.
 pub const MAX_PROBE_ERROR_CODE_BYTES: usize = 64;
+/// Maximum bytes of a provisioning error code (`ProvisionFailure`).
+pub const MAX_PROVISION_ERROR_CODE_BYTES: usize = 64;
 
 /// One named limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +109,7 @@ limits!(
     MAX_AGENT_OUTPUT_TOKENS,
     MAX_PROBE_MODELS,
     MAX_PROBE_ERROR_CODE_BYTES,
+    MAX_PROVISION_ERROR_CODE_BYTES,
 );
 
 #[cfg(test)]
@@ -121,7 +124,7 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len());
-        assert_eq!(before, 29);
+        assert_eq!(before, 30);
     }
 
     #[test]

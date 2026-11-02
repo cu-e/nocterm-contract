@@ -1,6 +1,7 @@
 //! Vocabulary of managed agents: scopes, listings, resources, typed refusals, the pool key
 //! bundle, the host attestation of a runner setup document, the text of chat ids, the agents
-//! protocol level of a host, the host-to-runner chat access frames and provider probe results.
+//! protocol level of a host, the host-to-runner chat access frames, provider probe results and
+//! provisioning failures.
 //!
 //! Plain data and canonical bytes only: no I/O, no clocks, no randomness. Whatever a hub
 //! displays here is descriptive; the sealed definition (`nocterm-keys::agents`) is what a host
@@ -14,6 +15,7 @@ mod listing;
 mod pin;
 mod probe;
 mod protocol;
+mod provision;
 mod refusal;
 mod resources;
 mod scope;
@@ -32,6 +34,7 @@ pub use protocol::{
     AGENTS_PROTOCOL_PROVIDER_PROBE, AGENTS_PROTOCOL_RUNNING_LEASES, answers_provider_probes,
     opens_definition_v2, reports_running_leases,
 };
+pub use provision::{ProvisionCodeError, ProvisionFailure};
 pub use refusal::{QuotaScope, RefusalReason};
 pub use resources::{ResourceError, ResourceRequest, ScopeLimits};
 pub use scope::{AgentScope, PoolKeys, ScopeError, ScopeKind};
