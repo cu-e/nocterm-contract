@@ -408,6 +408,45 @@ async fn a_probe_reports_reachability_and_models_for_a_chosen_pool() {
 }
 
 #[tokio::test]
+async fn a_draft_probe_sends_the_sealed_envelope_for_the_chosen_pool() {
+    let hub = FakeHub::start_agents().await;
+    *hub.agents.probe.lock().expect("lock") = Some(v1::ProbeResult {
+        ok: true,
+        latency_ms: 90,
+        models: vec!["qwen3-coder".into()],
+        error_code: String::new(),
+    });
+    let client = hub.signed_in_client().await;
+    let (agent, pool) = (AgentId::new(), PoolId::new());
+
+    let probe = client
+        .agents()
+        .probe_draft(agent, pool, AgentScope::Account, 1, vec![7; 32])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        probe.outcome,
+        ProbeOutcome::Ok {
+            models: vec!["qwen3-coder".into()]
+        }
+    );
+    let sent = hub.agents.probes.lock().expect("lock").clone();
+    assert_eq!(sent[0].agent_id, agent.to_string());
+    assert_eq!(sent[0].pool_id, Some(pool.to_string()));
+    let draft = sent[0].draft.clone().expect("a draft");
+    assert_eq!(draft.version, 1);
+    assert_eq!(draft.envelope, vec![7; 32]);
+    assert_eq!(
+        draft
+            .scope
+            .as_ref()
+            .and_then(|s| AgentScope::try_from(s).ok()),
+        Some(AgentScope::Account)
+    );
+}
+
+#[tokio::test]
 async fn a_failed_probe_is_a_result_with_its_code_not_an_error() {
     let hub = FakeHub::start_agents().await;
     *hub.agents.probe.lock().expect("lock") = Some(v1::ProbeResult {
