@@ -502,7 +502,9 @@ message AgentsCapacity {
   // host no longer has. 2 (`AGENTS_PROTOCOL_DEFINITION_V2`): the host also opens definition
   // envelopes of format version 2; a hub provisions a format 2 envelope (its first byte, see
   // `sealed_definition_version`) only on such hosts. 3 (`AGENTS_PROTOCOL_PROVIDER_PROBE`): the
-  // host answers `probe_provider`. Levels only grow; a hub treats a level above the one it
+  // host answers `probe_provider`. 4 (`AGENTS_PROTOCOL_STATED_ACCOUNT_KEY`): the host reads
+  // `account_public_key` of `ProvisionInstance` and `ProbeProvider` under the rules of ADR 0005;
+  // a hub sends the key only to such hosts. Levels only grow; a hub treats a level above the one it
   // knows as the highest it knows.
   uint32 agents_protocol = 8;
 }
@@ -527,6 +529,22 @@ message ProvisionInstance {
   uint64 definition_version = 8;
   bytes sealed_definition = 9;
   AgentScope scope = 10;
+  // The 32-byte X25519 keyset public key the hub stores for `account_id`, or empty when the hub
+  // states none. Sent only to hosts whose `agents_protocol` is at least
+  // `AGENTS_PROTOCOL_STATED_ACCOUNT_KEY` (4); an older host ignores it and keeps requiring an
+  // operator pin. A statement of the hub, not a pin (ADR 0005):
+  // - the runner setup binds `account_id` and this key's fingerprint, and a device enrols a
+  //   runner only for its own account id and keyset key, so a substituted key yields a runner
+  //   no device of the real account enrols;
+  // - SCOPE_KIND_ACCOUNT: the host may use the key as the owner key that opens the definition
+  //   and as the runner's account key without a pin; the definition must open under it, and
+  //   the hub cannot seal an envelope as the real owner;
+  // - SCOPE_KIND_ORG and SCOPE_KIND_INSTANCE: a hub-stated key could bind a runner holding the
+  //   scope's secrets to a key the hub holds, so a host uses it only when its operator opted in
+  //   with a host setting, and otherwise requires a pin (`account_unpinned`);
+  // - a pin for the account that differs from this key is refused in every scope
+  //   (`account_key_mismatch`).
+  bytes account_public_key = 11;
 }
 
 message InstanceProvisioned {
@@ -589,6 +607,12 @@ message ProbeProvider {
   uint64 definition_version = 6;
   // The pool's envelope, at most `limits::MAX_ENVELOPE_BYTES`.
   bytes sealed_definition = 7;
+  // The 32-byte X25519 keyset public key the hub stores for `account_id`, or empty. Sent only
+  // to hosts at `AGENTS_PROTOCOL_STATED_ACCOUNT_KEY` (4) or above, under the same rules as
+  // `ProvisionInstance.account_public_key` (ADR 0005): a host opens a personal agent's envelope
+  // under it without a pin, uses it for other scopes only when its operator opted in, and
+  // answers `definition_unavailable` when a pin for the account disagrees with it.
+  bytes account_public_key = 8;
 }
 
 // A host's answer to `ProbeProvider`; the hub validates and forwards `result` unchanged.

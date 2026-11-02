@@ -233,6 +233,15 @@ definition it sealed to the pool but has not saved, so a panel can list the prov
 while an agent is still being created. `UsageReport.in_use` reports a scope's current use beside its
 limits. See [ADR 0004](docs/adr/0004-agent-definition-v2-history-probe.md).
 
+A failed seat carries a typed reason: a host reports a `ProvisionFailure` code in
+`InstanceProvisioned.error_code`, the hub keeps it in `Instance.failure_code`, and a client reads
+it with `instance_failure_from_wire` and shows `ProvisionFailure::describe`, which names who must
+act. To hosts at `AGENTS_PROTOCOL_STATED_ACCOUNT_KEY` the hub states the seat account's keyset
+key (`ProvisionInstance.account_public_key`, `ProbeProvider.account_public_key`); a host uses it
+without a pin for personal agents only, for other scopes only when its operator opts in, and
+refuses a seat whose pin disagrees. See
+[ADR 0005](docs/adr/0005-hub-stated-seat-account-keys.md).
+
 ## Relays
 
 `RelayService.Open` carries a byte stream from the client to a TCP target through the hub, and

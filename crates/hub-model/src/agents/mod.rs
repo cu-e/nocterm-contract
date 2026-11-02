@@ -31,8 +31,9 @@ pub use pin::{PoolKeyChanged, PoolTrust, check_pool_keys};
 pub use probe::{PROVIDER_PROBE_TIMEOUT_MS, ProbeError, ProbeFailure, ProbeOutcome, ProviderProbe};
 pub use protocol::{
     AGENTS_PROTOCOL_CURRENT, AGENTS_PROTOCOL_DEFINITION_V2, AGENTS_PROTOCOL_LEGACY,
-    AGENTS_PROTOCOL_PROVIDER_PROBE, AGENTS_PROTOCOL_RUNNING_LEASES, answers_provider_probes,
-    opens_definition_v2, reports_running_leases,
+    AGENTS_PROTOCOL_PROVIDER_PROBE, AGENTS_PROTOCOL_RUNNING_LEASES,
+    AGENTS_PROTOCOL_STATED_ACCOUNT_KEY, answers_provider_probes, opens_definition_v2,
+    reads_stated_account_key, reports_running_leases,
 };
 pub use provision::{ProvisionCodeError, ProvisionFailure};
 pub use refusal::{QuotaScope, RefusalReason};

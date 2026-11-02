@@ -24,6 +24,7 @@ mod cloud_secrets;
 mod convert;
 mod probe;
 mod provision;
+mod stated_key;
 
 pub use agents::{
     WireError, availability_from_wire, instance_role_from_wire, instance_role_to_wire,
@@ -31,6 +32,7 @@ pub use agents::{
 };
 
 pub use provision::{instance_failure_from_wire, provisioned_failure_from_wire};
+pub use stated_key::{probe_account_key_from_wire, provision_account_key_from_wire};
 
 pub use convert::{assurance_from_wire, assurance_to_wire, role_from_wire, role_to_wire};
 

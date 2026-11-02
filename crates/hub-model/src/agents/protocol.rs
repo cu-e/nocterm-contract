@@ -20,9 +20,16 @@ pub const AGENTS_PROTOCOL_DEFINITION_V2: u32 = 2;
 /// only to hosts at this level or above.
 pub const AGENTS_PROTOCOL_PROVIDER_PROBE: u32 = 3;
 
+/// The host reads the hub-stated seat account key (`ProvisionInstance.account_public_key`,
+/// `ProbeProvider.account_public_key`) under the rules of ADR 0005: it may use it without a pin
+/// for a personal agent, for other scopes only when its operator opted in, and refuses a seat
+/// whose pin disagrees with it (`account_key_mismatch`). A hub sends the key only to hosts at
+/// this level or above; a host below ignores the field and requires a pin.
+pub const AGENTS_PROTOCOL_STATED_ACCOUNT_KEY: u32 = 4;
+
 /// The highest level this contract defines. A host states the level it implements, which is
 /// this one only when it implements every level up to it.
-pub const AGENTS_PROTOCOL_CURRENT: u32 = AGENTS_PROTOCOL_PROVIDER_PROBE;
+pub const AGENTS_PROTOCOL_CURRENT: u32 = AGENTS_PROTOCOL_STATED_ACCOUNT_KEY;
 
 /// Whether a host at `level` reports the leases it runs, so that their absence from
 /// `running_leases` means they stopped.
@@ -38,6 +45,11 @@ pub fn opens_definition_v2(level: u32) -> bool {
 /// Whether a host at `level` answers provider probes.
 pub fn answers_provider_probes(level: u32) -> bool {
     level >= AGENTS_PROTOCOL_PROVIDER_PROBE
+}
+
+/// Whether a hub may state the seat account key to a host at `level`.
+pub fn reads_stated_account_key(level: u32) -> bool {
+    level >= AGENTS_PROTOCOL_STATED_ACCOUNT_KEY
 }
 
 #[cfg(test)]
@@ -60,5 +72,14 @@ mod tests {
         assert!(answers_provider_probes(AGENTS_PROTOCOL_PROVIDER_PROBE));
         assert!(answers_provider_probes(AGENTS_PROTOCOL_CURRENT + 1));
         assert!(reports_running_leases(AGENTS_PROTOCOL_PROVIDER_PROBE));
+    }
+
+    #[test]
+    fn only_hosts_at_their_level_get_a_stated_account_key() {
+        assert!(!reads_stated_account_key(AGENTS_PROTOCOL_PROVIDER_PROBE));
+        assert!(reads_stated_account_key(AGENTS_PROTOCOL_STATED_ACCOUNT_KEY));
+        assert!(reads_stated_account_key(AGENTS_PROTOCOL_CURRENT + 1));
+        assert!(answers_provider_probes(AGENTS_PROTOCOL_STATED_ACCOUNT_KEY));
+        assert_eq!(AGENTS_PROTOCOL_CURRENT, AGENTS_PROTOCOL_STATED_ACCOUNT_KEY);
     }
 }
