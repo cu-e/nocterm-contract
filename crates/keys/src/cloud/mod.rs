@@ -8,6 +8,8 @@
 //! admission, after the journal has looked up the original idempotent receipt.
 
 mod catalog;
+mod checkpoint;
+pub use checkpoint::{CheckpointKey, CheckpointKeyError, MAX_CHECKPOINT_PLAINTEXT_BYTES};
 mod head;
 pub use head::{
     HeadCryptoError, open_head_query, open_head_witness, seal_head_query, seal_head_witness,

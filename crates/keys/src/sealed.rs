@@ -88,7 +88,9 @@ impl fmt::Debug for PublicKey {
 }
 
 /// The X25519 key pair of an account: its public half is published, its private half is
-/// stored on the hub sealed by the account key.
+/// stored on the hub sealed by the account key. A clone is another zeroizing copy, for a
+/// device that hands the unlocked pair to a long-lived owner.
+#[derive(Clone)]
 pub struct AccountKeyPair {
     secret: StaticSecret,
     public: PublicKey,
