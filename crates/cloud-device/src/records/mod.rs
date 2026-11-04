@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 /// Authentication tag and framing a sealed object adds to its plaintext.
 const SEAL_OVERHEAD: usize = 42;
 
-/// One object as `StoreService.GetObject` returned it. Plain data; [`StoredObject::open`] checks
+/// One object as `StoreService.GetObject` returned it. Plain data; its `open` checks
 /// it names the expected selector, is live and has the expected version before opening.
 #[derive(Clone, Copy, Debug)]
 pub struct StoredObject<'a> {
