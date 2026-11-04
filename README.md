@@ -9,10 +9,10 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 | `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages |
 | `nocterm-hub-proto` | protobuf schema (`proto/`) compiled to prost messages, plus its descriptor set |
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
-| `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals |
-| `nocterm-cloud-device` | Cloud chats on a device without native storage (the web panel): the account's private Cloud records (hub trust, trusted runners, wrapped chat keys, stored chat key grants), hub trust and capability checks, two-step device-signed head probes and commands (prompt, stop, inference grant, approval answer) sealed to the pinned runner, verified chat replay with gap recovery, a neutral transcript and new-chat building blocks ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md)) |
+| `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`) |
+| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes, create chats, lease an own runner's provider key), a resumable reader with sealed checkpoints and the freshness levels Current, Unconfirmed and Withheld, the shared transcript with deltas, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md)) |
 | `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants |
-| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `accountKeyFingerprint`), and Cloud chats as a browser device over `nocterm-cloud-device` (`WebCloud`, `WebChat`, `WebProbe`, `WebCommand`, `WebNewChat`: hub trust, capability proof, trusted runners, device-signed probes and commands the page signs with WebCrypto, verified replay into a JSON transcript, new chats and their collections; keys stay in wasm) |
+| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
 
 The protobuf schema is compiled with [protox](https://crates.io/crates/protox), so no system
@@ -665,3 +665,17 @@ permission. Expired access can still be observed for explicit refresh planning;
 a locally retired or refresh-expired source refuses. Heartbeat/status operations
 still recheck their captured source after awaits; no automatic refresh or device
 session authority is added to a runner.
+
+### Cloud device flows
+
+`nocterm-cloud-device` is the one device implementation of Cloud chats
+([ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md)). Its flows hand the
+client typed effects (`flow::Effect`: sign, Store reads and writes, capability proof, head
+probe, replay, watch, publish, start a seat, list seats, runner status) and take the answers,
+so the client keeps only the network, storage and the device key. A `Sign` effect carries a
+`flow::SignRequest` that only the core makes; `HubClient::sign_cloud` signs nothing else.
+`reader::ChatReader` resumes from a sealed device checkpoint (version 1; the key is
+`nocterm_keys::cloud::CheckpointKey`, derived from the account key, purpose 21) and reports
+`Current`, `Unconfirmed` (the runner did not answer: a verified prefix) or `Withheld` (the hub's
+replay ends below what the runner witnessed). Recorded sessions for the panel's tests are in
+`fixtures/cloud-device-v1/web-session.json`.
