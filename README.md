@@ -695,5 +695,7 @@ so the client keeps only the network, storage and the device key. A `Sign` effec
 `reader::ChatReader` resumes from a sealed device checkpoint (version 1; the key is
 `nocterm_keys::cloud::CheckpointKey`, derived from the account key, purpose 21) and reports
 `Current`, `Unconfirmed` (the runner did not answer: a verified prefix) or `Withheld` (the hub's
-replay ends below what the runner witnessed). Recorded sessions for the panel's tests are in
+replay ends below what the runner witnessed). `provider::ProviderLease` reports each lease with
+the provider and the one model of the leased key, which a prompt to the own-runner chat names
+(`ModelSelection::own`). Recorded sessions for the panel's tests are in
 `fixtures/cloud-device-v1/web-session.json`.

@@ -10,7 +10,8 @@
 //! 3. `IssueGrant(Provider)` carries the capsule under one grant id for the flow's life, with the
 //!    lease expiry as its epoch, so each renewal replaces the previous capsule. It is published
 //!    with `PublishOne`; an unknown outcome is retried with the same bytes.
-//! 4. After the receipt the flow reports [`Lease`] and waits until half the term has passed.
+//! 4. After the receipt the flow reports [`Lease`] (with the provider and model the key belongs
+//!    to, which an own-runner prompt names) and waits until half the term has passed.
 use crate::{
     CloudDeviceError, DeviceIdentity,
     command::{CommandAction, SealedCommand, UnsignedCommand},
@@ -37,9 +38,13 @@ pub const LEASE_RETRY_MS: i64 = 2_000;
 const MAX_BOOT_BYTES: usize = 580;
 
 /// A lease the hub delivered to the runner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lease {
     pub grant: [u8; 16],
+    /// The provider id of the leased key (`ModelSelection::own` of a prompt names it).
+    pub provider: String,
+    /// The one model the lease allows.
+    pub model: String,
     pub expires_at_ms: i64,
     /// When the flow renews it.
     pub renew_at_ms: i64,
@@ -118,17 +123,24 @@ pub(crate) struct Leasing {
     due_at: Option<i64>,
 }
 
-/// The renewal in progress and the lease expiry it carries.
+/// The renewal in progress and the terms it carries.
 #[derive(Debug)]
 enum Renewal {
     Unsigned {
         command: Box<UnsignedCommand>,
-        expires_at_ms: i64,
+        terms: Terms,
     },
     Sealed {
         sealed: Box<SealedCommand>,
-        expires_at_ms: i64,
+        terms: Terms,
     },
+}
+/// What one renewal leases: the key's provider and model, until `expires_at_ms`.
+#[derive(Debug)]
+struct Terms {
+    provider: String,
+    model: String,
+    expires_at_ms: i64,
 }
 type LeaseIo = Io<Purpose, Lease>;
 
@@ -203,6 +215,11 @@ impl Leasing {
         )?;
         let capsule = seal_provider_lease(keys.pair(), boot, &context, record.expose(), now_ms)?;
         let models = [CloudTextId::new(record.model())?];
+        let terms = Terms {
+            provider: record.provider().to_owned(),
+            model: record.model().to_owned(),
+            expires_at_ms,
+        };
         drop(record);
         let command = UnsignedCommand::prepare(
             &self.selector,
@@ -223,7 +240,7 @@ impl Leasing {
         io.issue(Purpose::Sign, Effect::Sign(command.sign_request()?));
         self.renewal = Some(Renewal::Unsigned {
             command: Box::new(command),
-            expires_at_ms,
+            terms,
         });
         Ok(())
     }
@@ -231,11 +248,7 @@ impl Leasing {
         let Input::Signature(signature) = input else {
             return Err(failed(&input));
         };
-        let Some(Renewal::Unsigned {
-            command,
-            expires_at_ms,
-        }) = self.renewal.take()
-        else {
+        let Some(Renewal::Unsigned { command, terms }) = self.renewal.take() else {
             return Err(CloudDeviceError::Protocol);
         };
         let sealed = command.seal(
@@ -244,12 +257,12 @@ impl Leasing {
             self.session.capabilities(),
         )?;
         io.issue(
-            Purpose::Publish(expires_at_ms),
+            Purpose::Publish(terms.expires_at_ms),
             Effect::Publish(sealed.publication().clone()),
         );
         self.renewal = Some(Renewal::Sealed {
             sealed: Box::new(sealed),
-            expires_at_ms,
+            terms,
         });
         Ok(())
     }
@@ -260,7 +273,7 @@ impl Leasing {
         input: Input,
         now_ms: i64,
     ) -> Result<(), CloudDeviceError> {
-        let Some(Renewal::Sealed { sealed, .. }) = &self.renewal else {
+        let Some(Renewal::Sealed { sealed, terms }) = &self.renewal else {
             return Err(CloudDeviceError::Protocol);
         };
         let deadline = sealed.accept_before_ms().min(expires_at_ms);
@@ -274,13 +287,16 @@ impl Leasing {
                 .is_receipt(&publication_id, cursor, &ciphertext_sha256) =>
             {
                 let renew_at_ms = now_ms.saturating_add((expires_at_ms - now_ms).max(0) / 2);
-                self.renewal = None;
-                self.due_at = Some(renew_at_ms);
-                io.output(Lease {
+                let lease = Lease {
                     grant: self.grant,
+                    provider: terms.provider.clone(),
+                    model: terms.model.clone(),
                     expires_at_ms,
                     renew_at_ms,
-                });
+                };
+                self.renewal = None;
+                self.due_at = Some(renew_at_ms);
+                io.output(lease);
             }
             // Nothing came back: the same bytes again while the lease can still arrive in time,
             // otherwise a new lease.
@@ -370,13 +386,9 @@ impl Machine for Leasing {
         }
         self.due_at = None;
         // A renewal whose outcome is unknown is retried with the same bytes.
-        if let Some(Renewal::Sealed {
-            sealed,
-            expires_at_ms,
-        }) = &self.renewal
-        {
+        if let Some(Renewal::Sealed { sealed, terms }) = &self.renewal {
             io.issue(
-                Purpose::Publish(*expires_at_ms),
+                Purpose::Publish(terms.expires_at_ms),
                 Effect::Publish(sealed.publication().clone()),
             );
         } else {

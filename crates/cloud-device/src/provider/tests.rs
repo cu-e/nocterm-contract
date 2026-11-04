@@ -108,6 +108,11 @@ fn the_lease_capsule_opens_with_the_runners_boot_key_and_renews_at_half_term() {
     let renew = NOW + LEASE_TERM_MS / 2;
     assert!(matches!(ended, Ended::Idle(Some(at)) if at == renew));
     assert_eq!(leases[0].expires_at_ms, NOW + LEASE_TERM_MS);
+    assert_eq!(
+        (leases[0].provider.as_str(), leases[0].model.as_str()),
+        ("openai", "gpt-own"),
+        "the lease names the key's provider and model for the prompt"
+    );
     assert_eq!(leases[0].renew_at_ms, renew);
     let (grant, secret) = opened_grant(&hub, &boot, NOW);
     assert_eq!(secret, SECRET);
