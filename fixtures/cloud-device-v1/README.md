@@ -18,22 +18,30 @@ must reproduce every output byte for byte:
 
 Changing any of these bytes is a format change for every client.
 
-`web-session.json` is a recorded browser session over the device flows (ADR 0007) for the
-bindings (`nocterm-keys-wasm` `cloud`) and the web panel's tests of the real wasm module. It
-belongs to the panel's public test keyset (`acc-1`, login password `correct horse battery` of
-`alice` on `hub-1`) and holds what an effect executor needs to replay the session without any
-key but the device seed: the Store rows (`collections` with their wrapped keys and `objects`:
-two hub-trust records, one for another hub; the registry with one seeded runner; the chat's
-wrapped key), the capability proof answering the seeded nonce (`capabilities`, by nonce),
-the runner's sealed witnesses (`probeReplies`, by probe id), and the chat's six sealed event
-records (the device's prompt, run status, assistant text, the public `approval` vector of
-`cloud-events-v1`, usage and waiting status) with one `later` record that arrives by Watch.
+`web-session.json` is a recorded browser session over the device flows (ADR 0007, ADR 0008)
+for the bindings (`nocterm-keys-wasm` `cloud`) and the web panel's tests of the real wasm
+module. It belongs to the panel's public test keyset (`acc-1`, login password `correct horse
+battery` of `alice` on `hub-1`) and holds what an effect executor needs to replay the session
+without any key but the device seed: the Store rows (`collections` with their wrapped keys and
+`objects`: two hub-trust records, one for another hub; the registry with one seeded runner; the
+chat's wrapped key; the own agent `ag-own`'s provider key in `agent_provider_keys`), the
+capability proof answering the seeded nonce (`capabilities`, by nonce; the hub has the chat
+directory, bit 256), the runner's sealed witnesses (`probeReplies`, by probe id), the chat's six
+sealed event records (the device's prompt, run status, assistant text, the public `approval`
+vector of `cloud-events-v1`, usage and waiting status) with one `later` record that arrives by
+Watch, the runner's directory (`directory.records`: the signed and sealed summary at the
+recorded head, of the managed agent `directory.agentId`; `directory.later`: the summary after
+the later record, which arrives by a directory Watch), and `own`: the runner's signed boot as
+`RunnerStatus` returns it (current for 29 minutes from `now`) with the provider and model of
+the own agent's key.
 
 Probe ids and the capability nonce come from `nonceSeed` (a `testing` build's
 `CloudDevice.connectSeeded`), so a replay must start the flows in the recorded `order`:
-`connectSeeded(rawHub, null, nonceSeed)`, `listChats()`, `openChat(chat.chatId)`, then
-`openChat(chat.chatId, checkpoint)` with the first open's checkpoint. A probe whose id has no
-recorded reply is answered `unavailable` (a sleeping seat: the read is `unconfirmed`).
-Collection, account-material and chat keys are random and the file is regenerated whole
-(`cargo test -p nocterm-keys-wasm write_web_session_fixture -- --ignored`); the panel then
-takes a copy. Nothing in it is a secret.
+`connectSeeded(rawHub, null, nonceSeed)`, `listChats({watch: true})`, `openChat(chat.chatId)`,
+`openChat(chat.chatId, checkpoint)` with the first open's checkpoint, then
+`listChats({directories: [the first listing's directory checkpoint], watch: true})`. A probe
+whose id has no recorded reply is answered `unavailable` (a sleeping seat: the read is
+`unconfirmed`). A provider lease (`lease(chat, own.agentId)`) draws no recorded nonce and may run
+at any point. Collection, account-material, chat and boot keys are random and the file is
+regenerated whole (`cargo test -p nocterm-keys-wasm write_web_session_fixture -- --ignored`);
+the panel then takes a copy. Nothing in it is a secret.

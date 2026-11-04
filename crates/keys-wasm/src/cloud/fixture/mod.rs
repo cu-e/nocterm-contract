@@ -1,9 +1,11 @@
 //! A recorded browser session over the device flows, of the account the panel's own fixtures
 //! unlock (`acc-1`, login password `correct horse battery` of `alice` on `hub-1`).
-//! `fixtures/cloud-device-v1/web-session.json` holds the output; the panel replays it against
-//! the real wasm module (a `testing` build): `connectSeeded(rawHub, null, nonceSeed)`, then
-//! `listChats()`, then `openChat(chat.chatId)`, then `openChat(chat.chatId, checkpoint)`, in this
-//! order, so every probe id is one with a recorded reply. Regenerate with
+//! `fixtures/cloud-device-v1/web-session.json` holds the output (its README lists the parts);
+//! the panel replays it against the real wasm module: `connectSeeded(rawHub, null, nonceSeed)`,
+//! then `listChats({watch: true})`, then `openChat(chat.chatId)`, then `openChat(chat.chatId,
+//! checkpoint)`, then `listChats({directories: [the first listing's directory checkpoint],
+//! watch: true})`, in this order, so every probe id is one with a recorded reply. The hub has
+//! the chat directory (bit 256); a provider lease needs no recorded reply. Regenerate with
 //! `cargo test -p nocterm-keys-wasm write_web_session_fixture -- --ignored` (fresh random keys
 //! each time: copy the file into the panel afterwards).
 #![allow(
@@ -17,29 +19,19 @@ use nocterm_cloud_device::records::{
     TrustedRunner, account_collection_id,
 };
 use nocterm_hub_model::cloud::{
-    CloudTextId, CommandIssuer, CommandKind, RecordContext, RecordKind, RecordPosition,
-    RunCoordinate, RunnerCoordinate,
+    CloudTextId, RunCoordinate, RunnerCoordinate,
     capabilities::{
-        CLOUD_FEATURE_CHAT_KEY_MATERIAL, CLOUD_FEATURE_FRESH_HEAD, CLOUD_FEATURE_UNARY_PUBLISH,
-        CapabilitiesClaim, CapabilityLimits, CapabilityWindow,
-    },
-    events::{
-        AcceptedCommand, AcceptedPrompt, CloudEvent, CloudEventPayload, CloudRunStatus,
-        CloudTextChannel, CloudUsage,
+        CLOUD_FEATURE_CHAT_DIRECTORY, CLOUD_FEATURE_CHAT_KEY_MATERIAL, CLOUD_FEATURE_FRESH_HEAD,
+        CLOUD_FEATURE_UNARY_PUBLISH, CapabilitiesClaim, CapabilityLimits, CapabilityWindow,
     },
     head::{
         CatalogHeadPage, ChatHead, HeadProbeScope, HeadRecordAnchor, HeadTarget, HeadValue,
         HeadWitness, ReceiptOutcome,
     },
-    payload::{ModelSelection, PromptPart},
-    relay::RelayBinding,
 };
 use nocterm_keys::{
     CollectionKey, DeviceKey,
-    cloud::{
-        ChatKey, RunnerEncryptionKey, RunnerSigningKey, open_head_query, seal_event,
-        seal_head_witness,
-    },
+    cloud::{ChatKey, RunnerEncryptionKey, RunnerSigningKey, open_head_query, seal_head_witness},
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -47,11 +39,15 @@ use sha2::{Digest, Sha256};
 use super::{
     CloudDevice, CloudResult, WebChat, WebFlow,
     types::{
-        DeviceInput, EffectInput, FlowOutput, FlowStep, StreamFrame, WireCollection, WireEffect,
-        WireObject,
+        DeviceInput, EffectInput, FlowOutput, FlowStep, ListOptions, StreamFrame, WireCollection,
+        WireEffect, WireObject,
     },
 };
 use crate::WebAccount;
+
+mod chat;
+mod directory;
+pub(super) mod lease;
 
 pub(super) const NOW: i64 = 1_800_000_000_000;
 pub(super) const NOW_MS: f64 = 1_800_000_000_000.0;
@@ -186,11 +182,20 @@ pub(super) fn drive(
     }
 }
 
-/// The live hub of the generator: Store rows, the runner's real keys and the chat stream.
-pub(super) struct Recorder {
+/// What a page's executor answers from recorded rows alone: the Store rows, the chat stream,
+/// the runner's directory and its signed boot status.
+#[derive(Default)]
+pub(super) struct Rows {
     pub(super) collections: Vec<(WireCollection, Vec<u8>)>,
     pub(super) objects: Vec<WireObject>,
     pub(super) records: Vec<Value>,
+    pub(super) directory: Vec<Value>,
+    pub(super) runner_status: Vec<u8>,
+}
+
+/// The live hub of the generator: Store rows, the runner's real keys and the chat stream.
+pub(super) struct Recorder {
+    pub(super) rows: Rows,
     pub(super) head: Option<HeadRecordAnchor>,
     pub(super) capabilities: Map<String, Value>,
     pub(super) replies: Map<String, Value>,
@@ -199,7 +204,7 @@ impl Recorder {
     fn collection(&mut self, account: &WebAccount, id: &str, kind: &str) -> CollectionKey {
         let key = CollectionKey::generate().unwrap();
         let wrapped = key.seal_for(&account.account, id).unwrap();
-        self.collections.push((
+        self.rows.collections.push((
             WireCollection {
                 collection_id: id.to_owned(),
                 kind: kind.to_owned(),
@@ -211,7 +216,7 @@ impl Recorder {
         key
     }
     fn object(&mut self, collection: &str, object: &str, kind: &str, ciphertext: Vec<u8>) {
-        self.objects.push(WireObject {
+        self.rows.objects.push(WireObject {
             collection_id: collection.to_owned(),
             object_id: object.to_owned(),
             kind: kind.to_owned(),
@@ -288,18 +293,20 @@ impl Hub for Recorder {
                 ciphertext,
                 ..
             } => Answer::Input(self.probe(scope, probe_id, ciphertext)),
-            effect => store_answer(&self.collections, &self.objects, &self.records, effect),
+            effect => store_answer(&self.rows, effect),
         }
     }
 }
 
 /// Every answer a page derives from recorded rows alone (all but capabilities and probes).
-pub(super) fn store_answer(
-    collections: &[(WireCollection, Vec<u8>)],
-    objects: &[WireObject],
-    records: &[Value],
-    effect: &WireEffect,
-) -> Answer {
+pub(super) fn store_answer(rows: &Rows, effect: &WireEffect) -> Answer {
+    let Rows {
+        collections,
+        objects,
+        records,
+        directory,
+        runner_status,
+    } = rows;
     let failed = |failure: &str| {
         Answer::Input(EffectInput::Failed {
             failure: failure.to_owned(),
@@ -340,7 +347,18 @@ pub(super) fn store_answer(
                 || failed("not_found"),
                 |o| Answer::Input(EffectInput::Object { object: o.clone() }),
             ),
-        WireEffect::Replay { after_cursor, .. } => Answer::Frames(replay(records, *after_cursor)),
+        WireEffect::Replay {
+            selector,
+            after_cursor,
+            ..
+        } => Answer::Frames(replay(
+            if selector.directory {
+                directory
+            } else {
+                records
+            },
+            *after_cursor,
+        )),
         WireEffect::Watch { .. } => Answer::Hold,
         WireEffect::Publish { publication, .. } => Answer::Input(EffectInput::Receipt {
             publication_id: publication.publication_id.clone(),
@@ -350,6 +368,11 @@ pub(super) fn store_answer(
         WireEffect::ListInstances => Answer::Input(EffectInput::Instances {
             instances: Vec::new(),
         }),
+        WireEffect::RunnerStatus { .. } if !runner_status.is_empty() => {
+            Answer::Input(EffectInput::RunnerStatus {
+                signed_status: runner_status.clone(),
+            })
+        }
         _ => failed("refused"),
     }
 }
@@ -395,7 +418,8 @@ fn capability_proof(nonce: [u8; 16]) -> (Vec<u8>, Vec<u8>) {
             features: CapabilityLimits::v1().features
                 | CLOUD_FEATURE_FRESH_HEAD
                 | CLOUD_FEATURE_UNARY_PUBLISH
-                | CLOUD_FEATURE_CHAT_KEY_MATERIAL,
+                | CLOUD_FEATURE_CHAT_KEY_MATERIAL
+                | CLOUD_FEATURE_CHAT_DIRECTORY,
             ..CapabilityLimits::v1()
         },
         nonce,
@@ -408,130 +432,6 @@ fn capability_proof(nonce: [u8; 16]) -> (Vec<u8>, Vec<u8>) {
     let bytes = claim.canonical_bytes().unwrap();
     let signature = authority.sign(&bytes).to_vec();
     (bytes, signature)
-}
-
-/// The chat's events: the device's prompt, the run starting, the assistant's text, a tool call
-/// waiting for approval (the public `approval` vector), usage, the waiting status, and one later
-/// line of text that arrives by Watch.
-fn events(at: u64) -> Vec<Vec<u8>> {
-    let issuer = CommandIssuer {
-        device_id: CloudTextId::new(DEVICE_ID).unwrap(),
-        signing_key: DeviceKey::from_seed(&DEVICE_SEED).public_key(),
-        access_token_digest: Sha256::digest(ACCESS_TOKEN.as_bytes()).into(),
-    };
-    let model = ModelSelection {
-        provider: CloudTextId::new("managed").unwrap(),
-        model: CloudTextId::new("gpt-5-mini").unwrap(),
-        pricing_policy: CloudTextId::new("managed-v1").unwrap(),
-    };
-    let event = |revision: u64, payload: CloudEventPayload<'static>| {
-        CloudEvent {
-            control_revision: revision,
-            timestamp_ms: at + revision * 1_000,
-            payload,
-        }
-        .canonical_bytes()
-        .unwrap()
-    };
-    let approval_bytes =
-        hex::decode(include_str!("../../../../fixtures/cloud-events-v1/approval.hex").trim())
-            .unwrap();
-    let mut approval = CloudEvent::from_canonical_bytes(&approval_bytes).unwrap();
-    approval.control_revision = 4;
-    approval.timestamp_ms = at + 4_000;
-    let text = |revision, step, text| {
-        event(
-            revision,
-            CloudEventPayload::Text {
-                run: RUN,
-                step: Some([step; 16]),
-                channel: CloudTextChannel::Assistant,
-                text,
-            },
-        )
-    };
-    let prompt = CloudEventPayload::PromptAccepted {
-        command: AcceptedCommand {
-            id: [0x11; 16],
-            kind: CommandKind::SubmitPrompt,
-            signed_message_digest: [0x12; 32],
-            issuer,
-            expected_control_revision: 0,
-        },
-        run: RUN,
-        prompt: Box::new(AcceptedPrompt {
-            content: vec![PromptPart::Text(PROMPT)],
-            model,
-            target: None,
-            existing_session: None,
-        }),
-    };
-    let usage = CloudUsage {
-        input_tokens: Some(812),
-        output_tokens: Some(64),
-        total_tokens: Some(876),
-        cached_input_tokens: None,
-        thought_tokens: None,
-        cost_micros: Some(1_250),
-    };
-    let status = |status| CloudEventPayload::Status { run: RUN, status };
-    vec![
-        event(1, prompt),
-        event(2, status(CloudRunStatus::Running)),
-        text(3, 0x31, ANSWER),
-        approval.canonical_bytes().unwrap(),
-        event(5, CloudEventPayload::Usage { run: RUN, usage }),
-        event(6, status(CloudRunStatus::WaitingApproval)),
-        text(7, 0x32, LATER),
-    ]
-}
-
-/// The sealed records as the runner publishes them.
-fn records(selector: &ChatSelector, key: &ChatKey) -> Vec<(Value, HeadRecordAnchor)> {
-    let signer = RunnerSigningKey::from_seed(&RUNNER_SIGNING_SEED);
-    let bodies = events(u64::try_from(NOW - 600_000).unwrap());
-    bodies
-        .iter()
-        .enumerate()
-        .map(|(index, body)| {
-            let sequence = u64::try_from(index + 1).unwrap();
-            let tag = u8::try_from(sequence).unwrap();
-            let position = RecordPosition {
-                writer_epoch: 1,
-                sequence,
-                journal_sequence: sequence,
-                revision: sequence,
-            };
-            let context = RecordContext::new(
-                selector.coordinate().unwrap(),
-                position,
-                [tag; 16],
-                Some(RUN),
-            )
-            .unwrap();
-            let sealed = seal_event(key, &signer, context.clone(), body).unwrap();
-            let digest: [u8; 32] = Sha256::digest(&sealed).into();
-            let anchor = HeadRecordAnchor {
-                kind: RecordKind::Event,
-                position: context.position(),
-                id: context.id(),
-                run: context.run(),
-                ciphertext_digest: digest,
-            };
-            let record = json!({
-                "publicationId": hex::encode([0xa0 + tag; 16]),
-                "binding": hex::encode(RelayBinding::event(context).canonical_bytes().unwrap()),
-                "totalBytes": sealed.len(),
-                "ciphertextSha256": hex::encode(digest),
-                "cursor": sequence,
-                "originAccountId": ACCOUNT,
-                "originSigningKey": hex::encode(RUNNER_PROOF),
-                "originRunnerId": hex::encode(RUNNER_ID),
-                "data": hex::encode(&sealed),
-            });
-            (record, anchor)
-        })
-        .collect()
 }
 
 /// The account's Store rows: two hub-trust records (one for another hub), the registry and
@@ -604,6 +504,7 @@ fn store(recorder: &mut Recorder, account: &WebAccount, chat_key: &ChatKey) -> C
 
 fn rows_json(recorder: &Recorder) -> (Vec<Value>, Vec<Value>) {
     let collections = recorder
+        .rows
         .collections
         .iter()
         .map(|(c, wrapped)| {
@@ -614,6 +515,7 @@ fn rows_json(recorder: &Recorder) -> (Vec<Value>, Vec<Value>) {
         })
         .collect();
     let objects = recorder
+        .rows
         .objects
         .iter()
         .map(|o| {
@@ -627,34 +529,39 @@ fn rows_json(recorder: &Recorder) -> (Vec<Value>, Vec<Value>) {
     (collections, objects)
 }
 
-/// Runs the documented order against the live recorder and returns the session file.
-fn generate() -> Value {
-    let account = account();
-    let chat_key = ChatKey::generate().unwrap();
-    let mut recorder = Recorder {
-        collections: Vec::new(),
-        objects: Vec::new(),
-        records: Vec::new(),
-        head: None,
-        capabilities: Map::new(),
-        replies: Map::new(),
-    };
-    let selector = store(&mut recorder, &account, &chat_key);
-    let sealed = records(&selector, &chat_key);
-    let (visible, later) = sealed.split_at(6);
-    recorder.records = visible.iter().map(|(r, _)| r.clone()).collect();
-    recorder.head = Some(visible[5].1.clone());
-    let device = CloudDevice::made(&account, device_input()).unwrap();
+/// The directory checkpoint a listing reported.
+fn directory_checkpoint(outputs: Vec<FlowOutput>) -> Vec<u8> {
+    outputs
+        .into_iter()
+        .find_map(|output| match output {
+            FlowOutput::Directory { bytes, .. } => Some(bytes),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// Runs the documented order against the live recorder, then a lease (it draws no recorded
+/// nonce, but must reach its first lease with these rows).
+fn run_order(account: &WebAccount, recorder: &mut Recorder, chat_id: &str) {
+    let device = CloudDevice::made(account, device_input()).unwrap();
     let mut connect = device.discover(
         RAW_HUB,
         None,
         nocterm_cloud_device::nonces::Nonces::seeded(NONCE_SEED),
     );
-    drive(&mut connect, &mut recorder, NOW_MS);
-    drive(&mut device.listing().unwrap(), &mut recorder, NOW_MS);
-    let chat_id = nocterm_cloud_device::context::ChatRef::of(&selector).to_string();
-    let mut chat = device.opened(&chat_id, None).unwrap();
-    let (outputs, ..) = drive(&mut chat, &mut recorder, NOW_MS);
+    drive(&mut connect, recorder, NOW_MS);
+    let watching = ListOptions {
+        directories: None,
+        watch: Some(true),
+    };
+    let (listed, ..) = drive(
+        &mut device.listing_with(watching).unwrap(),
+        recorder,
+        NOW_MS,
+    );
+    let directory = directory_checkpoint(listed);
+    let mut chat = device.opened(chat_id, None).unwrap();
+    let (outputs, ..) = drive(&mut chat, recorder, NOW_MS);
     let checkpoint = outputs
         .into_iter()
         .find_map(|output| match output {
@@ -663,14 +570,59 @@ fn generate() -> Value {
         })
         .unwrap();
     drive(
-        &mut device.opened(&chat_id, Some(checkpoint)).unwrap(),
-        &mut recorder,
+        &mut device.opened(chat_id, Some(checkpoint)).unwrap(),
+        recorder,
         NOW_MS,
     );
+    let relist = ListOptions {
+        directories: Some(vec![serde_bytes::ByteBuf::from(directory)]),
+        watch: Some(true),
+    };
+    drive(&mut device.listing_with(relist).unwrap(), recorder, NOW_MS);
+    let (leased, ..) = drive(
+        &mut device.leasing(&chat, lease::OWN_AGENT).unwrap(),
+        recorder,
+        NOW_MS,
+    );
+    assert!(
+        leased
+            .iter()
+            .any(|output| matches!(output, FlowOutput::Lease { .. })),
+        "{leased:?}"
+    );
+}
+
+/// The session file: the recorded rows and answers of `run_order`.
+fn generate() -> Value {
+    let account = account();
+    let chat_key = ChatKey::generate().unwrap();
+    let mut recorder = Recorder {
+        rows: Rows::default(),
+        head: None,
+        capabilities: Map::new(),
+        replies: Map::new(),
+    };
+    let selector = store(&mut recorder, &account, &chat_key);
+    let own = lease::store(&mut recorder, &account, &selector);
+    recorder.rows.runner_status = hex_of(&own, "runnerStatus");
+    let sealed = chat::records(&selector, &chat_key);
+    let (visible, later) = sealed.split_at(6);
+    let (summary, later_summary) = directory::records(
+        &selector,
+        &account,
+        &visible[5].1,
+        &later[0].1,
+        NOW - 600_000 + 7_000,
+    );
+    recorder.rows.records = visible.iter().map(|(r, _)| r.clone()).collect();
+    recorder.rows.directory = vec![summary];
+    recorder.head = Some(visible[5].1.clone());
+    let chat_id = nocterm_cloud_device::context::ChatRef::of(&selector).to_string();
+    run_order(&account, &mut recorder, &chat_id);
     let (collections, objects) = rows_json(&recorder);
     json!({
-        "comment": "Generated by crates/keys-wasm/src/cloud/fixture.rs; public test values only.",
-        "order": "connectSeeded(rawHub, null, nonceSeed); listChats(); openChat(chat.chatId); openChat(chat.chatId, checkpoint of the first)",
+        "comment": "Generated by crates/keys-wasm/src/cloud/fixture/mod.rs; public test values only.",
+        "order": "connectSeeded(rawHub, null, nonceSeed); listChats({watch: true}); openChat(chat.chatId); openChat(chat.chatId, checkpoint of the first); listChats({directories: [directory of the first listing], watch: true})",
         "now": NOW,
         "rawHub": RAW_HUB,
         "accountId": ACCOUNT,
@@ -697,9 +649,15 @@ fn generate() -> Value {
             "run": hex::encode(RUN.id),
             "prompt": PROMPT,
             "answer": ANSWER,
-            "records": recorder.records,
+            "records": recorder.rows.records,
             "later": later.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>(),
         },
+        "directory": {
+            "agentId": directory::AGENT_ID,
+            "records": recorder.rows.directory,
+            "later": [later_summary],
+        },
+        "own": own,
     })
 }
 

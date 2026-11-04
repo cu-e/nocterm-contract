@@ -14,7 +14,7 @@ use nocterm_keys::{
 use serde_json::Value;
 
 use super::fixture::{
-    self, Answer, Hub, NONCE_SEED, NOW_MS, RAW_HUB, RUNNER_ENCRYPTION_SEED, drive, hex_of,
+    self, Answer, Hub, NONCE_SEED, NOW_MS, RAW_HUB, RUNNER_ENCRYPTION_SEED, Rows, drive, hex_of,
     store_answer,
 };
 use super::types::{
@@ -38,9 +38,7 @@ fn recorded() -> Value {
 /// The page's executor over the recorded session only, as the panel's tests replay it.
 struct Replayer {
     session: Value,
-    collections: Vec<(WireCollection, Vec<u8>)>,
-    objects: Vec<WireObject>,
-    records: Vec<Value>,
+    rows: Rows,
     /// The runner answers probes (false: a sleeping seat).
     awake: bool,
     /// Answers to `publish`, in order, before the default receipt.
@@ -77,12 +75,16 @@ impl Replayer {
                 ciphertext: hex_of(o, "ciphertext"),
             })
             .collect();
-        let records = session["chat"]["records"].as_array().unwrap().clone();
-        Self {
-            session,
+        let rows = Rows {
             collections,
             objects,
-            records,
+            records: session["chat"]["records"].as_array().unwrap().clone(),
+            directory: session["directory"]["records"].as_array().unwrap().clone(),
+            runner_status: hex_of(&session["own"], "runnerStatus"),
+        };
+        Self {
+            session,
+            rows,
             awake: true,
             publish: Vec::new(),
             published: Vec::new(),
@@ -121,12 +123,12 @@ impl Hub for Replayer {
             WireEffect::Publish { .. } => {
                 self.published.push(effect.clone());
                 if self.publish.is_empty() {
-                    store_answer(&self.collections, &self.objects, &self.records, effect)
+                    store_answer(&self.rows, effect)
                 } else {
                     Answer::Input(self.publish.remove(0))
                 }
             }
-            effect => store_answer(&self.collections, &self.objects, &self.records, effect),
+            effect => store_answer(&self.rows, effect),
         }
     }
 }
@@ -245,7 +247,7 @@ fn a_watch_hint_brings_only_the_later_record_and_a_reopen_resumes_at_the_checkpo
         })
         .unwrap();
     let later = hub.session["chat"]["later"].as_array().unwrap().clone();
-    hub.records.extend(later);
+    hub.rows.records.extend(later);
     chat.frame_input(
         watches[0],
         super::types::StreamFrame::Hint { head_cursor: 7 },
@@ -389,7 +391,7 @@ fn a_prompt_without_a_model_or_too_long_for_one_frame_is_refused() {
     let mut hub = Replayer::new();
     let (device, _) = connected(&mut hub);
     hub.awake = false;
-    hub.records.clear();
+    hub.rows.records.clear();
     let mut empty = device.opened(&hub.chat_id(), None).unwrap();
     drive(&mut empty, &mut hub, NOW_MS);
     let prompt = |model: Option<ModelInput>| ChatActionInput::Prompt {
@@ -586,4 +588,125 @@ fn optional_input_fields_accept_an_explicit_absent_value() {
         seat,
         EffectInput::Instance { instance } if instance.runner_id.is_none()
     ));
+}
+
+/// The listing outputs' last rows of the recorded runner.
+fn last_rows(outputs: &[FlowOutput]) -> Vec<super::types::WireChat> {
+    outputs
+        .iter()
+        .rev()
+        .find_map(|output| match output {
+            FlowOutput::RunnerChats { chats, .. } => Some(chats.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+fn watching(directories: Option<Vec<Vec<u8>>>) -> super::types::ListOptions {
+    super::types::ListOptions {
+        directories: directories.map(|d| d.into_iter().map(serde_bytes::ByteBuf::from).collect()),
+        watch: Some(true),
+    }
+}
+
+#[test]
+fn a_listing_shows_the_runners_summary_confirmed_by_its_witness_and_a_directory_checkpoint() {
+    let mut hub = Replayer::new();
+    let (device, _) = connected(&mut hub);
+    let mut list = device.listing_with(watching(None)).unwrap();
+    let (outputs, _, watches) = drive(&mut list, &mut hub, NOW_MS);
+    let row = &last_rows(&outputs)[0];
+    assert_eq!(row.status, "current");
+    let summary = row.summary.as_ref().unwrap();
+    assert_eq!(summary.title, fixture::PROMPT);
+    assert_eq!(
+        (summary.host.as_str(), summary.agent_id.as_deref()),
+        ("managed", Some("ag-1"))
+    );
+    assert_eq!(summary.model.as_deref(), Some("gpt-5-mini"));
+    assert_eq!(
+        (summary.state.as_str(), summary.pending_approvals),
+        ("waitingApproval", 1)
+    );
+    assert!(
+        outputs
+            .iter()
+            .any(|o| matches!(o, FlowOutput::Directory { .. }))
+    );
+    assert_eq!(watches.len(), 1, "the directory is watched");
+}
+
+#[test]
+fn a_directory_hint_brings_the_later_summary_and_a_relisting_resumes_at_its_checkpoint() {
+    let mut hub = Replayer::new();
+    let (device, _) = connected(&mut hub);
+    let mut list = device.listing_with(watching(None)).unwrap();
+    let (outputs, _, watches) = drive(&mut list, &mut hub, NOW_MS);
+    let first = last_rows(&outputs)[0].summary.clone().unwrap();
+    let checkpoint = outputs
+        .into_iter()
+        .find_map(|o| match o {
+            FlowOutput::Directory { bytes, .. } => Some(bytes),
+            _ => None,
+        })
+        .unwrap();
+    let later = hub.session["directory"]["later"]
+        .as_array()
+        .unwrap()
+        .clone();
+    hub.rows.directory.extend(later);
+    list.frame_input(
+        watches[0],
+        super::types::StreamFrame::Hint { head_cursor: 2 },
+    );
+    let (outputs, ..) = drive(&mut list, &mut hub, NOW_MS);
+    let row = &last_rows(&outputs)[0];
+    let later = row.summary.as_ref().unwrap();
+    assert!(later.last_activity_ms > first.last_activity_ms);
+    assert_eq!(row.status, "current", "newer than the witness");
+
+    // A new listing from the first checkpoint reads only what followed it.
+    hub.rows.directory.remove(0);
+    let mut relist = device
+        .listing_with(watching(Some(vec![checkpoint])))
+        .unwrap();
+    let (outputs, ..) = drive(&mut relist, &mut hub, NOW_MS);
+    let row = &last_rows(&outputs)[0];
+    assert!(
+        (row.summary.as_ref().unwrap().last_activity_ms - later.last_activity_ms).abs() < 1.0,
+        "the later summary, from the checkpoint on"
+    );
+}
+
+#[test]
+fn a_lease_names_the_keys_provider_and_model_and_an_expired_boot_is_its_own_code() {
+    let mut hub = Replayer::new();
+    let (device, chat, ..) = opened(&mut hub);
+    let mut lease = device.leasing(&chat, fixture::lease::OWN_AGENT).unwrap();
+    let (outputs, ..) = drive(&mut lease, &mut hub, NOW_MS);
+    let Some(FlowOutput::Lease {
+        provider,
+        model,
+        renew_at_ms,
+        ..
+    }) = outputs.first()
+    else {
+        panic!("a lease: {outputs:?}");
+    };
+    assert_eq!(
+        (provider.as_str(), model.as_str()),
+        (fixture::lease::OWN_PROVIDER, fixture::lease::OWN_MODEL)
+    );
+    assert!(
+        (*renew_at_ms - (NOW_MS + 5.0 * 60_000.0)).abs() < 1.0,
+        "half the term"
+    );
+    let (kind, ..) = opened_command(hub.published.last().unwrap());
+    assert_eq!(kind, CommandKind::IssueGrant);
+
+    let mut late = device.leasing(&chat, fixture::lease::OWN_AGENT).unwrap();
+    let (_, last, _) = drive(&mut late, &mut hub, NOW_MS + 30.0 * 60_000.0);
+    let FlowStep::Failed { error } = last else {
+        panic!("refused: {last:?}");
+    };
+    assert_eq!(error.code, "boot_expired");
 }
