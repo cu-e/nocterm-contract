@@ -50,6 +50,23 @@ impl RunnerSigningKey {
         let signature = self.key.sign(&witness.canonical_bytes()?);
         SignedHeadWitness::new(witness, signature)
     }
+    /// Signs a chat summary under its context (ADR 0008); seal it with `seal_summary`.
+    pub fn attest_summary(
+        &self,
+        context: nocterm_hub_model::cloud::summary::SummaryContext,
+        summary: nocterm_hub_model::cloud::summary::ChatSummary,
+    ) -> Result<
+        nocterm_hub_model::cloud::summary::SignedChatSummary,
+        nocterm_hub_model::cloud::summary::SummaryError,
+    > {
+        let signature = self.key.sign(&summary.signing_bytes(&context)?);
+        nocterm_hub_model::cloud::summary::SignedChatSummary::new(
+            context,
+            summary,
+            signature,
+            &self.public_key(),
+        )
+    }
     pub(super) fn sign_record(&self, canonical_header: &[u8]) -> [u8; 64] {
         self.key.sign(canonical_header)
     }

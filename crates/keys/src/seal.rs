@@ -38,6 +38,7 @@ pub(crate) enum Purpose {
     AgentDefinition = 19,
     BrokerSecret = 20,
     CloudDeviceCheckpoint = 21,
+    CloudChatSummary = 22,
 }
 
 impl Purpose {
@@ -64,6 +65,7 @@ impl Purpose {
             Purpose::AgentDefinition => b"agent-definition",
             Purpose::BrokerSecret => b"agent-broker-secret",
             Purpose::CloudDeviceCheckpoint => b"cloud-device-checkpoint",
+            Purpose::CloudChatSummary => b"cloud-chat-summary",
         }
     }
 }

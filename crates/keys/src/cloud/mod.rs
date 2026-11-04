@@ -10,6 +10,7 @@
 mod catalog;
 mod checkpoint;
 pub use checkpoint::{CheckpointKey, CheckpointKeyError, MAX_CHECKPOINT_PLAINTEXT_BYTES};
+mod account_box;
 mod head;
 pub use head::{
     HeadCryptoError, open_head_query, open_head_witness, seal_head_query, seal_head_witness,
@@ -26,6 +27,8 @@ pub use provider::{
 };
 mod runner_key;
 mod runner_signer;
+mod summary;
+pub use summary::{SummaryCryptoError, SummaryPins, open_summary, seal_summary};
 
 pub use material::{
     ChatKey, CloudMaterialError, CloudRecordError, MAX_JOURNAL_CIPHERTEXT_BYTES, OpenedRecord,
