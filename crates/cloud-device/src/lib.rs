@@ -1,6 +1,6 @@
 //! The sans-I/O Cloud device core: everything an account device decides about Cloud chats,
 //! shared by the web panel (through `nocterm-keys-wasm`) and the native client (ADR 0006, 0007,
-//! 0008, 0009).
+//! 0008, 0009, 0010).
 //!
 //! Purpose: one implementation of the device side of Cloud chats. Clients execute the typed
 //! effects a flow hands out (sign, Store reads and writes, capability proof, head probe,
@@ -13,7 +13,9 @@
 //!   trust, capability proof, trusted runners), [`list::ListChats`] (directory summaries
 //!   confirmed by catalog witnesses, no replay), [`open::OpenChat`] (probe, incremental verified replay, Watch, checkpoints,
 //!   freshness), [`command::Deliver`] (wake, sign, seal, identical-bytes publish, receipt probe
-//!   on an unknown outcome), [`create::CreateChat`] (seat, compare-created records, grant
+//!   on an unknown outcome, resumed from a [`command::StoredCommand`] after a restart),
+//!   [`seat::WakeSeat`] (the agent's enrolled seat, through its own pool), [`create::CreateChat`]
+//!   (seat, compare-created records, grant
 //!   publication, claim wait), [`provider::ProviderLease`] (own-runner provider lease), and
 //!   [`ssh::BindServers`] and [`ssh::SshAnswer`] (a chat bound to CA-trusted servers and the
 //!   runner's per-chat certificates, ADR 0009);
@@ -28,7 +30,8 @@
 //!   the caller's Ed25519 signature in, sealed bytes out ([`probe`], [`command`], [`policy`]);
 //! - the resumable verified reader of one chat ([`reader`]): record context, the pinned runner's
 //!   keys, cursor, sequence and writer continuity, gaps, witnessed heads, the freshness levels
-//!   `Current`, `Unconfirmed` and `Withheld`, and sealed device checkpoints;
+//!   `Opening`, `Current`, `Unconfirmed` and `Withheld`, sealed device checkpoints and sealed
+//!   stored commands;
 //! - the transcript reducer every device shows, with deltas, including the chat's SSH bindings
 //!   and open certificate requests ([`transcript`], [`transcript::ChatSsh`]);
 //! - the runner chat directory as a device verifies it ([`directory`]): runner-signed summaries
@@ -51,7 +54,10 @@
 //! - a replayed record is accepted only from the pinned runner, in its chat, in cursor, sequence
 //!   and writer order; a transcript is always a verified prefix, and it is called `Current` only
 //!   after a fresh witness was reached; a witness behind a verified checkpoint is refused;
-//! - a command is sealed once and every retry publishes exactly the same bytes;
+//! - a command is sealed once and every retry, also after a restart, publishes exactly the same
+//!   bytes;
+//! - a seat is started only through the pool of the agent's enrolled seat: no flow provisions
+//!   one;
 //! - a chat summary is applied only from the pinned runner, sealed to this account under its
 //!   routing context, and only when its revision is newer than the one held; it is display
 //!   data and never stands in for a replayed transcript;

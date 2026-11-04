@@ -9,8 +9,8 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 | `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages; Cloud canonical formats, including runner chat summaries (`cloud::summary`) and per-chat SSH bindings, certificate requests and access states (`cloud::ssh`) |
 | `nocterm-hub-proto` | protobuf schema (`proto/`) compiled to prost messages, plus its descriptor set |
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
-| `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`), runner chat directories (`CloudSelector::Directory`, `CloudRunner::publish_summary`) |
-| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes, create chats, lease an own runner's provider key, bind a chat to the account's CA-trusted servers and answer the runner's certificate requests), a resumable reader with sealed checkpoints and the freshness levels Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md), [ADR 0009](docs/adr/0009-per-chat-ssh-binding-and-certificates.md)) |
+| `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`) and the device core's Cloud calls under the client's own signer (`capabilities`, `probe_head`, `publish_one`, `replay`, `watch`, `runner_status`), runner chat directories (`CloudSelector::Directory`, `CloudRunner::publish_summary`) |
+| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes and resume them after a restart, wake only an agent's enrolled seat, create chats, lease an own runner's provider key, bind a chat to the account's CA-trusted servers and answer the runner's certificate requests), a resumable reader with sealed checkpoints and the freshness levels Opening, Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md), [ADR 0009](docs/adr/0009-per-chat-ssh-binding-and-certificates.md), [ADR 0010](docs/adr/0010-device-transport-and-resumable-commands.md)) |
 | `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants, Cloud boxes (commands, records, head probes, chat summaries), the account SSH CA (`agents::ssh_ca`: CA document, per-server principals and `authorized_keys` lines, chat bindings, OpenSSH user certificates) |
 | `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `WebCollectionKey.openSshTrust` for the `agent_ssh_trust` servers and the CA's fingerprint, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`, and on an open chat `bindServers`, `unbindServers`, `answerSsh`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
@@ -398,9 +398,9 @@ bodies; validation uses the same encoder with a counting sink. Unknown tags, suf
 wrong-purpose bodies, zero epochs and mismatched original run/issuer bindings are refused.
 Decoding does not verify account trust, consume a grant or durably accept a command.
 
-`CloudCommandInvocation::seal_payload` captures actual SDK attribution, checks header/body
-consistency and rejects new authority beyond its captured hard refresh deadline or finite
-task window. Inference and terminal grants require an exact run. A boot-bound provider
+The device core (`nocterm-cloud-device` `command::UnsignedCommand`) builds a device's commands,
+checks header/body consistency and rejects new authority beyond the session's refresh deadline
+or a finite task window; `HubClient::publish_one` only sends the sealed bytes. Inference and terminal grants require an exact run. A boot-bound provider
 installation may precede a run; using it still needs a separate inference grant. SSH consent
 answers retain their exact attempt, nonce, finite deadline, target, selected key and proof.
 The codec bounds standard SSH blobs; the native SSH verifier checks their complete protocol
@@ -470,17 +470,15 @@ offered before the SDK prepares or publishes material; the original version1
 feature set7 remains valid for existing peers. Material is limited to256bytes,
 not the32MiB command allowance. A runner cannot publish device key grants.
 
-`CloudClient::prepare_chat_key_grant` seals one chat key to the separately pinned
-runner from the captured account keyset. Persist the exact coordinates, publication
-ID and ciphertext in the authenticated account-owned collection/outbox before
-sending. `stage_chat_key_grant` captures a new sign-in for that unchanged envelope;
-its caller must first authenticate the account-owned record. It does not verify
-the encrypted key. The runner alone opens purpose10 against its configured account
-pin and exact chat/key epoch, then conditionally installs material. Material does
+The device core seals one chat key to the separately pinned runner from the unlocked account
+keys and stores the exact sealed grant in the account-owned `cloud-chat-grant` collection
+before it publishes those bytes (`nocterm-cloud-device` `create`); a device that publishes it
+again reuses the stored envelope. The runner alone opens purpose10 against its configured
+account pin and exact chat/key epoch, then conditionally installs material. Material does
 not accept a prompt, spend tokens, open SSH or grant execution authority. The hub
 cannot read the chat key, and the runner never needs the account root/Store client.
 
-These SDK methods provide transport and encryption, not the native collection
+The SDK provides transport and encryption, not the native collection
 store, key-cache durability or rotation policy. A missing key must stop command
 admission before its receipt/run/effects. Repeated installed coordinates must
 reuse their original sealed blob; a different blob or key epoch must not silently
@@ -581,24 +579,21 @@ projection. A witness does not itself supply that baseline, material or history.
 Command-receipt targets are closed read-only NotFound/Accepted/Conflict/Unknown
 observations from R's original durable ledger, without admitting another command.
 
-`CloudClient::head_probes` captures the actual original SDK login before waiting.
-Prepared probes are one-shot, with real random ID/challenge and a monotonic hard
-deadline; the completed owner repeats source/deadline checks before and after
-opening against the exact pending query. The wait retains no account keyset.
-A replacement login, old nonce, altered scope/key or backwards/expired device
-clock cannot publish a witness. Native callers inject their actual clock and
-repeat their own retained membership fence before projection publication.
+A device builds, signs and seals its queries with the core (`probe::UnsignedHeadProbe`,
+one-shot with a real random ID/challenge and a deadline within the session) and sends them with
+`HubClient::probe_head`, which waits at most until the probe expires (10 seconds) and opens
+nothing: the core opens the witness against the exact pending query. A replacement login, old
+nonce, altered scope/key or backwards/expired device clock cannot publish a witness.
 
-`head_probes_with_residency` on device and runner ports retains a caller's actual
-pre-admitted allocation through request/response Body ownership and through
-Prepared/Incoming/Completed destruction. `open_resident` returns borrow-only
-`ResidentHeadQuery`/`ResidentHeadWitness` owners with the same allocation last;
-there is no consuming unguarded extraction, Deref or Clone on those owners.
-The existing `open` refuses a guarded object; default unguarded ports retain their
-original behavior. Explicit clones of borrowed contents and native publication
-remain separately admitted generations with their own source checks.
+`head_probes_with_residency` on the runner port retains a caller's actual pre-admitted
+allocation through request/response Body ownership and through `IncomingHeadProbe`
+destruction. `open_resident` returns a borrow-only `ResidentHeadQuery` owner with the same
+allocation last; there is no consuming unguarded extraction, Deref or Clone on it. The
+existing `open` refuses a guarded object; the default unguarded port retains its original
+behavior. Explicit clones of borrowed contents and native publication remain separately
+admitted generations with their own source checks.
 
-Before creating a guarded port, admit one operation's `head_query_work_bytes()` +
+Before creating a guarded runner port, admit one operation's `head_query_work_bytes()` +
 `head_reply_work_bytes()` + `head_decoded_metadata_bytes()`. These name concrete
 logical SDK canonical/signature/AAD/body buffers and bounded decoded metadata;
 they exclude caller original ciphertext/native clones, witness signing/sealing,
@@ -617,20 +612,17 @@ cap remains unchanged. The hub must enforce 32 pending probes/account, 256 globa
 SDK/codec primitives do not implement production server policy or native storage.
 Independent canonical/signature/box/tamper vectors are in `fixtures/cloud-head-v1/`.
 
-### Loading an exact durable command
+### Resuming a command after a restart
 
-`CloudClient::stage_stored_command` captures a fresh actual SDK source around an
-unchanged command publication loaded from an authenticated native outbox. It
-checks command-only route, current namespace, ciphertext length and SHA-256. The
-native caller must first authenticate its persisted account/R/chat binding and
-original metadata; the SDK cannot open R's encrypted command. The semantic digest
-is exactly SHA256(CommandHeader.canonical_bytes()), matching native acceptance;
-it is neither a ciphertext digest nor a hash of the entire signed message. The
-caller must authenticate this value with the native outbox. Staging never
-re-signs/reseals M, changes its issuer/deadline, replaces its original IDs or turns
-a delivery ACK into R admission. Persist the exact publication before sending,
-then retry those same bytes or query the same original ID/digest. Expired new
-admission and previously accepted idempotent receipt lookup remain R's duties.
+A device command is signed and sealed once and every retry publishes exactly those bytes. A
+client that quits before it settled keeps `OpenChat::stored(&deliver)`, a `StoredCommand`
+(format 1: the publication, its receipt-probe facts and the pending row, sealed under a key
+derived from the account key for that chat generation, at most one relay frame of ciphertext
+and one of prompt text), and later calls `OpenChat::resume`: the pending row shows again and
+the same publication goes out; after its receipt the runner is asked once whether it admitted
+the command. Nothing is resent when its run started or its window ended (`Unreachable`).
+Admission of an expired command and idempotent receipt lookup remain the runner's duties
+(contract [ADR 0010](docs/adr/0010-device-transport-and-resumable-commands.md)).
 
 `CloudEvent` and `CloudSnapshotPayload` expose `canonical_len()` for preflight and
 `canonical_bytes_exact(length)` to encode into an admitted single output buffer.
@@ -709,11 +701,20 @@ session authority is added to a runner.
 client typed effects (`flow::Effect`: sign, Store reads and writes, capability proof, head
 probe, replay, watch, publish, start a seat, list seats, runner status) and take the answers,
 so the client keeps only the network, storage and the device key. A `Sign` effect carries a
-`flow::SignRequest` that only the core makes; `HubClient::sign_cloud` signs nothing else.
+`flow::SignRequest` that only the core makes; `HubClient::sign_cloud` signs nothing else. The
+Cloud effects map one to one to `HubClient::{capabilities, probe_head, publish_one, replay,
+watch, runner_status}`, which send exactly the core's bytes under the client's own signer and
+token refresh and answer with the core's `Input`/`Frame` values or a `CloudCallError` and its
+`EffectFailure`; no client signs request proofs itself
+([ADR 0010](docs/adr/0010-device-transport-and-resumable-commands.md)). A seat is woken only
+through the pool of the agent's enrolled seat (`seat::hosting_seat`; `ListInstances`, then
+`StartInstance { pool_id }`), so a chat never provisions one.
 `reader::ChatReader` resumes from a sealed device checkpoint (version 1; the key is
 `nocterm_keys::cloud::CheckpointKey`, derived from the account key, purpose 21) and reports
-`Current`, `Unconfirmed` (the runner did not answer: a verified prefix) or `Withheld` (the hub's
-replay ends below what the runner witnessed). `provider::ProviderLease` reports each lease with
+`Opening` (no round finished yet), `Current`, `Unconfirmed` (the runner did not answer: a
+verified prefix) or `Withheld` (the hub's replay ends below what the runner witnessed). A
+transcript's tool call carries its title (`ToolCall::title`, from the contract's tool labels)
+and a typed outcome (`ToolOutcome`), so no client rebuilds a tool's display. `provider::ProviderLease` reports each lease with
 the provider and the one model of the leased key, which a prompt to the own-runner chat names
 (`ModelSelection::own`). Recorded sessions for the panel's tests are in
 `fixtures/cloud-device-v1/web-session.json`.
