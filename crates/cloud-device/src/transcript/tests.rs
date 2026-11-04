@@ -300,3 +300,63 @@ fn every_event_fixture_round_trips_through_the_checkpoint_codec() {
         assert!(Transcript::decode(&mut codec::Reader(&out.0[..size])).is_err());
     }
 }
+
+#[test]
+fn a_tool_call_carries_its_title_and_typed_outcome_and_a_pending_never_hides_a_result() {
+    use nocterm_hub_model::cloud::events::{
+        DisplayOutcome, ObservedEffect, ToolObservationPayload, ToolPresentation,
+    };
+    let mut transcript = Transcript::new();
+    apply(&mut transcript, &vector!("intent"));
+    let call = tool(&transcript);
+    assert_eq!(call.outcome, Some(ToolOutcome::Pending));
+    assert_eq!(call.label(), "List terminals");
+    assert_eq!(call.title(), "Nocterm · List terminals");
+    let mut named = call.clone();
+    named.destination = Some("build box".to_owned());
+    assert_eq!(named.title(), "build box · List terminals");
+    named.tool = "not_a_tool".to_owned();
+    assert_eq!(named.label(), "Tool");
+
+    let observation = |outcome| ToolObservationPayload {
+        intent: INTENT,
+        output_json: "[]",
+        display: ToolPresentation {
+            tool: "list_terminals",
+            arguments_json: "{}",
+            destination: None,
+            redacted: false,
+            outcome: Some(outcome),
+        },
+        effect: ObservedEffect::Observed,
+        failed: false,
+    };
+    let result = |outcome| CloudEvent {
+        control_revision: 20,
+        timestamp_ms: 300_000,
+        payload: CloudEventPayload::ToolResult {
+            run: RUN,
+            observation: Box::new(observation(outcome)),
+        },
+    };
+    transcript.apply(&result(DisplayOutcome::Ok("[1]")));
+    assert_eq!(
+        tool(&transcript).outcome,
+        Some(ToolOutcome::Ok("[1]".to_owned()))
+    );
+    transcript.apply(&result(DisplayOutcome::Pending));
+    assert_eq!(
+        tool(&transcript).outcome,
+        Some(ToolOutcome::Ok("[1]".to_owned()))
+    );
+    transcript.apply(&result(DisplayOutcome::Err("denied by policy")));
+    assert_eq!(
+        tool(&transcript).outcome,
+        Some(ToolOutcome::Err("denied by policy".to_owned()))
+    );
+    // The typed outcome survives a checkpoint (reducer version 3).
+    let mut out = codec::Writer(Vec::new());
+    transcript.encode(&mut out).unwrap();
+    let restored = Transcript::decode(&mut codec::Reader(&out.0)).unwrap();
+    assert_eq!(tool(&restored).outcome, tool(&transcript).outcome);
+}

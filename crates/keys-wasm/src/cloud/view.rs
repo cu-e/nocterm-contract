@@ -5,7 +5,7 @@ use nocterm_cloud_device::{
     records::TrustedRunner,
     transcript::{
         ApprovalRequest, CommandState, PendingCommand, PendingKind, Role, RunState, SessionCall,
-        SessionStatus, ToolCall, ToolStatus, TranscriptDelta, TranscriptRow,
+        SessionStatus, ToolCall, ToolOutcome, ToolStatus, TranscriptDelta, TranscriptRow,
     },
 };
 use nocterm_hub_model::cloud::{
@@ -330,12 +330,16 @@ impl From<&TranscriptRow> for WireRow {
 }
 
 /// `status`: `running`, `awaiting_approval` (until `expiresAtMs`), `approved`, `denied`,
-/// `succeeded`, `failed`, `unknown` or `background`.
+/// `succeeded`, `failed`, `unknown` or `background`. `title` is the row header every client shows
+/// (`"<destination> · <label>"`), `label` the tool's short name. `outcomeKind` says what
+/// `outcome` is: `pending` (no text), `ok` (JSON text) or `err` (redacted failure text).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct WireTool {
     pub intent: String,
     pub tool: String,
+    pub label: String,
+    pub title: String,
     pub arguments: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tsify(optional)]
@@ -352,6 +356,9 @@ pub struct WireTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tsify(optional)]
     pub outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tsify(optional, type = "\"pending\" | \"ok\" | \"err\"")]
+    pub outcome_kind: Option<String>,
 }
 impl From<&ToolCall> for WireTool {
     fn from(call: &ToolCall) -> Self {
@@ -370,6 +377,8 @@ impl From<&ToolCall> for WireTool {
         Self {
             intent: hex::encode(call.intent),
             tool: call.tool.clone(),
+            label: call.label().to_owned(),
+            title: call.title(),
             arguments: call.arguments_json.clone(),
             destination: call.destination.clone(),
             mutates: call.mutates,
@@ -377,7 +386,18 @@ impl From<&ToolCall> for WireTool {
             status: status.to_owned(),
             expires_at_ms,
             output: call.output_json.clone(),
-            outcome: call.outcome.clone(),
+            outcome: match &call.outcome {
+                Some(ToolOutcome::Ok(text) | ToolOutcome::Err(text)) => Some(text.clone()),
+                Some(ToolOutcome::Pending) | None => None,
+            },
+            outcome_kind: call.outcome.as_ref().map(|outcome| {
+                match outcome {
+                    ToolOutcome::Pending => "pending",
+                    ToolOutcome::Ok(_) => "ok",
+                    ToolOutcome::Err(_) => "err",
+                }
+                .to_owned()
+            }),
         }
     }
 }

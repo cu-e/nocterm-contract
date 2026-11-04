@@ -39,19 +39,48 @@ pub enum ToolStatus {
     Background,
 }
 
-/// One tool call. Plain display data.
+/// The display outcome the runner attached to a tool call (`ToolPresentation.outcome`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolOutcome {
+    /// Requested; no result yet.
+    Pending,
+    /// The bounded result as JSON text.
+    Ok(String),
+    /// The redacted failure text.
+    Err(String),
+}
+
+/// One tool call. Plain display data; everything a client shows of it (title, request, outcome)
+/// comes from here, so no client rebuilds a display from the tool name alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolCall {
     pub intent: [u8; 16],
+    /// One of the terminal tools of `nocterm_hub_model::cloud::tool_arguments::TOOLS`.
     pub tool: String,
     pub arguments_json: String,
+    /// Where it runs as the runner names it (a server or terminal title).
     pub destination: Option<String>,
     pub mutates: bool,
     pub redacted: bool,
     pub status: ToolStatus,
     pub output_json: Option<String>,
-    /// The display outcome text the runner attached, if any.
-    pub outcome: Option<String>,
+    /// The display outcome the runner attached, if any.
+    pub outcome: Option<ToolOutcome>,
+}
+impl ToolCall {
+    /// The tool's short label (`"Run command"`).
+    pub fn label(&self) -> &'static str {
+        nocterm_hub_model::cloud::tool_arguments::tool_label(&self.tool).unwrap_or("Tool")
+    }
+    /// The row title every client shows: `"<destination> · <label>"`, `Nocterm` standing in for
+    /// a call without a destination (display format 2 of the native client).
+    pub fn title(&self) -> String {
+        format!(
+            "{} · {}",
+            self.destination.as_deref().unwrap_or("Nocterm"),
+            self.label()
+        )
+    }
 }
 
 /// Where a session stands, as the runner reported it.

@@ -16,7 +16,7 @@ pub use delta::TranscriptDelta;
 pub use ssh::{BindingState, ChatSsh, PendingSshRequest};
 pub use types::{
     ApprovalRequest, CommandState, PendingCommand, PendingKind, Role, RunState, SessionCall,
-    SessionStatus, ToolCall, ToolStatus, TranscriptRow,
+    SessionStatus, ToolCall, ToolOutcome, ToolStatus, TranscriptRow,
 };
 
 use delta::Dirty;
@@ -35,8 +35,9 @@ pub const MAX_TRANSCRIPT_ROWS: usize = 4096;
 /// Commands of this device tracked at once; the oldest settled one goes first.
 pub const MAX_PENDING_COMMANDS: usize = 32;
 /// The reducer's version. A checkpoint made by another version is not restored: the chat is
-/// read again from the start. Version 2 keeps the chat's SSH bindings ([`ChatSsh`]).
-pub const REDUCER_VERSION: u16 = 2;
+/// read again from the start. Version 2 keeps the chat's SSH bindings ([`ChatSsh`]); version 3
+/// keeps a tool call's typed outcome ([`ToolOutcome`]).
+pub const REDUCER_VERSION: u16 = 3;
 
 /// The reduced state of one chat.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -406,12 +407,10 @@ impl Transcript {
     }
     fn tool(&mut self, intent: &ToolIntentPayload<'_>, status: ToolStatus, at: u64) {
         let display = &intent.display;
-        let outcome = display.outcome.as_ref().and_then(outcome_text);
+        let outcome = display.outcome.as_ref().map(tool_outcome);
         if self.update_tool(&intent.id, at, |call| {
             call.status = status;
-            if outcome.is_some() {
-                call.outcome.clone_from(&outcome);
-            }
+            merge_outcome(&mut call.outcome, outcome.clone());
         }) {
             return;
         }
@@ -441,13 +440,11 @@ impl Transcript {
             (_, true) => ToolStatus::Failed,
             (ObservedEffect::Observed, false) => ToolStatus::Succeeded,
         };
-        let outcome = observation.display.outcome.as_ref().and_then(outcome_text);
+        let outcome = observation.display.outcome.as_ref().map(tool_outcome);
         self.update_tool(&observation.intent, at, |call| {
             call.status = status;
             call.output_json = Some(observation.output_json.to_owned());
-            if outcome.is_some() {
-                call.outcome.clone_from(&outcome);
-            }
+            merge_outcome(&mut call.outcome, outcome);
         });
     }
     /// Updates the row of a tool call; false when no row announced it.
@@ -526,10 +523,19 @@ fn prompt_text(content: &[PromptPart<'_>]) -> (String, u32) {
     }
     (text, images)
 }
-fn outcome_text(outcome: &DisplayOutcome<'_>) -> Option<String> {
+fn tool_outcome(outcome: &DisplayOutcome<'_>) -> ToolOutcome {
     match outcome {
-        DisplayOutcome::Pending => None,
-        DisplayOutcome::Ok(text) | DisplayOutcome::Err(text) => Some((*text).to_owned()),
+        DisplayOutcome::Pending => ToolOutcome::Pending,
+        DisplayOutcome::Ok(text) => ToolOutcome::Ok((*text).to_owned()),
+        DisplayOutcome::Err(text) => ToolOutcome::Err((*text).to_owned()),
+    }
+}
+/// A later outcome replaces the held one, except that `Pending` never replaces a result.
+fn merge_outcome(held: &mut Option<ToolOutcome>, outcome: Option<ToolOutcome>) {
+    match outcome {
+        Some(ToolOutcome::Pending) if held.is_some() => {}
+        Some(outcome) => *held = Some(outcome),
+        None => {}
     }
 }
 fn add_usage(total: &mut CloudUsage, usage: &CloudUsage) {

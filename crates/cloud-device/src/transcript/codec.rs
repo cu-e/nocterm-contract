@@ -1,11 +1,12 @@
 //! The canonical bytes of a transcript inside a device checkpoint (reducer version
 //! [`super::REDUCER_VERSION`]). Device-local and sealed; pending commands are not part of it.
-//! Version 2 appends the chat's SSH bindings and open requests after the flags.
+//! Version 2 appends the chat's SSH bindings and open requests after the flags. Version 3 writes
+//! a tool call's outcome as a tag (1 pending, 2 ok, 3 err) and its text.
 //!
 //! Integers are big-endian, texts and lists carry a u32 length, options a 0/1 tag.
 use super::{
-    ApprovalRequest, RunState, SessionCall, SessionStatus, ToolCall, ToolStatus, Transcript,
-    TranscriptRow, delta::Dirty, types::Role,
+    ApprovalRequest, RunState, SessionCall, SessionStatus, ToolCall, ToolOutcome, ToolStatus,
+    Transcript, TranscriptRow, delta::Dirty, types::Role,
 };
 use crate::CloudDeviceError;
 use nocterm_hub_model::cloud::{
@@ -268,7 +269,28 @@ fn tool_out(out: &mut Writer, call: &ToolCall) -> Result<(), CloudDeviceError> {
         out.u64(expires);
     }
     out.optional(call.output_json.as_ref(), |out, text| out.text(text))?;
-    out.optional(call.outcome.as_ref(), |out, text| out.text(text))
+    out.optional(call.outcome.as_ref(), |out, outcome| match outcome {
+        ToolOutcome::Pending => {
+            out.u8(1);
+            Ok(())
+        }
+        ToolOutcome::Ok(text) => {
+            out.u8(2);
+            out.text(text)
+        }
+        ToolOutcome::Err(text) => {
+            out.u8(3);
+            out.text(text)
+        }
+    })
+}
+fn outcome_in(input: &mut Reader<'_>) -> Result<ToolOutcome, CloudDeviceError> {
+    Ok(match input.u8()? {
+        1 => ToolOutcome::Pending,
+        2 => ToolOutcome::Ok(input.text()?),
+        3 => ToolOutcome::Err(input.text()?),
+        _ => return Err(CloudDeviceError::Checkpoint),
+    })
 }
 fn tool_in(input: &mut Reader<'_>) -> Result<ToolCall, CloudDeviceError> {
     let intent = input.array()?;
@@ -299,7 +321,7 @@ fn tool_in(input: &mut Reader<'_>) -> Result<ToolCall, CloudDeviceError> {
         redacted,
         status,
         output_json: input.optional(Reader::text)?,
-        outcome: input.optional(Reader::text)?,
+        outcome: input.optional(outcome_in)?,
     })
 }
 
