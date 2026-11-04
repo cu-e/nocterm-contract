@@ -1,14 +1,18 @@
+use crate::flow::EffectFailure;
 use nocterm_hub_model::{
     cloud::{
         CommandError, MaterialError, RecordError, capabilities::CapabilityError,
         events::EventPayloadError, head::HeadProbeError, payload::PayloadError,
-        relay::RelayFormatError,
+        provider::ProviderLeaseError, relay::RelayFormatError,
     },
     pop::SignatureError,
 };
 use nocterm_keys::{
     KeyError, OpenError, SealError,
-    cloud::{CloudCommandError, CloudMaterialError, CloudRecordError, HeadCryptoError},
+    cloud::{
+        CheckpointKeyError, CloudCommandError, CloudMaterialError, CloudRecordError,
+        HeadCryptoError, ProviderSecretError,
+    },
 };
 
 /// Why a Cloud device operation was refused. Variants name what failed for the caller; the
@@ -47,6 +51,34 @@ pub enum CloudDeviceError {
     SnapshotRequired,
     #[error("no pending approval matches this answer")]
     NoApproval,
+    #[error("the transcript has no such run")]
+    NoRun,
+    #[error("the chat has no model to prompt with")]
+    NoModel,
+    #[error("the runner is not among the account's trusted runners")]
+    NoRunner,
+    #[error("the agent's seat has no enrolled runner yet")]
+    NotEnrolled,
+    #[error("the runner did not take the new chat in time")]
+    NotClaimed,
+    #[error("the account holds no provider key for this agent")]
+    NoProviderKey,
+    #[error("a witnessed head or replay is behind the verified checkpoint")]
+    Rollback,
+    #[error("the checkpoint is malformed, of another reducer version or of another chat")]
+    Checkpoint,
+    #[error("the checkpoint could not be sealed or opened")]
+    CheckpointCrypto(#[from] CheckpointKeyError),
+    #[error("the client answered an effect it was not asked for, or with another kind of input")]
+    Protocol,
+    #[error("the flow has already ended")]
+    Ended,
+    #[error("an effect failed: {0:?}")]
+    Effect(EffectFailure),
+    #[error("the runner's provider boot or lease context was refused")]
+    ProviderLease(#[from] ProviderLeaseError),
+    #[error("the provider key could not be sealed to the runner's boot")]
+    ProviderSecret(#[from] ProviderSecretError),
     #[error("the Cloud capability proof was refused")]
     Capability(#[from] CapabilityError),
     #[error("the head probe was refused")]

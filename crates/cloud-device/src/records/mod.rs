@@ -6,6 +6,7 @@
 //! [`nocterm_keys::CollectionKey::seal_object`], which binds collection id, object id and kind.
 mod hub_trust;
 mod material;
+mod provider_key;
 mod registry;
 
 pub use hub_trust::{HUB_TRUST_KIND, HUB_TRUST_OBJECT, HubTrustRecord};
@@ -13,6 +14,7 @@ pub use material::{
     CHAT_GRANT_KIND, CHAT_MATERIAL_KIND, ChatGrantRecord, ChatMaterialRecord, ChatSelector,
     account_collection_id,
 };
+pub use provider_key::{PROVIDER_KEYS_KIND, ProviderKeyRecord, provider_key_object};
 pub use registry::{
     MAX_TRUSTED_RUNNERS, RUNNER_REGISTRY_KIND, RUNNER_REGISTRY_OBJECT, RunnerPins, RunnerRegistry,
     TrustedRunner,

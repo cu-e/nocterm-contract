@@ -1,8 +1,23 @@
-//! A small reducer from verified runner events to neutral display rows.
+//! The reducer from verified runner events to neutral display rows, shared by every device.
 //!
-//! It is fed only events the replay verifier opened under the pinned runner, in sequence order.
-//! Rows are display data: a pending approval row lets the caller build an answer, but nothing
-//! here admits or grants anything. Session-start events are not projected (as on desktop).
+//! It is fed only events the reader opened under the pinned runner, in sequence order. Rows are
+//! display data: a pending approval row lets the caller build an answer, but nothing here admits
+//! or grants anything. It shows what the native client shows (prompts, text, tool calls with
+//! approvals and background jobs, runs with status and usage, snapshot windows, deletion) and,
+//! beyond it, SSH consent requests and session lifecycle rows. Commands this device sent are
+//! tracked as pending commands until the runner accepts them. Changes accumulate until the
+//! caller takes them as a [`TranscriptDelta`].
+pub(crate) mod codec;
+mod delta;
+mod types;
+
+pub use delta::TranscriptDelta;
+pub use types::{
+    ApprovalRequest, CommandState, PendingCommand, PendingKind, Role, RunState, SessionCall,
+    SessionStatus, ToolCall, ToolStatus, TranscriptRow,
+};
+
+use delta::Dirty;
 use nocterm_hub_model::cloud::{
     RunCoordinate,
     events::{
@@ -10,127 +25,16 @@ use nocterm_hub_model::cloud::{
         CloudTextChannel, CloudUsage, DisplayOutcome, ObservedEffect, ToolIntentPayload,
         ToolObservationPayload,
     },
-    payload::{ApprovalChoice, ApprovalPayload, ExecutionReference, ModelSelection, PromptPart},
+    payload::{ApprovalChoice, PromptPart, SessionOutcome, SessionStartup, TargetAccess},
 };
 
 /// Rows kept per chat; older rows are dropped and [`Transcript::omitted_earlier`] is set.
 pub const MAX_TRANSCRIPT_ROWS: usize = 4096;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Role {
-    /// An accepted prompt.
-    User,
-    /// Assistant text.
-    Assistant,
-    /// Model reasoning text.
-    Thought,
-    /// A tool call and its outcome.
-    Tool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolStatus {
-    /// Announced and running, or waiting for its result.
-    Running,
-    /// Waiting for the person's answer until this time.
-    AwaitingApproval {
-        expires_at_ms: u64,
-    },
-    Approved,
-    Denied,
-    Succeeded,
-    Failed,
-    /// The effect may or may not have happened.
-    Unknown,
-    /// Continues as a background job.
-    Background,
-}
-
-/// One tool call. Plain display data.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolCall {
-    pub intent: [u8; 16],
-    pub tool: String,
-    pub arguments_json: String,
-    pub destination: Option<String>,
-    pub mutates: bool,
-    pub redacted: bool,
-    pub status: ToolStatus,
-    pub output_json: Option<String>,
-    /// The display outcome text the runner attached, if any.
-    pub outcome: Option<String>,
-}
-
-/// One display row. Plain data.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TranscriptRow {
-    pub role: Role,
-    pub run: Option<RunCoordinate>,
-    /// Prompt or streamed text; empty for tool rows.
-    pub text: String,
-    /// Images attached to a prompt.
-    pub images: u32,
-    pub tool: Option<ToolCall>,
-    /// Publication time of the first event of this row.
-    pub at_ms: u64,
-    /// Publication time of the last event merged into this row.
-    pub updated_at_ms: u64,
-    step: Option<[u8; 16]>,
-}
-
-/// One run started by an accepted prompt.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RunState {
-    pub run: RunCoordinate,
-    pub status: CloudRunStatus,
-    pub usage: CloudUsage,
-    pub model: ModelSelection,
-    /// The device that sent the prompt.
-    pub issuer_device: String,
-    pub issuer_key: [u8; 32],
-    pub prompt_command: [u8; 16],
-}
-impl RunState {
-    /// Completed, stopped, interrupted or of unknown outcome.
-    pub fn finished(&self) -> bool {
-        matches!(
-            self.status,
-            CloudRunStatus::Completed
-                | CloudRunStatus::Stopped
-                | CloudRunStatus::Interrupted
-                | CloudRunStatus::OutcomeUnknown
-        )
-    }
-}
-
-/// A tool call waiting for the person's answer, with what the answer must name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ApprovalRequest {
-    intent: [u8; 16],
-    arguments_digest: [u8; 32],
-    execution: ExecutionReference,
-    expires_at_ms: u64,
-}
-impl ApprovalRequest {
-    pub fn intent(&self) -> [u8; 16] {
-        self.intent
-    }
-    pub fn run(&self) -> RunCoordinate {
-        self.execution.run
-    }
-    pub fn expires_at_ms(&self) -> u64 {
-        self.expires_at_ms
-    }
-    /// The `ResolveApproval` payload answering this request.
-    pub fn answer(&self, choice: ApprovalChoice) -> ApprovalPayload {
-        ApprovalPayload {
-            intent: self.intent,
-            arguments_digest: self.arguments_digest,
-            execution: self.execution.clone(),
-            choice,
-        }
-    }
-}
+/// Commands of this device tracked at once; the oldest settled one goes first.
+pub const MAX_PENDING_COMMANDS: usize = 32;
+/// The reducer's version. A checkpoint made by another version is not restored: the chat is
+/// read again from the start.
+pub const REDUCER_VERSION: u16 = 1;
 
 /// The reduced state of one chat.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -138,9 +42,12 @@ pub struct Transcript {
     rows: Vec<TranscriptRow>,
     runs: Vec<RunState>,
     approvals: Vec<ApprovalRequest>,
+    pending: Vec<PendingCommand>,
+    next_index: u64,
     control_revision: u64,
     deleted: bool,
     omitted_earlier: bool,
+    dirty: Dirty,
 }
 impl Transcript {
     pub fn new() -> Self {
@@ -158,6 +65,10 @@ impl Transcript {
     }
     pub fn run(&self, run: &RunCoordinate) -> Option<&RunState> {
         self.runs.iter().find(|state| &state.run == run)
+    }
+    /// The run whose id is `id`, whatever its epoch.
+    pub fn run_by_id(&self, id: &[u8; 16]) -> Option<&RunState> {
+        self.runs.iter().find(|state| &state.run.id == id)
     }
     /// The highest control revision seen; commands name it as their expected chat revision.
     pub fn control_revision(&self) -> u64 {
@@ -179,18 +90,108 @@ impl Transcript {
             .iter()
             .find(|request| &request.intent == intent)
     }
-    /// Replaces everything with the history a verified snapshot carries.
+    /// Commands this device sent, oldest first.
+    pub fn pending_commands(&self) -> &[PendingCommand] {
+        &self.pending
+    }
+
+    /// Starts tracking a command this device sends. A command already tracked is replaced.
+    pub fn track(&mut self, command: PendingCommand) {
+        self.pending
+            .retain(|known| known.command_id != command.command_id);
+        if self.pending.len() >= MAX_PENDING_COMMANDS {
+            let oldest = self
+                .pending
+                .iter()
+                .position(PendingCommand::settled)
+                .unwrap_or(0);
+            self.pending.remove(oldest);
+        }
+        self.pending.push(command);
+        self.dirty.pending = true;
+    }
+    /// Moves a tracked command to `state`; an accepted command stays accepted.
+    pub fn set_command_state(&mut self, command_id: &[u8; 16], state: CommandState) {
+        if let Some(known) = self
+            .pending
+            .iter_mut()
+            .find(|known| &known.command_id == command_id)
+            && known.state != CommandState::Accepted
+            && known.state != state
+        {
+            known.state = state;
+            self.dirty.pending = true;
+        }
+    }
+
+    /// Everything as one reset delta, for a view that starts now.
+    pub fn full_delta(&self) -> TranscriptDelta {
+        TranscriptDelta {
+            reset: true,
+            first_index: self.first_index(),
+            changed_from: Some(0),
+            rows: self.rows.clone(),
+            runs: Some(self.runs.clone()),
+            approvals: Some(self.approvals.clone()),
+            pending: Some(self.pending.clone()),
+            control_revision: self.control_revision,
+            deleted: self.deleted,
+            omitted_earlier: self.omitted_earlier,
+        }
+    }
+    /// What changed since the last call, or `None` when nothing did.
+    pub fn take_delta(&mut self) -> Option<TranscriptDelta> {
+        let dirty = std::mem::take(&mut self.dirty);
+        if !dirty.any() {
+            return None;
+        }
+        if dirty.reset {
+            return Some(self.full_delta());
+        }
+        let rows = dirty.rows_from.map_or_else(Vec::new, |from| {
+            self.rows
+                .iter()
+                .filter(|row| row.index >= from)
+                .cloned()
+                .collect()
+        });
+        Some(TranscriptDelta {
+            reset: false,
+            first_index: self.first_index(),
+            changed_from: dirty.rows_from,
+            rows,
+            runs: dirty.runs.then(|| self.runs.clone()),
+            approvals: dirty.approvals.then(|| self.approvals.clone()),
+            pending: dirty.pending.then(|| self.pending.clone()),
+            control_revision: self.control_revision,
+            deleted: self.deleted,
+            omitted_earlier: self.omitted_earlier,
+        })
+    }
+    fn first_index(&self) -> u64 {
+        self.rows.first().map_or(self.next_index, |row| row.index)
+    }
+
+    /// Replaces the history with what a verified snapshot carries; pending commands stay.
     pub fn restore(&mut self, snapshot: &CloudSnapshotPayload<'_>) {
+        let pending = std::mem::take(&mut self.pending);
+        let next_index = self.next_index;
         *self = Self::new();
+        self.next_index = next_index;
+        self.pending = pending;
         self.omitted_earlier = snapshot.omitted_earlier;
         for event in &snapshot.events {
             self.apply(event);
         }
         self.control_revision = self.control_revision.max(snapshot.control_revision);
+        self.dirty = Dirty::everything();
     }
     /// Applies one verified event.
     pub fn apply(&mut self, event: &CloudEvent<'_>) {
-        self.control_revision = self.control_revision.max(event.control_revision);
+        if event.control_revision > self.control_revision {
+            self.control_revision = event.control_revision;
+            self.dirty.flags = true;
+        }
         let at = event.timestamp_ms;
         match &event.payload {
             CloudEventPayload::PromptAccepted {
@@ -211,61 +212,32 @@ impl Transcript {
                     issuer_key: command.issuer.signing_key,
                     prompt_command: command.id,
                 });
-                self.push(TranscriptRow {
-                    role: Role::User,
-                    run: Some(*run),
-                    text,
-                    images,
-                    tool: None,
-                    at_ms: at,
-                    updated_at_ms: at,
-                    step: None,
-                });
+                self.dirty.runs = true;
+                self.accepted(&command.id);
+                self.push(Role::User, Some(*run), text, at, None).images = images;
             }
-            CloudEventPayload::Status { run, status } => {
-                if let Some(state) = self.runs.iter_mut().find(|state| &state.run == run) {
-                    state.status = *status;
-                }
-            }
+            CloudEventPayload::Status { run, status } => self.run_change(run, |state| {
+                state.status = *status;
+            }),
             CloudEventPayload::Text {
                 run,
                 step,
                 channel,
                 text,
             } => self.text(*run, *step, *channel, text, at),
-            CloudEventPayload::Usage { run, usage } => {
-                if let Some(state) = self.runs.iter_mut().find(|state| &state.run == run) {
-                    add_usage(&mut state.usage, usage);
-                }
-            }
-            CloudEventPayload::ToolIntent(intent) => {
-                self.tool(intent, ToolStatus::Running, at);
-            }
+            CloudEventPayload::Usage { run, usage } => self.run_change(run, |state| {
+                add_usage(&mut state.usage, usage);
+            }),
+            CloudEventPayload::ToolIntent(intent) => self.tool(intent, ToolStatus::Running, at),
             CloudEventPayload::Approval {
                 intent,
                 expires_at_ms,
-            } => {
-                self.tool(
-                    intent,
-                    ToolStatus::AwaitingApproval {
-                        expires_at_ms: *expires_at_ms,
-                    },
-                    at,
-                );
-                self.approvals.retain(|request| request.intent != intent.id);
-                if self.approvals.len() == MAX_TRANSCRIPT_ROWS {
-                    self.approvals.remove(0);
-                }
-                self.approvals.push(ApprovalRequest {
-                    intent: intent.id,
-                    arguments_digest: intent.arguments_digest,
-                    execution: intent.execution.clone(),
-                    expires_at_ms: *expires_at_ms,
-                });
-            }
-            CloudEventPayload::ApprovalResolved { answer, .. } => {
+            } => self.approval_requested(intent, *expires_at_ms, at),
+            CloudEventPayload::ApprovalResolved { command, answer } => {
+                self.accepted(command);
                 self.approvals
                     .retain(|request| request.intent != answer.intent);
+                self.dirty.approvals = true;
                 let status = match answer.choice {
                     ApprovalChoice::Deny | ApprovalChoice::ReconcileFailed => ToolStatus::Denied,
                     _ => ToolStatus::Approved,
@@ -282,19 +254,78 @@ impl Transcript {
                 };
                 self.update_tool(&value.job.intent, at, |call| call.status = status);
             }
-            CloudEventPayload::Deleted { .. } => self.deleted = true,
-            CloudEventPayload::CommandAccepted { .. }
-            | CloudEventPayload::AuthenticationRequested(_)
-            | CloudEventPayload::SessionState(_) => {}
+            CloudEventPayload::Deleted { command } => {
+                self.accepted(command);
+                self.deleted = true;
+                self.dirty.flags = true;
+            }
+            CloudEventPayload::CommandAccepted { command, .. } => self.accepted(&command.id),
+            CloudEventPayload::AuthenticationRequested(request) => {
+                let binding = &request.binding;
+                let status = SessionStatus::AwaitingConsent {
+                    expires_at_ms: binding.expires_ms,
+                };
+                let call = session_call(
+                    binding.attempt,
+                    &binding.access,
+                    true,
+                    Some(request.startup),
+                );
+                self.session(binding.run, call, status, at);
+            }
+            CloudEventPayload::SessionState(state) => {
+                let binding = &state.binding;
+                let status = match &state.outcome {
+                    SessionOutcome::Established(_) => SessionStatus::Established,
+                    SessionOutcome::Lost { reason, .. } => SessionStatus::Lost(*reason),
+                    SessionOutcome::Refused(reason) => SessionStatus::Refused(*reason),
+                };
+                let ssh = self.session_is_ssh(&binding.attempt);
+                let call = session_call(binding.attempt, &binding.access, ssh, None);
+                self.session(binding.run, call, status, at);
+            }
         }
     }
 
-    fn push(&mut self, row: TranscriptRow) {
+    fn accepted(&mut self, command: &[u8; 16]) {
+        self.set_command_state(command, CommandState::Accepted);
+    }
+    fn run_change(&mut self, run: &RunCoordinate, change: impl FnOnce(&mut RunState)) {
+        if let Some(state) = self.runs.iter_mut().find(|state| &state.run == run) {
+            change(state);
+            self.dirty.runs = true;
+        }
+    }
+    fn push(
+        &mut self,
+        role: Role,
+        run: Option<RunCoordinate>,
+        text: String,
+        at: u64,
+        step: Option<[u8; 16]>,
+    ) -> &mut TranscriptRow {
         if self.rows.len() == MAX_TRANSCRIPT_ROWS {
             self.rows.remove(0);
             self.omitted_earlier = true;
+            self.dirty.flags = true;
         }
-        self.rows.push(row);
+        let index = self.next_index;
+        self.next_index += 1;
+        self.dirty.row(index);
+        self.rows.push(TranscriptRow {
+            index,
+            role,
+            run,
+            text,
+            images: 0,
+            tool: None,
+            session: None,
+            at_ms: at,
+            updated_at_ms: at,
+            step,
+        });
+        let last = self.rows.len() - 1;
+        &mut self.rows[last]
     }
     fn text(
         &mut self,
@@ -315,18 +346,25 @@ impl Transcript {
         {
             last.text.push_str(text);
             last.updated_at_ms = at;
+            let index = last.index;
+            self.dirty.row(index);
             return;
         }
-        self.push(TranscriptRow {
-            role,
-            run: Some(run),
-            text: text.to_owned(),
-            images: 0,
-            tool: None,
-            at_ms: at,
-            updated_at_ms: at,
-            step,
+        self.push(role, Some(run), text.to_owned(), at, step);
+    }
+    fn approval_requested(&mut self, intent: &ToolIntentPayload<'_>, expires_at_ms: u64, at: u64) {
+        self.tool(intent, ToolStatus::AwaitingApproval { expires_at_ms }, at);
+        self.approvals.retain(|request| request.intent != intent.id);
+        if self.approvals.len() == MAX_TRANSCRIPT_ROWS {
+            self.approvals.remove(0);
+        }
+        self.approvals.push(ApprovalRequest {
+            intent: intent.id,
+            arguments_digest: intent.arguments_digest,
+            execution: intent.execution.clone(),
+            expires_at_ms,
         });
+        self.dirty.approvals = true;
     }
     fn tool(&mut self, intent: &ToolIntentPayload<'_>, status: ToolStatus, at: u64) {
         let display = &intent.display;
@@ -339,25 +377,23 @@ impl Transcript {
         }) {
             return;
         }
-        self.push(TranscriptRow {
-            role: Role::Tool,
-            run: Some(intent.execution.run),
-            text: String::new(),
-            images: 0,
-            tool: Some(ToolCall {
-                intent: intent.id,
-                tool: display.tool.to_owned(),
-                arguments_json: display.arguments_json.to_owned(),
-                destination: display.destination.map(str::to_owned),
-                mutates: intent.mutates,
-                redacted: display.redacted,
-                status,
-                output_json: None,
-                outcome,
-            }),
-            at_ms: at,
-            updated_at_ms: at,
-            step: Some(intent.step),
+        let row = self.push(
+            Role::Tool,
+            Some(intent.execution.run),
+            String::new(),
+            at,
+            Some(intent.step),
+        );
+        row.tool = Some(ToolCall {
+            intent: intent.id,
+            tool: display.tool.to_owned(),
+            arguments_json: display.arguments_json.to_owned(),
+            destination: display.destination.map(str::to_owned),
+            mutates: intent.mutates,
+            redacted: display.redacted,
+            status,
+            output_json: None,
+            outcome,
         });
     }
     fn result(&mut self, observation: &ToolObservationPayload<'_>, at: u64) {
@@ -395,10 +431,52 @@ impl Transcript {
         if let Some(call) = row.tool.as_mut() {
             change(call);
         }
+        let index = row.index;
+        self.dirty.row(index);
         true
+    }
+    fn session_is_ssh(&self, attempt: &[u8; 16]) -> bool {
+        self.rows
+            .iter()
+            .filter_map(|row| row.session.as_ref())
+            .any(|call| &call.attempt == attempt && call.ssh)
+    }
+    /// Updates the row of a session attempt, or adds one.
+    fn session(&mut self, run: RunCoordinate, call: SessionCall, status: SessionStatus, at: u64) {
+        let known = self.rows.iter_mut().rev().find(|row| {
+            row.session
+                .as_ref()
+                .is_some_and(|known| known.attempt == call.attempt)
+        });
+        if let Some(row) = known {
+            if let Some(known) = row.session.as_mut() {
+                known.status = status;
+            }
+            row.updated_at_ms = at;
+            let index = row.index;
+            self.dirty.row(index);
+            return;
+        }
+        let row = self.push(Role::Session, Some(run), String::new(), at, None);
+        row.session = Some(SessionCall { status, ..call });
     }
 }
 
+fn session_call(
+    attempt: [u8; 16],
+    access: &TargetAccess,
+    ssh: bool,
+    startup: Option<SessionStartup>,
+) -> SessionCall {
+    SessionCall {
+        attempt,
+        principal: access.target.principal.as_str().to_owned(),
+        host_key: access.target.host_key,
+        ssh,
+        terminal: startup.map(|startup| startup == SessionStartup::Terminal),
+        status: SessionStatus::Established,
+    }
+}
 fn prompt_text(content: &[PromptPart<'_>]) -> (String, u32) {
     let mut text = String::new();
     let mut images = 0u32;

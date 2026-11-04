@@ -9,7 +9,12 @@
 //!    [`SealedHeadProbe::expires_at_ms`], and passes the reply to
 //!    [`SealedHeadProbe::open_reply`], which accepts only the pinned runner's witness to this
 //!    exact query while it is fresh.
-use crate::{AccountScope, CloudDeviceError, DeviceIdentity, records::TrustedRunner};
+use crate::{
+    AccountScope, CloudDeviceError, DeviceIdentity,
+    context::{AccountKeys, CloudSession},
+    flow::{Input, ProbeRequest, SignRequest},
+    records::TrustedRunner,
+};
 use nocterm_hub_model::cloud::{
     capabilities::CapabilityWindow,
     head::{
@@ -33,6 +38,15 @@ pub enum ProbeTarget {
         chat_id: [u8; 16],
         key_epoch: u64,
     },
+    /// Whether the runner admitted one command (`semantic_digest` and the expected control
+    /// revision are those of the sealed command).
+    CommandReceipt {
+        chat_id: [u8; 16],
+        key_epoch: u64,
+        command_id: [u8; 16],
+        semantic_digest: [u8; 32],
+        expected_control_revision: u64,
+    },
 }
 impl ProbeTarget {
     fn head(self) -> HeadTarget {
@@ -41,6 +55,19 @@ impl ProbeTarget {
             Self::Chat { chat_id, key_epoch } => HeadTarget::Chat {
                 chat_id,
                 chat_key_epoch: key_epoch,
+            },
+            Self::CommandReceipt {
+                chat_id,
+                key_epoch,
+                command_id,
+                semantic_digest,
+                expected_control_revision,
+            } => HeadTarget::CommandReceipt {
+                chat_id,
+                chat_key_epoch: key_epoch,
+                command_id,
+                semantic_digest,
+                expected_control_revision,
             },
         }
     }
@@ -183,6 +210,82 @@ impl SealedHeadProbe {
         }
         let witness = open_head_witness(account, &self.query, ciphertext, now_ms)?;
         Ok(witness.witness().value.clone())
+    }
+}
+
+/// A probe inside a flow: signed, sent, then opened. Single use.
+#[derive(Debug)]
+pub(crate) enum ProbeCall {
+    Unsigned(Box<UnsignedHeadProbe>),
+    Sealed(Box<SealedHeadProbe>),
+    Spent,
+}
+impl ProbeCall {
+    /// A fresh probe of `runner` and the bytes the device signs.
+    pub(crate) fn start(
+        session: &CloudSession,
+        device: &DeviceIdentity,
+        runner: &TrustedRunner,
+        target: ProbeTarget,
+        now_ms: i64,
+    ) -> Result<(Self, SignRequest), CloudDeviceError> {
+        let nonces = session.nonces();
+        let probe = UnsignedHeadProbe::with_nonces(
+            session.scope(),
+            session.keys().public_key(),
+            runner,
+            device,
+            target,
+            now_ms,
+            (nonces.fill()?, nonces.fill()?),
+        )?;
+        let request = SignRequest::new(probe.signing_bytes()?, device.signing_key());
+        Ok((Self::Unsigned(Box::new(probe)), request))
+    }
+    /// Seals the signed query; the returned request goes to `ProbeHead`.
+    pub(crate) fn signed(
+        &mut self,
+        keys: &AccountKeys,
+        input: Input,
+    ) -> Result<ProbeRequest, CloudDeviceError> {
+        let Self::Unsigned(probe) = std::mem::replace(self, Self::Spent) else {
+            return Err(CloudDeviceError::Protocol);
+        };
+        let Input::Signature(signature) = input else {
+            return Err(CloudDeviceError::Protocol);
+        };
+        let sealed = probe.seal(keys.pair(), &signature)?;
+        let request = ProbeRequest {
+            scope: sealed.scope().to_vec(),
+            probe_id: sealed.probe_id(),
+            ciphertext: sealed.ciphertext().to_vec(),
+            expires_at_ms: sealed.expires_at_ms(),
+        };
+        *self = Self::Sealed(Box::new(sealed));
+        Ok(request)
+    }
+    /// The witnessed value, or `None` when nobody answered in time.
+    pub(crate) fn answered(
+        &mut self,
+        keys: &AccountKeys,
+        input: Input,
+        now_ms: i64,
+    ) -> Result<Option<HeadValue>, CloudDeviceError> {
+        let Self::Sealed(probe) = std::mem::replace(self, Self::Spent) else {
+            return Err(CloudDeviceError::Protocol);
+        };
+        match input {
+            Input::ProbeReply { .. } if now_ms >= probe.expires_at_ms() => Ok(None),
+            Input::ProbeReply {
+                scope,
+                probe_id,
+                ciphertext,
+            } => probe
+                .open_reply(keys.pair(), &scope, &probe_id, &ciphertext, now_ms)
+                .map(Some),
+            Input::Failed(_) => Ok(None),
+            _ => Err(CloudDeviceError::Protocol),
+        }
     }
 }
 

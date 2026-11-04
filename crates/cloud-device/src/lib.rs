@@ -1,48 +1,67 @@
-//! Cloud chat formats for an account device that has no native storage, such as the web panel.
+//! The sans-I/O Cloud device core: everything an account device decides about Cloud chats,
+//! shared by the web panel (through `nocterm-keys-wasm`) and the native client (ADR 0006, 0007).
 //!
-//! Purpose: let a browser device (a non-extractable WebCrypto Ed25519 key registered on the hub)
-//! read and drive the account's Cloud chats with exactly the checks a native device makes
-//! (ADR 0006).
+//! Purpose: one implementation of the device side of Cloud chats. Clients execute the typed
+//! effects a flow hands out (sign, Store reads and writes, capability proof, head probe,
+//! replay, watch, publish, start a seat, runner status) and keep storage; the core keeps the
+//! formats, the checks, the reduction and the order of the steps.
 //!
 //! Owns:
+//! - the effect protocol ([`flow`]: [`flow::Effect`], [`flow::Input`], [`flow::Frame`],
+//!   [`flow::Step`], [`flow::Flow`]) and the device flows over it: [`discover::Discover`] (hub
+//!   trust, capability proof, trusted runners), [`list::ListChats`] (catalog witnesses, no
+//!   replay), [`open::OpenChat`] (probe, incremental verified replay, Watch, checkpoints,
+//!   freshness), [`command::Deliver`] (wake, sign, seal, identical-bytes publish, receipt probe
+//!   on an unknown outcome), [`create::CreateChat`] (seat, compare-created records, grant
+//!   publication, claim wait) and [`provider::ProviderLease`] (own-runner provider lease);
 //! - the private account record layouts kept in personal Store collections: hub trust
 //!   (`cloud-hub-trust`), the trusted runner registry (`cloud-runner-registry`), wrapped chat
-//!   keys (`cloud-chat-material`) and stored chat key grants (`cloud-chat-grant`), with their
-//!   collection and object identifiers ([`records`]);
+//!   keys (`cloud-chat-material`), stored chat key grants (`cloud-chat-grant`) and own-agent
+//!   provider keys (`agent_provider_keys`), with their collection and object identifiers
+//!   ([`records`]);
 //! - choosing the hub-trust record for a hub and account, and checking the hub's capability proof
 //!   against it ([`trust`]);
-//! - two-step device head probes: canonical bytes out, the caller's Ed25519 signature in, the
-//!   sealed query out, and the witness opened and checked against the original query ([`probe`]);
-//! - verification of one chat's replay frames against the expected record context, the pinned
-//!   runner keys, cursor and sequence continuity, gaps and the fresh head ([`replay`]);
-//! - a small transcript reducer producing neutral rows ([`transcript`]);
-//! - two-step device commands (prompt, stop, inference grant, approval answer) sealed to the
-//!   pinned runner with the account key pair ([`command`]) and their runner-default bounds
-//!   ([`policy`]);
-//! - the building blocks of a new chat: id, key, wrapped material and sealed grant ([`create`]).
+//! - two-step device head probes and commands: canonical bytes out as a [`flow::SignRequest`],
+//!   the caller's Ed25519 signature in, sealed bytes out ([`probe`], [`command`], [`policy`]);
+//! - the resumable verified reader of one chat ([`reader`]): record context, the pinned runner's
+//!   keys, cursor, sequence and writer continuity, gaps, witnessed heads, the freshness levels
+//!   `Current`, `Unconfirmed` and `Withheld`, and sealed device checkpoints;
+//! - the transcript reducer every device shows, with deltas ([`transcript`]);
+//! - the building blocks of a new chat ([`create`]).
 //!
 //! Does not own: the network, storage, clocks beyond the `now_ms` the caller passes, the device
-//! key (the caller signs the bytes it is given), the user interface, or anything the runner does.
+//! key (the caller signs the bytes it is given), key custody beyond holding the unlocked
+//! account keys a flow was given ([`context::AccountKeys`]), the user interface, or anything the
+//! runner does.
 //!
-//! Ports used/provided: none. Settings: none. Globals: none.
+//! Ports used/provided: none; the effect protocol is plain data. Settings: none. Globals: none.
 //!
 //! Invariants:
 //! - nothing a hub offers becomes a trust pin: hub authority, runner keys and account keys come
-//!   from the account's own encrypted records or from the caller's signed-in keyset;
+//!   from the account's own encrypted records or from the caller's unlocked keyset;
 //! - a signature supplied by the caller is verified against the device key named in the signed
-//!   bytes before anything is sealed;
-//! - a replayed record is accepted only from the pinned runner, in its chat, in cursor and
-//!   sequence order, and a replay that ends before the freshly witnessed head is refused;
-//! - chat keys are passed in per call and never retained by a value of this crate;
+//!   bytes before anything is sealed; only this crate makes the values a device signs;
+//! - a replayed record is accepted only from the pinned runner, in its chat, in cursor, sequence
+//!   and writer order; a transcript is always a verified prefix, and it is called `Current` only
+//!   after a fresh witness was reached; a witness behind a verified checkpoint is refused;
+//! - a command is sealed once and every retry publishes exactly the same bytes;
+//! - chat keys and provider keys are opened per use and never retained by a value of this crate;
 //! - the transcript is display data: no row grants or admits anything.
 
 pub mod command;
+pub mod context;
 pub mod create;
+pub mod discover;
 mod error;
+pub mod flow;
+pub mod list;
+pub mod nonces;
+pub mod open;
 pub mod policy;
 pub mod probe;
+pub mod provider;
+pub mod reader;
 pub mod records;
-pub mod replay;
 mod scope;
 #[cfg(test)]
 mod testing;

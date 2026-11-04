@@ -139,3 +139,164 @@ fn rows_beyond_the_bound_drop_the_oldest_and_mark_omitted_history() {
     assert_eq!(transcript.rows().len(), MAX_TRANSCRIPT_ROWS);
     assert!(transcript.omitted_earlier());
 }
+
+macro_rules! session {
+    ($name:literal) => {
+        hex::decode(
+            include_str!(concat!(
+                "../../../../fixtures/cloud-session-v1/",
+                $name,
+                ".hex"
+            ))
+            .trim(),
+        )
+        .unwrap()
+    };
+}
+fn session_row(transcript: &Transcript) -> &SessionCall {
+    transcript
+        .rows()
+        .iter()
+        .find_map(|row| row.session.as_ref())
+        .unwrap()
+}
+
+#[test]
+fn a_consent_request_and_its_session_lifecycle_show_as_one_session_row() {
+    let mut transcript = Transcript::new();
+    apply(&mut transcript, &session!("authentication-requested"));
+    let row = session_row(&transcript);
+    assert!(row.ssh);
+    assert!(matches!(row.status, SessionStatus::AwaitingConsent { .. }));
+    assert!(row.terminal.is_some());
+    apply(&mut transcript, &session!("session-established"));
+    assert_eq!(transcript.rows().len(), 1, "the same attempt");
+    assert_eq!(session_row(&transcript).status, SessionStatus::Established);
+    apply(&mut transcript, &session!("session-lost"));
+    assert!(matches!(
+        session_row(&transcript).status,
+        SessionStatus::Lost(_)
+    ));
+    let mut refused = Transcript::new();
+    apply(&mut refused, &session!("session-refused"));
+    let row = session_row(&refused);
+    assert!(matches!(row.status, SessionStatus::Refused(_)));
+    assert_eq!(row.terminal, None, "not stated without a consent request");
+}
+
+#[test]
+fn deltas_carry_only_what_changed_since_the_last_one() {
+    let mut transcript = Transcript::new();
+    assert_eq!(transcript.take_delta(), None);
+    apply(&mut transcript, &vector!("prompt"));
+    let first = transcript.take_delta().unwrap();
+    assert!(!first.reset);
+    assert_eq!(first.changed_from, Some(0));
+    assert_eq!(first.rows.len(), 1);
+    assert!(first.runs.is_some());
+    apply(&mut transcript, &vector!("text"));
+    apply(&mut transcript, &vector!("text"));
+    let second = transcript.take_delta().unwrap();
+    assert_eq!(second.changed_from, Some(1), "only the new, merged row");
+    assert_eq!(second.rows.len(), 1);
+    assert_eq!(second.rows[0].index, 1);
+    assert!(second.runs.is_none());
+    let bytes = vector!("snapshot");
+    transcript.restore(&CloudSnapshotPayload::from_canonical_bytes(&bytes).unwrap());
+    let restored = transcript.take_delta().unwrap();
+    assert!(restored.reset);
+    assert!(
+        restored.rows.iter().all(|row| row.index >= 2),
+        "indices keep growing"
+    );
+    assert_eq!(restored.first_index, restored.rows[0].index);
+}
+
+#[test]
+fn a_command_of_this_device_is_pending_until_the_runner_accepts_it() {
+    let mut transcript = Transcript::new();
+    let prompt_bytes = vector!("prompt");
+    let prompt = CloudEvent::from_canonical_bytes(&prompt_bytes)
+        .unwrap()
+        .payload;
+    let CloudEventPayload::PromptAccepted { command, .. } = &prompt else {
+        panic!("a prompt");
+    };
+    transcript.track(PendingCommand {
+        command_id: command.id,
+        kind: PendingKind::Prompt,
+        text: "public fixture prompt".to_owned(),
+        run: None,
+        state: CommandState::Sending,
+        at_ms: 1,
+    });
+    transcript.set_command_state(&command.id, CommandState::Delivered);
+    assert_eq!(
+        transcript.pending_commands()[0].state,
+        CommandState::Delivered
+    );
+    apply(&mut transcript, &vector!("prompt"));
+    assert_eq!(
+        transcript.pending_commands()[0].state,
+        CommandState::Accepted
+    );
+    transcript.set_command_state(&command.id, CommandState::Unreachable);
+    assert_eq!(
+        transcript.pending_commands()[0].state,
+        CommandState::Accepted,
+        "an accepted command stays accepted"
+    );
+    for id in 0..=MAX_PENDING_COMMANDS {
+        transcript.track(PendingCommand {
+            command_id: {
+                let mut other = [0xee; 16];
+                other[0] = u8::try_from(id).unwrap();
+                other
+            },
+            kind: PendingKind::Stop,
+            text: String::new(),
+            run: None,
+            state: CommandState::Sending,
+            at_ms: 2,
+        });
+    }
+    assert_eq!(transcript.pending_commands().len(), MAX_PENDING_COMMANDS);
+    assert!(
+        transcript
+            .pending_commands()
+            .iter()
+            .all(|pending| pending.command_id != command.id),
+        "the settled command went first"
+    );
+}
+
+#[test]
+fn every_event_fixture_round_trips_through_the_checkpoint_codec() {
+    let mut transcript = Transcript::new();
+    for bytes in [
+        vector!("prompt"),
+        vector!("status"),
+        vector!("text"),
+        vector!("usage"),
+        vector!("intent"),
+        vector!("approval"),
+        vector!("result"),
+        vector!("background-exit-failed"),
+        session!("authentication-requested"),
+        session!("session-lost"),
+        vector!("deleted"),
+    ] {
+        apply(&mut transcript, &bytes);
+    }
+    let mut out = codec::Writer(Vec::new());
+    transcript.encode(&mut out).unwrap();
+    let mut input = codec::Reader(&out.0);
+    let mut decoded = Transcript::decode(&mut input).unwrap();
+    input.finish().unwrap();
+    transcript.take_delta();
+    decoded.take_delta();
+    assert_eq!(decoded, transcript);
+    for size in [0, out.0.len() / 2, out.0.len() - 1] {
+        assert!(Transcript::decode(&mut codec::Reader(&out.0[..size])).is_err());
+    }
+}

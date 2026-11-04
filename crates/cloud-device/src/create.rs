@@ -80,6 +80,26 @@ impl NewChat {
     }
 }
 
+/// A grant for a generation whose material is already stored (an earlier attempt stored the
+/// material and stopped before its grant): the chat key is opened from the material and sealed
+/// to the runner again.
+pub fn grant_for_material(
+    material: &ChatMaterialRecord,
+    runner: &TrustedRunner,
+    account: &AccountKey,
+    account_pair: &AccountKeyPair,
+) -> Result<ChatGrantRecord, CloudDeviceError> {
+    let selector = material.selector();
+    if selector.runner() != runner.runner() || selector.pins() != runner.pins() {
+        return Err(CloudDeviceError::Binding);
+    }
+    let key = material.open_key(account)?;
+    let pinned =
+        PublicKey::from_bytes(&runner.pins().encryption).map_err(|_| CloudDeviceError::Binding)?;
+    let sealed = seal_chat_key_to_runner(&key, account_pair, &pinned, &selector.coordinate()?)?;
+    ChatGrantRecord::new(random_bytes()?, sealed)
+}
+
 /// The inbox publication of a stored grant, with the grant's own publication id so every retry
 /// is the same publication.
 pub fn grant_publication(
@@ -97,6 +117,9 @@ pub fn grant_publication(
         capabilities,
     )
 }
+
+pub mod flow;
+pub use flow::{ChatHost, CreateChat, CreatedChat};
 
 #[cfg(test)]
 mod tests;

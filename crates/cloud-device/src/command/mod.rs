@@ -9,18 +9,22 @@
 //! Keep the returned publication and resend exactly its bytes on retry: the publication id makes
 //! the hub's delivery idempotent and the expected chat revision stops a second admission.
 use crate::{
-    CloudDeviceError, DeviceIdentity, policy::PromptPolicy, records::ChatSelector,
-    transcript::ApprovalRequest, trust::HubCapabilities,
+    CloudDeviceError, DeviceIdentity, flow::SignRequest, policy::PromptPolicy,
+    records::ChatSelector, transcript::ApprovalRequest, trust::HubCapabilities,
 };
 use nocterm_hub_model::cloud::{
-    CloudRoute, CommandContext, CommandHeader, CommandKeys, CommandKind, MAX_COMMAND_LIFETIME_MS,
-    RunCoordinate, SignedCommand,
-    payload::{ApprovalChoice, CloudCommandPayload},
+    CloudRoute, CloudTextId, CommandContext, CommandHeader, CommandKeys, CommandKind,
+    MAX_COMMAND_LIFETIME_MS, RunCoordinate, SignedCommand,
+    payload::{ApprovalChoice, CloudCommandPayload, GrantPayload, GrantReference},
+    provider::ProviderLeaseContext,
     relay::{PublicationMetadata, RelayBinding},
 };
 use nocterm_keys::{AccountKeyPair, PublicKey, cloud::seal_command, random_bytes};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
+
+pub mod delivery;
+pub use delivery::{Deliver, DeliveryUpdate};
 
 /// How long a stop or an approval answer may wait for admission.
 pub const CONTROL_LIFETIME_MS: i64 = 10 * 60 * 1000;
@@ -44,6 +48,13 @@ pub enum CommandAction<'a> {
     Answer {
         approval: &'a ApprovalRequest,
         choice: ApprovalChoice,
+    },
+    /// Lease the own provider key to the runner's verified boot (`IssueGrant(Provider)`).
+    Provider {
+        grant: GrantReference,
+        context: &'a ProviderLeaseContext,
+        models: &'a [CloudTextId],
+        capsule: &'a [u8],
     },
 }
 
@@ -112,6 +123,22 @@ impl UnsignedCommand {
                 CONTROL_LIFETIME_MS,
                 CloudCommandPayload::ResolveApproval(Box::new(approval.answer(choice))),
             ),
+            CommandAction::Provider {
+                grant,
+                context,
+                models,
+                capsule,
+            } => (
+                CommandKind::IssueGrant,
+                None,
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::IssueGrant(Box::new(GrantPayload::Provider {
+                    grant,
+                    context: context.clone(),
+                    allowed_models: models.to_vec(),
+                    capsule,
+                })),
+            ),
         };
         require_deadline(&payload, now_ms, device.session_expires_at_ms())?;
         let accept_before_ms = now_ms
@@ -161,6 +188,16 @@ impl UnsignedCommand {
     /// The exact bytes the device signs (Ed25519, no prehash).
     pub fn signing_bytes(&self) -> Result<Vec<u8>, CloudDeviceError> {
         Ok(self.header.canonical_bytes()?)
+    }
+    /// The signing bytes as a request a device signing service accepts.
+    pub fn sign_request(&self) -> Result<SignRequest, CloudDeviceError> {
+        Ok(SignRequest::new(
+            self.signing_bytes()?,
+            self.header.issuer().signing_key,
+        ))
+    }
+    pub fn expected_control_revision(&self) -> u64 {
+        self.header.context().expected_chat_revision
     }
     /// Verifies the device signature and seals the command to the pinned runner. The ciphertext
     /// must fit one relay frame, which `PublishOne` requires.

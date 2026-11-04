@@ -775,9 +775,12 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 name = "nocterm-cloud-device"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "hex",
  "nocterm-hub-model",
  "nocterm-keys",
+ "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "zeroize",
@@ -792,6 +795,7 @@ dependencies = [
  "hex",
  "http-body",
  "hyper-util",
+ "nocterm-cloud-device",
  "nocterm-hub-grpc",
  "nocterm-hub-model",
  "nocterm-hub-proto",

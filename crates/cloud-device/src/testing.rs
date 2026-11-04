@@ -4,8 +4,11 @@
     clippy::expect_used,
     reason = "test fixtures fail loudly"
 )]
+pub(crate) mod hub;
+
 use crate::{
     DeviceIdentity,
+    context::{AccountKeys, CloudSession},
     records::{ChatSelector, HubTrustRecord, RunnerPins, TrustedRunner},
     trust::{HubCapabilities, TrustedHub},
 };
@@ -21,6 +24,7 @@ use nocterm_keys::{
     cloud::{RunnerEncryptionKey, RunnerSigningKey},
 };
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 pub(crate) const NOW: i64 = 1_800_000_000_000;
 pub(crate) const RAW_HUB: &str = "raw-hub-0001";
@@ -110,6 +114,20 @@ impl World {
     }
     pub(crate) fn account_public(&self) -> [u8; 32] {
         self.account_pair.public_key().to_bytes()
+    }
+    pub(crate) fn keys(&self) -> AccountKeys {
+        AccountKeys::new(ACCOUNT, self.account.clone(), self.account_pair.clone())
+    }
+    pub(crate) fn session(&self) -> Arc<CloudSession> {
+        Arc::new(
+            CloudSession::new(
+                Arc::new(self.keys()),
+                self.hub.clone(),
+                self.capabilities,
+                vec![self.runner.clone()],
+            )
+            .unwrap(),
+        )
     }
 }
 
