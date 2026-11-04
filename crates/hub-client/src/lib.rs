@@ -14,6 +14,9 @@
 //! owners; immutable hub information is shared rather than deeply cloned.
 //! Guarded runner heartbeat and device status calls retain bounded body/result
 //! ownership; runner deadline observations clone no credential or token.
+//! Cloud device flows (`nocterm-cloud-device`) sign through [`HubClient::sign_cloud`], which
+//! accepts only the core's sign requests for this device's key, and name the device with
+//! [`HubClient::cloud_device`].
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
 //! provide a [`SessionStore`] for tokens), how a device is named (callers pass a
 //! [`DeviceInfo`]), terminal rendering, or vault encryption (`nocterm-keys`).

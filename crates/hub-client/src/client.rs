@@ -166,6 +166,33 @@ impl HubClient {
         self.credentials.set_session(None);
     }
 
+    /// The signed-in device as Cloud device flows name it: device id, device key, the current
+    /// access token's digest and the refresh expiry that caps every signed deadline.
+    pub fn cloud_device(&self) -> Result<nocterm_cloud_device::DeviceIdentity, ClientError> {
+        let session = self.credentials.session().ok_or(ClientError::NotSignedIn)?;
+        nocterm_cloud_device::DeviceIdentity::new(
+            &session.device_id,
+            self.credentials.key.public_key(),
+            &session.access_token,
+            session.refresh_expires_at_ms,
+        )
+        .map_err(ClientError::CloudDevice)
+    }
+
+    /// Signs a value a Cloud device flow asked for (`Effect::Sign`) with this device's key.
+    /// Only `nocterm-cloud-device` makes such values, from the canonical bytes of a head query
+    /// or command header it built, so this is no generic signing oracle; a value that names
+    /// another device key is refused.
+    pub fn sign_cloud(
+        &self,
+        value: &impl nocterm_cloud_device::flow::CloudSignable,
+    ) -> Result<[u8; 64], ClientError> {
+        if value.signer() != self.credentials.key.public_key() {
+            return Err(ClientError::CloudSigner);
+        }
+        Ok(self.credentials.key.sign(value.signing_message()))
+    }
+
     /// Unauthenticated sign-in service.
     pub fn auth(&self) -> AuthServiceClient<Channel> {
         AuthServiceClient::new(self.channel.clone())
