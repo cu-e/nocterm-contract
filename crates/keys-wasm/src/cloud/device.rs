@@ -19,7 +19,7 @@ use wasm_bindgen::prelude::*;
 use super::{
     CloudResult, WebCloudError,
     flow::{Running, WebChat, WebFlow},
-    hex_id, js, millis,
+    from_js, hex_id, js, millis,
     types::{DeviceInput, ListOptions, NewChatHost},
     view::RunnerInfo,
 };
@@ -77,13 +77,19 @@ pub struct CloudDevice {
 impl CloudDevice {
     /// The device of the unlocked `account`; the keys stay inside WebAssembly.
     #[wasm_bindgen(constructor)]
-    pub fn new(account: &WebAccount, device: DeviceInput) -> Result<CloudDevice, JsError> {
-        js(Self::made(account, device))
+    pub fn new(
+        account: &WebAccount,
+        #[wasm_bindgen(unchecked_param_type = "DeviceInput")] device: JsValue,
+    ) -> Result<CloudDevice, JsError> {
+        js(from_js(device, "device").and_then(|device| Self::made(account, device)))
     }
     /// The device after a token refresh; flows started later name it.
     #[wasm_bindgen(js_name = setDevice)]
-    pub fn set_device(&mut self, device: DeviceInput) -> Result<(), JsError> {
-        let identity = js(identity(device))?;
+    pub fn set_device(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "DeviceInput")] device: JsValue,
+    ) -> Result<(), JsError> {
+        let identity = js(from_js(device, "device").and_then(identity))?;
         self.shared.borrow_mut().device = identity;
         Ok(())
     }
@@ -123,8 +129,12 @@ impl CloudDevice {
     /// replay of a chat. With `options.watch` new summaries keep arriving and the flow never
     /// ends.
     #[wasm_bindgen(js_name = listChats)]
-    pub fn list_chats(&self, options: Option<ListOptions>) -> Result<WebFlow, JsError> {
-        js(self.listing_with(options.unwrap_or_default()))
+    pub fn list_chats(
+        &self,
+        #[wasm_bindgen(unchecked_optional_param_type = "ListOptions | null")] options: JsValue,
+    ) -> Result<WebFlow, JsError> {
+        js(from_js::<Option<ListOptions>>(options, "list options")
+            .and_then(|options| self.listing_with(options.unwrap_or_default())))
     }
     /// Opens chat `chatId` (`ChatRef` text), resuming at `checkpoint` (the bytes of its last
     /// `checkpoint` output) when there is one.
@@ -140,10 +150,10 @@ impl CloudDevice {
     #[wasm_bindgen(js_name = createChat)]
     pub fn create_chat(
         &self,
-        host: NewChatHost,
+        #[wasm_bindgen(unchecked_param_type = "NewChatHost")] host: JsValue,
         chat_id: Option<String>,
     ) -> Result<WebFlow, JsError> {
-        js(self.creating(host, chat_id))
+        js(from_js(host, "chat host").and_then(|host| self.creating(host, chat_id)))
     }
     /// Leases `agentId`'s own provider key to the runner of `chat` and renews it while the flow
     /// runs.
@@ -191,11 +201,12 @@ impl CloudDevice {
         let (session, device) = self.parts()?;
         let checkpoints: Vec<VerifiedDirectory> = options
             .directories
+            .unwrap_or_default()
             .into_iter()
             .map(|bytes| VerifiedDirectory::from_bytes(bytes.into_vec()))
             .collect();
         let mut flow = ListChats::new(session, device).with_directories(&checkpoints);
-        if options.watch {
+        if options.watch.unwrap_or_default() {
             flow = flow.watching();
         }
         Ok(WebFlow::new(Running::List(flow), self.shared.clone()))

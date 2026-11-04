@@ -540,7 +540,6 @@ pub struct ModelInput {
 
 /// What the person asks of an open chat. Ids are lowercase hex.
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
-#[tsify(from_wasm_abi)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ChatActionInput {
     /// Without a model, the latest run's.
@@ -567,7 +566,6 @@ pub enum ChatActionInput {
 
 /// Where a new chat runs.
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
-#[tsify(from_wasm_abi)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum NewChatHost {
     /// A managed agent; its seat is started for the chat.

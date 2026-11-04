@@ -8,7 +8,6 @@ use tsify_next::Tsify;
 /// The signed-in device: the hub's device id, the public half of its WebCrypto Ed25519 key,
 /// the current access token (only its digest is kept) and the refresh expiry.
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
-#[tsify(from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInput {
     pub device_id: String,
@@ -246,7 +245,6 @@ pub struct WireInstance {
 
 /// The answer to an effect.
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
-#[tsify(from_wasm_abi)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EffectInput {
     Signature {
@@ -257,14 +255,15 @@ pub enum EffectInput {
     Collections {
         collections: Vec<WireCollection>,
     },
-    /// `grantedBy` is empty for a personal collection.
+    /// `grantedBy` is absent (or empty) for a personal collection.
     #[serde(rename_all = "camelCase")]
     CollectionKey {
         #[serde(with = "serde_bytes")]
         #[tsify(type = "Uint8Array")]
         wrapped_key: Vec<u8>,
         #[serde(default)]
-        granted_by: String,
+        #[tsify(optional)]
+        granted_by: Option<String>,
     },
     Object {
         object: WireObject,
@@ -326,7 +325,6 @@ pub enum EffectInput {
 
 /// One `CloudReplayFrame` or `CloudHint`.
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
-#[tsify(from_wasm_abi)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StreamFrame {
     #[serde(rename_all = "camelCase")]

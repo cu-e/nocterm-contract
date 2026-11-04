@@ -23,10 +23,10 @@ use wasm_bindgen::prelude::*;
 use super::{
     CloudResult, WebCloudError,
     device::Shared,
-    hex_id, js, millis,
+    from_js, hex_id, js, millis,
     types::{
-        ChatActionInput, DeviceInput, EffectInput, FlowOutput, FlowStep, StreamFrame, WireEffect,
-        WireInstance, WirePublication, WireSelector,
+        ChatActionInput, EffectInput, FlowOutput, FlowStep, StreamFrame, WireEffect, WireInstance,
+        WirePublication, WireSelector,
     },
     view::{RunnerInfo, WireDelta, WireFreshness, command_state, ms},
 };
@@ -54,20 +54,25 @@ impl WebFlow {
     pub fn next(&mut self, now_ms: f64) -> Result<FlowStep, JsError> {
         js(self.step(now_ms))
     }
-    /// The answer to effect `id`.
-    pub fn resolve(&mut self, id: u32, input: EffectInput) -> Result<(), JsError> {
-        js(self.resolve_input(id, input))
+    /// The answer to effect `id`. An answer that does not match `EffectInput` is refused and
+    /// changes nothing.
+    pub fn resolve(
+        &mut self,
+        id: u32,
+        #[wasm_bindgen(unchecked_param_type = "EffectInput")] input: JsValue,
+    ) -> Result<(), JsError> {
+        js(from_js(input, "effect input").and_then(|input| self.resolve_input(id, input)))
     }
-    /// One stream frame of effect `id` (a replay or watch).
-    pub fn frame(&mut self, id: u32, frame: StreamFrame) {
-        let frame = frame_of(frame);
-        match &mut self.running {
-            Running::Discover(flow) => flow.frame(id, frame),
-            Running::List(flow) => flow.frame(id, frame),
-            Running::Deliver(flow, _) => flow.frame(id, frame),
-            Running::Create(flow) => flow.frame(id, frame),
-            Running::Lease(flow, _) => flow.frame(id, frame),
-        }
+    /// One stream frame of effect `id` (a replay or watch). A frame that does not match
+    /// `StreamFrame` is refused and changes nothing.
+    pub fn frame(
+        &mut self,
+        id: u32,
+        #[wasm_bindgen(unchecked_param_type = "StreamFrame")] frame: JsValue,
+    ) -> Result<(), JsError> {
+        let frame = js(from_js(frame, "stream frame"))?;
+        self.frame_input(id, frame);
+        Ok(())
     }
 }
 
@@ -127,6 +132,16 @@ impl WebFlow {
         }
         Ok(())
     }
+    pub(crate) fn frame_input(&mut self, id: u32, frame: StreamFrame) {
+        let frame = frame_of(frame);
+        match &mut self.running {
+            Running::Discover(flow) => flow.frame(id, frame),
+            Running::List(flow) => flow.frame(id, frame),
+            Running::Deliver(flow, _) => flow.frame(id, frame),
+            Running::Create(flow) => flow.frame(id, frame),
+            Running::Lease(flow, _) => flow.frame(id, frame),
+        }
+    }
 }
 
 /// An open chat: its flow, and the commands built from its verified transcript.
@@ -147,11 +162,21 @@ impl WebChat {
     pub fn next(&mut self, now_ms: f64) -> Result<FlowStep, JsError> {
         js(self.step(now_ms))
     }
-    pub fn resolve(&mut self, id: u32, input: EffectInput) -> Result<(), JsError> {
-        js(self.resolve_input(id, input))
+    pub fn resolve(
+        &mut self,
+        id: u32,
+        #[wasm_bindgen(unchecked_param_type = "EffectInput")] input: JsValue,
+    ) -> Result<(), JsError> {
+        js(from_js(input, "effect input").and_then(|input| self.resolve_input(id, input)))
     }
-    pub fn frame(&mut self, id: u32, frame: StreamFrame) {
+    pub fn frame(
+        &mut self,
+        id: u32,
+        #[wasm_bindgen(unchecked_param_type = "StreamFrame")] frame: JsValue,
+    ) -> Result<(), JsError> {
+        let frame = js(from_js(frame, "stream frame"))?;
         self.frame_input(id, frame);
+        Ok(())
     }
     /// The whole transcript as one reset delta, for a view that starts now.
     pub fn transcript(&self) -> WireDelta {
@@ -166,8 +191,11 @@ impl WebChat {
     }
     /// The device after a token refresh.
     #[wasm_bindgen(js_name = setDevice)]
-    pub fn set_device(&mut self, device: DeviceInput) -> Result<(), JsError> {
-        let identity = js(super::device::identity(device))?;
+    pub fn set_device(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "DeviceInput")] device: JsValue,
+    ) -> Result<(), JsError> {
+        let identity = js(from_js(device, "device").and_then(super::device::identity))?;
         self.chat.borrow_mut().set_device(identity);
         Ok(())
     }
@@ -175,11 +203,11 @@ impl WebChat {
     /// managed agent whose seat serves this chat (its seat is started first).
     pub fn deliver(
         &mut self,
-        action: ChatActionInput,
+        #[wasm_bindgen(unchecked_param_type = "ChatActionInput")] action: JsValue,
         wake: Option<String>,
         now_ms: f64,
     ) -> Result<WebFlow, JsError> {
-        js(self.delivery(action, wake, now_ms))
+        js(from_js(action, "chat action").and_then(|action| self.delivery(action, wake, now_ms)))
     }
 }
 
@@ -449,7 +477,7 @@ pub(crate) fn input_of(input: EffectInput) -> CloudResult<Input> {
             granted_by,
         } => Input::CollectionKey {
             wrapped_key,
-            granted_by,
+            granted_by: granted_by.unwrap_or_default(),
         },
         EffectInput::Object { object } => Input::Object(ObjectEntry {
             collection_id: object.collection_id,

@@ -20,15 +20,14 @@ use super::{
 /// `listChats` options: the `directories` checkpoints stored from earlier listings (any order,
 /// one per runner), and `watch` to keep reading new summaries (the flow then never ends).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Tsify)]
-#[tsify(from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
 pub struct ListOptions {
     #[serde(default)]
     #[tsify(optional, type = "Uint8Array[]")]
-    pub directories: Vec<serde_bytes::ByteBuf>,
+    pub directories: Option<Vec<serde_bytes::ByteBuf>>,
     #[serde(default)]
     #[tsify(optional)]
-    pub watch: bool,
+    pub watch: Option<bool>,
 }
 
 /// One listed chat. `status`: `current` (the runner confirmed the summary), `stale` (the runner

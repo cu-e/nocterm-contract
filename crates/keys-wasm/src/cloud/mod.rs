@@ -7,6 +7,12 @@
 //! ([`types`], [`view`], the listing rows of `types::WireChat`); nothing is JSON text. The account key, the account key pair,
 //! collection keys, chat keys and provider keys never cross into JavaScript; the device key
 //! stays in the page's WebCrypto store and signs the bytes a `sign` effect names.
+//!
+//! Inputs arrive as plain `JsValue`s typed by their declarations and are decoded here
+//! (`from_js`): a value that does not match is an `argument` refusal returned to the caller.
+//! Nothing converts inside the generated binding, where a throw would leave the receiver
+//! borrowed and every later call on it failing. An optional field is an `Option` on this side,
+//! so `undefined` and `null` both mean absent.
 mod device;
 mod flow;
 mod listing;
@@ -29,6 +35,13 @@ pub enum WebCloudError {
     Device(#[from] CloudDeviceError),
     #[error("[argument] invalid {0}")]
     Argument(&'static str),
+    /// A value from JavaScript did not match its declaration.
+    #[error("[argument] invalid {what}: {source}")]
+    Value {
+        what: &'static str,
+        #[source]
+        source: serde_wasm_bindgen::Error,
+    },
     #[error("[not_ready] connect first: the device has no trusted hub yet")]
     NotReady,
 }
@@ -36,7 +49,7 @@ impl WebCloudError {
     pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Device(error) => device_code(error),
-            Self::Argument(_) => "argument",
+            Self::Argument(_) | Self::Value { .. } => "argument",
             Self::NotReady => "not_ready",
         }
     }
@@ -94,6 +107,15 @@ pub(crate) type CloudResult<T> = Result<T, WebCloudError>;
 /// A refusal becomes text only here, at the JavaScript boundary.
 pub(crate) fn js<T>(result: CloudResult<T>) -> Result<T, JsError> {
     result.map_err(JsError::from)
+}
+
+/// A value from JavaScript as `T`. The binding takes it as a `JsValue`, so a mismatch is a
+/// refusal of this call only and the receiver stays usable.
+pub(crate) fn from_js<T: serde::de::DeserializeOwned>(
+    value: wasm_bindgen::JsValue,
+    what: &'static str,
+) -> CloudResult<T> {
+    serde_wasm_bindgen::from_value(value).map_err(|source| WebCloudError::Value { what, source })
 }
 
 /// A JavaScript time in milliseconds as the contract's signed milliseconds.

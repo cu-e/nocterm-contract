@@ -151,7 +151,7 @@ impl Driven for WebFlow {
         self.resolve_input(id, input).unwrap();
     }
     fn push(&mut self, id: u32, frame: StreamFrame) {
-        self.frame(id, frame);
+        self.frame_input(id, frame);
     }
 }
 impl Driven for WebChat {
@@ -326,7 +326,7 @@ pub(super) fn store_answer(
                 |(_, wrapped)| {
                     Answer::Input(EffectInput::CollectionKey {
                         wrapped_key: wrapped.clone(),
-                        granted_by: String::new(),
+                        granted_by: None,
                     })
                 },
             ),

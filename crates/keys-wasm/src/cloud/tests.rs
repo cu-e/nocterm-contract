@@ -246,7 +246,7 @@ fn a_watch_hint_brings_only_the_later_record_and_a_reopen_resumes_at_the_checkpo
         .unwrap();
     let later = hub.session["chat"]["later"].as_array().unwrap().clone();
     hub.records.extend(later);
-    chat.frame(
+    chat.frame_input(
         watches[0],
         super::types::StreamFrame::Hint { head_cursor: 7 },
     );
@@ -531,5 +531,59 @@ fn listed_rows_cross_with_their_summary_status_and_directory_checkpoints() {
     assert_eq!(bytes, [9, 9]);
     let options: super::types::ListOptions =
         serde_json::from_value(serde_json::json!({ "watch": true })).unwrap();
-    assert!(options.watch && options.directories.is_empty());
+    assert!(options.watch == Some(true) && options.directories.is_none());
+}
+
+/// Every field the declarations mark optional (`field?: T`) also accepts an explicit absent
+/// value: the page passes `{grantedBy: undefined}`, which reaches serde as a unit value, as
+/// `null` does here.
+#[test]
+fn optional_input_fields_accept_an_explicit_absent_value() {
+    use super::types::{ListOptions, StreamFrame};
+    use serde_json::json;
+    let key: EffectInput = serde_json::from_value(
+        json!({ "kind": "collectionKey", "wrappedKey": [1, 2], "grantedBy": null }),
+    )
+    .unwrap();
+    assert!(matches!(
+        key,
+        EffectInput::CollectionKey {
+            granted_by: None,
+            ..
+        }
+    ));
+    let options: ListOptions =
+        serde_json::from_value(json!({ "directories": null, "watch": null })).unwrap();
+    assert!(options.directories.is_none() && options.watch.is_none());
+    let prompt: ChatActionInput =
+        serde_json::from_value(json!({ "kind": "prompt", "text": "hi", "model": null })).unwrap();
+    assert!(matches!(
+        prompt,
+        ChatActionInput::Prompt { model: None, .. }
+    ));
+    let stop: ChatActionInput =
+        serde_json::from_value(json!({ "kind": "stop", "run": null })).unwrap();
+    assert!(matches!(stop, ChatActionInput::Stop { run: None }));
+    let header: StreamFrame = serde_json::from_value(json!({
+        "kind": "header", "publicationId": [1], "binding": [2], "totalBytes": 1,
+        "ciphertextSha256": [3], "cursor": 4, "originAccountId": "a",
+        "originSigningKey": [5], "originRunnerId": null,
+    }))
+    .unwrap();
+    assert!(matches!(
+        header,
+        StreamFrame::Header {
+            origin_runner_id: None,
+            ..
+        }
+    ));
+    let seat: EffectInput = serde_json::from_value(json!({
+        "kind": "instance",
+        "instance": { "instanceId": "i", "agentId": "a", "runnerId": null, "state": "ready" },
+    }))
+    .unwrap();
+    assert!(matches!(
+        seat,
+        EffectInput::Instance { instance } if instance.runner_id.is_none()
+    ));
 }
