@@ -1,10 +1,16 @@
 //! The `authorized_keys` line that makes a server trust the user's SSH CA, built and parsed.
 //!
 //! The line is `cert-authority,principals="nocterm-agent-<id>" ssh-ed25519 <blob> <comment>`.
-//! Parsing is strict so that removing "our" line never removes anything else.
+//! Line version 1 (native ADR 0119) admits the CA's single agent principal
+//! ([`super::ssh_ca::agent_principal`]); line version 2 (contract ADR 0009) admits only the
+//! server's own principal ([`super::ssh_ca::principal_for`], built by [`CaLine::for_server`]), so
+//! a certificate for one chat's servers opens no other server. Parsing is strict so that removing
+//! "our" line never removes anything else.
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use nocterm_hub_model::cloud::ssh::SshServerId;
 
+use super::ssh_ca::{agent_principal, principal_for};
 use super::ssh_grant::{MAX_PRINCIPAL_BYTES, PRINCIPAL_PREFIX};
 
 const KEY_TYPE: &str = "ssh-ed25519";
@@ -65,7 +71,31 @@ fn principal_ok(principal: &str) -> bool {
             })
 }
 
+/// How a server's `authorized_keys` trusts the current CA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerLine {
+    /// A line of the current CA admits this server's own principal (line version 2).
+    PerServer,
+    /// Only a line of the current CA with its shared principal (line version 1): certificates
+    /// for this server are refused until the line is rewritten.
+    Shared,
+    /// No line of the current CA.
+    Absent,
+}
+
 impl CaLine {
+    /// The line version 2 of `server`: only that server's principal under `ca_key`.
+    pub fn for_server(ca_key: [u8; 32], server: &SshServerId, comment: &str) -> Self {
+        Self {
+            ca_key,
+            principals: vec![principal_for(&ca_key, server)],
+            comment: comment.to_owned(),
+        }
+    }
+    /// True when this line lets `ca_key` certify `server` (line version 2).
+    pub fn admits_server(&self, ca_key: &[u8; 32], server: &SshServerId) -> bool {
+        &self.ca_key == ca_key && self.principals.contains(&principal_for(ca_key, server))
+    }
     fn validate(&self) -> Result<(), LineError> {
         if self.principals.is_empty()
             || self.principals.len() > MAX_LINE_PRINCIPALS
@@ -125,6 +155,25 @@ pub fn find_ca_lines(file: &str, ca_key: &[u8; 32]) -> Vec<usize> {
         .filter(|(_, line)| CaLine::parse(line).is_ok_and(|l| &l.ca_key == ca_key))
         .map(|(index, _)| index)
         .collect()
+}
+
+/// How `file` trusts `ca_key` for `server`: a per-server line wins over a shared one.
+pub fn server_line(file: &str, ca_key: &[u8; 32], server: &SshServerId) -> ServerLine {
+    let lines: Vec<CaLine> = file
+        .lines()
+        .filter_map(|line| CaLine::parse(line).ok())
+        .filter(|line| &line.ca_key == ca_key)
+        .collect();
+    if lines.iter().any(|line| line.admits_server(ca_key, server)) {
+        ServerLine::PerServer
+    } else if lines
+        .iter()
+        .any(|line| line.principals.contains(&agent_principal(ca_key)))
+    {
+        ServerLine::Shared
+    } else {
+        ServerLine::Absent
+    }
 }
 
 /// The text with every Nocterm CA line of `ca_key` removed; all other bytes are kept as they
@@ -191,5 +240,44 @@ mod tests {
             format!("ssh-ed25519 AAAA me\n{other}\n# note")
         );
         assert_eq!(remove_ca_lines("a\n", &[7; 32]), "a\n");
+    }
+
+    #[test]
+    fn a_per_server_line_admits_only_its_server_and_parses_back() {
+        let (db, cache) = (
+            SshServerId::of_profile("profile-db"),
+            SshServerId::of_profile("profile-cache"),
+        );
+        let ca = [7; 32];
+        let line = CaLine::for_server(ca, &db, "nocterm agent access");
+        let text = line.to_line().unwrap();
+        assert!(text.starts_with(&format!(
+            "cert-authority,principals=\"{}\" ssh-ed25519 ",
+            principal_for(&ca, &db)
+        )));
+        assert_eq!(CaLine::parse(&text).unwrap(), line);
+        assert!(line.admits_server(&ca, &db));
+        assert!(!line.admits_server(&ca, &cache));
+        assert!(!line.admits_server(&[8; 32], &db));
+        let shared = CaLine {
+            ca_key: ca,
+            principals: vec![agent_principal(&ca)],
+            comment: String::new(),
+        }
+        .to_line()
+        .unwrap();
+        assert_eq!(
+            server_line(&format!("{text}\n"), &ca, &db),
+            ServerLine::PerServer
+        );
+        assert_eq!(
+            server_line(&format!("{shared}\n{text}\n"), &ca, &cache),
+            ServerLine::Shared
+        );
+        assert_eq!(
+            server_line(&format!("{shared}\n"), &[8; 32], &db),
+            ServerLine::Absent
+        );
+        assert_eq!(find_ca_lines(&format!("{shared}\n{text}"), &ca), vec![0, 1]);
     }
 }

@@ -4,8 +4,12 @@
 use nocterm_hub_model::DeviceId;
 use serde::{Deserialize, Serialize};
 
-/// Version of the stored record.
+/// Version of the stored record whose server holds the shared line (line version 1).
 pub const SSH_TRUST_SCHEMA: u8 = 1;
+/// Version of the stored record whose server holds its per-server line (line version 2): the
+/// schema 1 layout with this schema byte, followed by one byte [`CaLineForm::PerServer`] (2).
+/// A reader of schema 1 only refuses it rather than guessing.
+pub const SSH_TRUST_SCHEMA_PER_SERVER: u8 = 2;
 /// Longest stored record.
 pub const MAX_RECORD_BYTES: usize = 2048;
 /// Longest host, user or profile text.
@@ -22,6 +26,17 @@ pub enum TrustState {
     Removed,
     /// The line vanished or names an outdated CA without anyone asking for it.
     Drifted,
+}
+
+/// Which form of `authorized_keys` line the server was last given.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CaLineForm {
+    /// The shared agent principal (line version 1): the server needs a CA update before a
+    /// per-chat certificate opens it.
+    #[default]
+    Shared,
+    /// The server's own principal (line version 2).
+    PerServer,
 }
 
 /// What a reconciliation found in `authorized_keys`.
@@ -79,6 +94,8 @@ pub struct SshTrustRecord {
     /// Last time `authorized_keys` was read, Unix milliseconds.
     pub last_verified_at_ms: Option<i64>,
     state: TrustState,
+    #[serde(skip)]
+    line: CaLineForm,
 }
 
 impl SshTrustRecord {
@@ -104,9 +121,20 @@ impl SshTrustRecord {
             added_by_device: device,
             last_verified_at_ms: Some(now_ms),
             state: TrustState::Trusted,
+            line: CaLineForm::Shared,
         };
         record.validate()?;
         Ok(record)
+    }
+
+    /// The form of line the server was last given.
+    pub fn line(&self) -> CaLineForm {
+        self.line
+    }
+    /// The adapter wrote `form` to the server (a per-server line after a CA update).
+    pub fn set_line(&mut self, form: CaLineForm, now_ms: i64) {
+        self.line = form;
+        self.last_verified_at_ms = Some(now_ms);
     }
 
     fn validate(&self) -> Result<(), TrustError> {
@@ -186,24 +214,37 @@ impl SshTrustRecord {
         action
     }
 
-    /// The bytes stored in the E2E collection.
+    /// The bytes stored in the E2E collection: schema 1 for a shared line (the bytes a native
+    /// client of ADR 0119 writes), schema 2 for a per-server line.
     pub fn encode(&self) -> Result<Vec<u8>, TrustError> {
         self.validate()?;
-        let bytes = postcard::to_stdvec(self).map_err(|_| TrustError::Malformed)?;
+        let mut stored = self.clone();
+        stored.schema = match self.line {
+            CaLineForm::Shared => SSH_TRUST_SCHEMA,
+            CaLineForm::PerServer => SSH_TRUST_SCHEMA_PER_SERVER,
+        };
+        let mut bytes = postcard::to_stdvec(&stored).map_err(|_| TrustError::Malformed)?;
+        if self.line == CaLineForm::PerServer {
+            bytes.push(2);
+        }
         (bytes.len() <= MAX_RECORD_BYTES)
             .then_some(bytes)
             .ok_or(TrustError::Field)
     }
 
-    /// Decodes a stored record; other schema versions are refused, not guessed.
+    /// Decodes a stored record of schema 1 or 2; other versions are refused, not guessed.
     pub fn decode(bytes: &[u8]) -> Result<Self, TrustError> {
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(TrustError::Malformed);
         }
-        let record: Self = postcard::from_bytes(bytes).map_err(|_| TrustError::Malformed)?;
-        if record.schema != SSH_TRUST_SCHEMA {
-            return Err(TrustError::Malformed);
-        }
+        let (mut record, rest): (Self, &[u8]) =
+            postcard::take_from_bytes(bytes).map_err(|_| TrustError::Malformed)?;
+        record.line = match (record.schema, rest) {
+            (SSH_TRUST_SCHEMA, []) => CaLineForm::Shared,
+            (SSH_TRUST_SCHEMA_PER_SERVER, [2]) => CaLineForm::PerServer,
+            _ => return Err(TrustError::Malformed),
+        };
+        record.schema = SSH_TRUST_SCHEMA;
         record.validate()?;
         Ok(record)
     }
@@ -271,6 +312,31 @@ mod tests {
     }
 
     #[test]
+    fn a_per_server_line_is_schema_2_and_a_shared_line_keeps_the_schema_1_bytes() {
+        let mut r = record();
+        assert_eq!(r.line(), CaLineForm::Shared);
+        r.set_line(CaLineForm::PerServer, 60);
+        let per_server = r.encode().unwrap();
+        let mut back = r.clone();
+        back.set_line(CaLineForm::Shared, 60);
+        let shared = back.encode().unwrap();
+        assert_eq!(shared[0], SSH_TRUST_SCHEMA);
+        assert_eq!(per_server[0], SSH_TRUST_SCHEMA_PER_SERVER);
+        assert_eq!(&per_server[1..per_server.len() - 1], &shared[1..]);
+        assert_eq!(per_server.last(), Some(&2));
+        let decoded = SshTrustRecord::decode(&per_server).unwrap();
+        assert_eq!(decoded.line(), CaLineForm::PerServer);
+        assert_eq!(decoded, r);
+        let mut wrong = per_server.clone();
+        *wrong.last_mut().unwrap() = 1;
+        assert_eq!(SshTrustRecord::decode(&wrong), Err(TrustError::Malformed));
+        assert_eq!(
+            SshTrustRecord::decode(&per_server[..per_server.len() - 1]),
+            Err(TrustError::Malformed)
+        );
+    }
+
+    #[test]
     fn a_record_round_trips_and_other_schemas_are_refused() {
         let r = record();
         let bytes = r.encode().unwrap();
@@ -283,6 +349,9 @@ mod tests {
             SshTrustRecord::decode(&bytes[..3]),
             Err(TrustError::Malformed)
         );
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert_eq!(SshTrustRecord::decode(&longer), Err(TrustError::Malformed));
         assert!(
             SshTrustRecord::installed(
                 String::new(),

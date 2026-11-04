@@ -1,0 +1,13 @@
+openssh/agent-cert.pub:
+        Type: ssh-ed25519-cert-v01@openssh.com user certificate
+        Public key: ED25519-CERT SHA256:G0rarR9Wy+cqC2YbqeAoaVmUU9hm1OPuwLi2DueJAYU
+        Signing CA: ED25519 SHA256:p3tINu/+KBo3YsnJtI4HqU3xiTfkuyl2n7U7LlOkFIg (using ssh-ed25519)
+        Key ID: "nocterm-chat-81818181818181818181818181818181-44444444444444444444444444444444"
+        Serial: 72623859790382856
+        Valid: from 2027-01-15T07:59:00 to 2027-01-15T16:00:00
+        Principals: 
+                nocterm-agent-9cf036f25b27a49c-93cd03994dee61d6
+        Critical Options: 
+                source-address 203.0.113.7/32,2001:db8::1
+        Extensions: 
+                permit-pty
