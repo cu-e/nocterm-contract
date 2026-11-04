@@ -6,13 +6,13 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 
 | Crate | Purpose |
 | --- | --- |
-| `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages; Cloud canonical formats, including runner chat summaries (`cloud::summary`) |
+| `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages; Cloud canonical formats, including runner chat summaries (`cloud::summary`) and per-chat SSH bindings, certificate requests and access states (`cloud::ssh`) |
 | `nocterm-hub-proto` | protobuf schema (`proto/`) compiled to prost messages, plus its descriptor set |
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
 | `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`), runner chat directories (`CloudSelector::Directory`, `CloudRunner::publish_summary`) |
-| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes, create chats, lease an own runner's provider key), a resumable reader with sealed checkpoints and the freshness levels Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md)) |
-| `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants, Cloud boxes (commands, records, head probes, chat summaries) |
-| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
+| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes, create chats, lease an own runner's provider key, bind a chat to the account's CA-trusted servers and answer the runner's certificate requests), a resumable reader with sealed checkpoints and the freshness levels Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md), [ADR 0009](docs/adr/0009-per-chat-ssh-binding-and-certificates.md)) |
+| `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants, Cloud boxes (commands, records, head probes, chat summaries), the account SSH CA (`agents::ssh_ca`: CA document, per-server principals and `authorized_keys` lines, chat bindings, OpenSSH user certificates) |
+| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `WebCollectionKey.openSshTrust` for the `agent_ssh_trust` servers and the CA's fingerprint, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`, and on an open chat `bindServers`, `unbindServers`, `answerSsh`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
 
 The protobuf schema is compiled with [protox](https://crates.io/crates/protox), so no system
@@ -195,7 +195,8 @@ pool's encryption key and opened only on the host. Writes are compare-and-swap o
 host attestation signed by the pinned pool key (`nocterm_hub_client::agents::verify_instance_setup`).
 Real provider keys reach only the host's credential broker; the runner holds a virtual token
 (`nocterm_keys::agents::VirtualToken`). Servers trust the user's SSH CA through one
-`authorized_keys` line (`CaLine`) and receive short-lived `SshCaGrant`s. See
+`authorized_keys` line (`CaLine`); a Cloud chat reaches them with per-chat certificates (see
+"Per-chat SSH binding" below). See
 [ADR 0001](docs/adr/0001-managed-agents.md) for the formats and their reasons.
 
 All of it is additive: a hub without `AgentService` answers `UNIMPLEMENTED`, read as
@@ -356,6 +357,23 @@ with `ListChats` without replaying any chat: an older revision never replaces a 
 the runner's fresh catalog witness confirms each row (`Current`, `Stale`, `Unsummarized`) while
 the runner is awake; a sleeping runner's rows show as of their last activity. A summary is
 display data and grants nothing. Independent vectors are in `fixtures/cloud-summary-v1/`.
+
+### Per-chat SSH binding
+
+A chat reaches the person's servers with short certificates from the account's SSH CA
+([ADR 0009](docs/adr/0009-per-chat-ssh-binding-and-certificates.md)). A device binds the chat
+with `IssueGrant(GrantPayload::SshBinding)`: an `SshBinding` (format 1: chat, grant, window of
+at most 30 days, CA key, up to 16 targets from the account's CA-trusted `agent_ssh_trust`
+servers) signed by the CA (`nocterm_keys::agents::ssh_ca::UserCa::sign_binding`). The runner
+publishes `SshCertificateRequested` with that signed binding, its per-chat key and its egress,
+and `SshAccessState`; any unlocked account device answers a request the verified transcript
+allows (`nocterm_cloud_device::ssh::SshAnswer`) with `IssueGrant(GrantPayload::SshCertificate)`:
+an OpenSSH user certificate for the bound servers still trusted, at most 24 hours, with
+`source-address` and `permit-pty` only. A server's `authorized_keys` line names its own principal
+(`principal_for(ca, server)`, line version 2, `CaLine::for_server`), so a certificate opens no
+other server. `RevokeGrant(GrantClass::SshBinding)` ends a binding. No hub can mint a
+certificate. Vectors are in `fixtures/cloud-ssh-v1/` (OpenSSH certificates checked with
+`ssh-keygen -L`).
 
 ### Memory-only provider grants
 

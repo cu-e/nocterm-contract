@@ -11,7 +11,9 @@
 //! finite Local/SSH session startup, original login proofs and descriptive lifecycle,
 //! fresh stable-authority capabilities, scoped runner proofs, finite boot descriptors
 //! and bounded nonce-bound read-only catalog/head/receipt witnesses, and runner-signed
-//! chat summaries with their directory routing (`cloud::summary`, ADR 0008). Native
+//! chat summaries with their directory routing (`cloud::summary`, ADR 0008), and per-chat SSH
+//! bindings signed by the account CA with the runner's certificate requests and access states
+//! (`cloud::ssh`, ADR 0009). Native
 //! per-chat head contexts remain independent of content-key generations.
 //! Also owns the vocabulary of managed agents (`agents`): scopes, instance roles, listings,
 //! resource requests, typed refusal reasons, the pool key bundle, the host attestation of a
