@@ -284,6 +284,8 @@ impl Transcript {
                 let call = session_call(binding.attempt, &binding.access, ssh, None);
                 self.session(binding.run, call, status, at);
             }
+            CloudEventPayload::SshCertificateRequested(_)
+            | CloudEventPayload::SshAccessState(_) => {}
         }
     }
 

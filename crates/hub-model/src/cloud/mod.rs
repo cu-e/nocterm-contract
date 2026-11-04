@@ -21,6 +21,7 @@ mod route;
 pub mod runner_auth;
 pub mod runner_request;
 mod signed;
+pub mod ssh;
 pub mod summary;
 pub mod tool_arguments;
 

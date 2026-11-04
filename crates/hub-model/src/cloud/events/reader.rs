@@ -9,6 +9,7 @@ use super::{
 use crate::cloud::{
     CloudTextId, CommandIssuer, CommandKind, RunCoordinate,
     payload::reader::PayloadReader,
+    ssh::{MAX_REQUEST_BYTES, SshAccessUpdate, SshCertificateRequest},
     tool_arguments::{MAX_TOOL_ARGUMENT_BYTES, ToolArguments},
 };
 
@@ -261,6 +262,12 @@ impl<'a> EventReader<'a> {
             )),
             13 => CloudEventPayload::SessionState(Box::new(
                 crate::cloud::payload::session_codec::read_state(&mut self.0)?,
+            )),
+            14 => CloudEventPayload::SshCertificateRequested(Box::new(
+                SshCertificateRequest::from_canonical_bytes(self.0.field(MAX_REQUEST_BYTES)?)?,
+            )),
+            15 => CloudEventPayload::SshAccessState(Box::new(
+                SshAccessUpdate::from_canonical_bytes(self.0.field(1024)?)?,
             )),
             _ => return Err(EventPayloadError::Value),
         })

@@ -645,3 +645,4 @@ mod background;
 mod prompt;
 
 mod session;
+mod ssh;

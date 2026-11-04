@@ -7,6 +7,7 @@ pub use session::*;
 pub(in crate::cloud) mod writer;
 use crate::cloud::{
     CommandError, CommandHeader, CommandKind, SignedCommand, provider::ProviderLeaseError,
+    ssh::SshFormatError,
 };
 use reader::PayloadReader;
 pub use values::*;
@@ -58,18 +59,26 @@ impl<'a> CloudCommandPayload<'a> {
             return Err(PayloadError::Kind);
         }
         let run = header.context().run;
-        let requires_run = matches!(
-            self,
-            Self::Stop
-                | Self::ResolveApproval(_)
-                | Self::RevokeGrant(_)
-                | Self::AnswerSshConsent(_)
-                | Self::BeginSession(_)
-        ) || matches!(self,Self::IssueGrant(grant) if !matches!(grant.as_ref(),GrantPayload::Provider {..}));
-        if requires_run && run.is_none() {
+        // SSH binding grants, their certificates and their revocation belong to the chat, not
+        // to a run (contract ADR 0009).
+        let chat_scoped = matches!(self, Self::IssueGrant(grant) if matches!(grant.as_ref(), GrantPayload::SshBinding { .. } | GrantPayload::SshCertificate { .. }))
+            || matches!(self, Self::RevokeGrant(scoped) if scoped.class == GrantClass::SshBinding);
+        let requires_run = !chat_scoped
+            && (matches!(
+                self,
+                Self::Stop
+                    | Self::ResolveApproval(_)
+                    | Self::RevokeGrant(_)
+                    | Self::AnswerSshConsent(_)
+                    | Self::BeginSession(_)
+            ) || matches!(self,Self::IssueGrant(grant) if !matches!(grant.as_ref(),GrantPayload::Provider {..})));
+        if (requires_run && run.is_none()) || (chat_scoped && run.is_some()) {
             return Err(PayloadError::Value);
         }
         match self {
+            Self::IssueGrant(value) if matches!(value.as_ref(), GrantPayload::SshBinding { binding } if !binds_route(binding.binding(), header.route())) => {
+                Err(PayloadError::Value)
+            }
             Self::IssueGrant(value) if matches!(value.as_ref(),GrantPayload::Provider {context,..} if context.boot().namespace()!=&header.route().namespace || context.boot().runner()!=header.route().runner) => {
                 Err(PayloadError::Value)
             }
@@ -157,6 +166,15 @@ pub enum PayloadError {
     Command(#[from] CommandError),
     #[error("Cloud provider grant context is invalid")]
     Provider(#[from] ProviderLeaseError),
+    #[error("Cloud SSH binding value is invalid")]
+    Ssh(#[from] SshFormatError),
+}
+
+/// True when a binding names the chat a command is routed to.
+fn binds_route(binding: &crate::cloud::ssh::SshBinding, route: &crate::cloud::CloudRoute) -> bool {
+    binding.chat.namespace() == &route.namespace
+        && binding.chat.runner() == route.runner
+        && binding.chat.chat_id() == route.chat_id
 }
 #[cfg(test)]
 mod tests;

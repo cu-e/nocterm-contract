@@ -335,6 +335,11 @@ fn require_deadline(
                 window.expires_at_ms
             }
             GrantPayload::Provider { context, .. } => context.expires_at_ms(),
+            // A binding outlives its command by design (up to 30 days); a certificate's
+            // validity is bounded by its own binding.
+            GrantPayload::SshBinding { .. } | GrantPayload::SshCertificate { .. } => {
+                return Ok(());
+            }
         },
         _ => return Ok(()),
     };

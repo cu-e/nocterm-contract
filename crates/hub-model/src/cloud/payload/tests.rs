@@ -295,3 +295,4 @@ fn nested_prompt_parts_share_one_aggregate_plaintext_allowance() -> TestResult {
 }
 
 mod session;
+mod ssh;

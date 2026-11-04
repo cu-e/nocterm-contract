@@ -76,12 +76,14 @@ impl CloudCommandInvocation {
     ) -> Result<PreparedCloudCommand, CloudError> {
         let deadline = match payload {
             CloudCommandPayload::SubmitPrompt(prompt) => Some(prompt.inference.deadline_ms),
-            CloudCommandPayload::IssueGrant(grant) => Some(match grant.as_ref() {
+            CloudCommandPayload::IssueGrant(grant) => match grant.as_ref() {
                 GrantPayload::Inference { window, .. } | GrantPayload::Tools { window, .. } => {
-                    window.expires_at_ms
+                    Some(window.expires_at_ms)
                 }
-                GrantPayload::Provider { context, .. } => context.expires_at_ms(),
-            }),
+                GrantPayload::Provider { context, .. } => Some(context.expires_at_ms()),
+                // Chat-scoped SSH grants carry their own window (contract ADR 0009).
+                GrantPayload::SshBinding { .. } | GrantPayload::SshCertificate { .. } => None,
+            },
             CloudCommandPayload::BeginSession(start) => {
                 Some(i64::try_from(start.expires_ms()).map_err(|_| CloudError::Protocol)?)
             }

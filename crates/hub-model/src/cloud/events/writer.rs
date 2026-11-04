@@ -316,6 +316,10 @@ impl EventWriter {
             CloudEventPayload::SessionState(value) => Ok(
                 crate::cloud::payload::session_codec::write_state(&mut self.output, value)?,
             ),
+            CloudEventPayload::SshCertificateRequested(value) => {
+                self.field(&value.canonical_bytes()?)
+            }
+            CloudEventPayload::SshAccessState(value) => self.field(&value.canonical_bytes()?),
         }
     }
     pub(super) fn snapshot(
