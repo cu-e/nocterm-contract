@@ -445,3 +445,91 @@ fn an_effect_answer_of_an_unknown_failure_kind_is_an_argument_error() {
         .unwrap_err();
     assert_eq!(error.code(), "argument");
 }
+
+#[test]
+fn listed_rows_cross_with_their_summary_status_and_directory_checkpoints() {
+    use nocterm_cloud_device::{
+        context::ChatRef,
+        directory::{ListedChat, RowStatus, VerifiedDirectory},
+        list::ChatListUpdate,
+        records::{RunnerPins, TrustedRunner},
+    };
+    use nocterm_hub_model::cloud::{
+        CloudTextId, RunnerCoordinate,
+        summary::{BoundServer, ChatState, ChatSummary, ServerState, SummaryHost},
+    };
+    let runner = TrustedRunner::new(
+        RunnerCoordinate {
+            id: [2; 16],
+            key_epoch: 3,
+        },
+        RunnerPins {
+            encryption: [1; 32],
+            signing: [2; 32],
+            proof: [3; 32],
+        },
+        "Runner",
+    )
+    .unwrap();
+    let summary = ChatSummary {
+        head: None,
+        control_revision: 4,
+        created_at_ms: 10,
+        last_activity_ms: 20,
+        title: "Fix the build".to_owned(),
+        host: SummaryHost::Managed {
+            agent_id: CloudTextId::new("agent-1").unwrap(),
+        },
+        model: None,
+        state: ChatState::WaitingApproval,
+        pending_approvals: 1,
+        servers: vec![BoundServer {
+            host: CloudTextId::new("db").unwrap(),
+            port: 22,
+            user: CloudTextId::new("deploy").unwrap(),
+            state: ServerState::NeedsCaUpdate,
+            valid_before_ms: None,
+        }],
+        features: 1,
+    };
+    let row = ListedChat {
+        chat: ChatRef {
+            runner: [2; 16],
+            chat_id: [5; 16],
+            key_epoch: 1,
+        },
+        summary: Some(summary),
+        status: RowStatus::AsOf,
+        control_revision: 4,
+        head_sequence: None,
+        deleted: false,
+        witnessed_at_ms: None,
+    };
+    let output = super::listing::listed(ChatListUpdate::Runner {
+        runner: runner.clone(),
+        chats: vec![row],
+        complete: false,
+    });
+    let json = serde_json::to_value(&output).unwrap();
+    let chat = &json["chats"][0];
+    assert_eq!(json["kind"], "runnerChats");
+    assert_eq!(chat["status"], "asOf");
+    assert!(chat.get("witnessedAtMs").is_none());
+    assert_eq!(chat["summary"]["title"], "Fix the build");
+    assert_eq!(chat["summary"]["host"], "managed");
+    assert_eq!(chat["summary"]["agentId"], "agent-1");
+    assert_eq!(chat["summary"]["state"], "waitingApproval");
+    assert_eq!(chat["summary"]["servers"][0]["state"], "needsCaUpdate");
+    let output = super::listing::listed(ChatListUpdate::Directory {
+        runner: [2; 16],
+        checkpoint: VerifiedDirectory::from_bytes(vec![9, 9]),
+    });
+    let FlowOutput::Directory { runner_id, bytes } = output else {
+        panic!("a directory checkpoint");
+    };
+    assert_eq!(runner_id, hex::encode([2; 16]));
+    assert_eq!(bytes, [9, 9]);
+    let options: super::types::ListOptions =
+        serde_json::from_value(serde_json::json!({ "watch": true })).unwrap();
+    assert!(options.watch && options.directories.is_empty());
+}

@@ -6,7 +6,7 @@ use crate::{
     command::Publication,
     flow::{
         CollectionEntry, Effect, EffectFailure, EffectId, Flow, Frame, Input, InstanceEntry,
-        ObjectEntry, RecordHeader, Step,
+        ObjectEntry, RecordHeader, Step, StreamKind,
     },
     records::ChatSelector,
 };
@@ -18,10 +18,11 @@ use nocterm_hub_model::cloud::{
         HeadWitness, ReceiptOutcome,
     },
     relay::RelayBinding,
+    summary::{ChatSummary, SummaryContext},
 };
 use nocterm_keys::{
     CollectionKey,
-    cloud::{ChatKey, open_head_query, seal_event, seal_head_witness},
+    cloud::{ChatKey, open_head_query, seal_event, seal_head_witness, seal_summary},
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -59,6 +60,12 @@ pub(crate) struct FakeHub {
     pub(crate) hidden: usize,
     /// The `after_cursor` of every replay request.
     pub(crate) replayed_from: Vec<u64>,
+    /// The runner directory stream: sealed summaries at their (holed) cursors.
+    pub(crate) directory: Vec<(RecordHeader, Vec<u8>)>,
+    /// The `after_cursor` of every directory replay request.
+    pub(crate) directory_from: Vec<u64>,
+    /// What a catalog probe witnesses instead of the world chat's head.
+    pub(crate) catalog: Option<Vec<ChatHead>>,
 }
 impl FakeHub {
     pub(crate) fn new(world: World) -> Self {
@@ -77,7 +84,64 @@ impl FakeHub {
             effects: Vec::new(),
             hidden: 0,
             replayed_from: Vec::new(),
+            directory: Vec::new(),
+            directory_from: Vec::new(),
+            catalog: None,
         }
+    }
+    /// Publishes `summary` of `chat_id` (the world chat's runner and key epoch) at `revision`
+    /// to the directory at `cursor`, signed and sealed with the world's runner keys.
+    pub(crate) fn summary(
+        &mut self,
+        cursor: u64,
+        chat_id: [u8; 16],
+        revision: u64,
+        summary: &ChatSummary,
+    ) {
+        let chat = self.world.selector.coordinate().unwrap();
+        let chat = nocterm_hub_model::cloud::ChatCoordinate::new(
+            chat.namespace().clone(),
+            chat.runner(),
+            chat_id,
+            chat.key_epoch(),
+        )
+        .unwrap();
+        let context = SummaryContext::new(chat, revision).unwrap();
+        let signed = self
+            .world
+            .runner_signer
+            .attest_summary(context.clone(), summary.clone())
+            .unwrap();
+        let sealed = seal_summary(
+            &self.world.runner_key,
+            &self.world.account_pair.public_key(),
+            &signed,
+        )
+        .unwrap();
+        self.directory_record(cursor, &context, sealed);
+    }
+    /// Stores `sealed` as the directory record at `cursor`, routed under `context`.
+    pub(crate) fn directory_record(
+        &mut self,
+        cursor: u64,
+        context: &SummaryContext,
+        sealed: Vec<u8>,
+    ) {
+        let header = RecordHeader {
+            publication_id: context.publication_id().unwrap().to_vec(),
+            binding: RelayBinding::summary(context.clone())
+                .canonical_bytes()
+                .unwrap(),
+            total_bytes: u32::try_from(sealed.len()).unwrap(),
+            ciphertext_sha256: Sha256::digest(&sealed).to_vec(),
+            cursor,
+            origin_account_id: ACCOUNT.to_owned(),
+            origin_signing_key: self.world.runner.pins().proof.to_vec(),
+            origin_runner_id: Some(self.world.runner.runner().id.to_vec()),
+        };
+        self.directory.retain(|(held, _)| held.cursor != cursor);
+        self.directory.push((header, sealed));
+        self.directory.sort_by_key(|(header, _)| header.cursor);
     }
     /// A personal collection of `kind` whose key is wrapped for the world's account.
     pub(crate) fn collection(&mut self, id: &str, kind: &str) -> CollectionKey {
@@ -195,8 +259,26 @@ impl FakeHub {
         }
     }
 
+    /// Sends a Watch hint for the directory's newest cursor to every open watch.
+    pub(crate) fn hint_directory<F: Flow>(&mut self, flow: &mut F) {
+        let head_cursor = self.directory.last().map_or(0, |(header, _)| header.cursor);
+        for id in self.watches.clone() {
+            flow.frame(id, Frame::Hint { head_cursor });
+        }
+    }
+
     fn answer<F: Flow>(&mut self, flow: &mut F, id: EffectId, effect: Effect, now: i64) {
         let input = match effect {
+            Effect::Replay {
+                selector,
+                after_cursor,
+                max_records,
+                ..
+            } if selector.stream == StreamKind::Directory => {
+                self.effects.push("directory_replay");
+                self.directory_replay(flow, id, after_cursor, max_records);
+                return;
+            }
             Effect::Replay {
                 after_cursor,
                 max_records,
@@ -380,9 +462,9 @@ impl FakeHub {
             HeadTarget::Catalog { after } => HeadValue::Catalog(Box::new(CatalogHeadPage {
                 revision: 1,
                 digest: [0x77; 32],
-                total_chats: 1,
+                total_chats: u32::try_from(self.catalog.as_ref().map_or(1, Vec::len)).unwrap(),
                 after: after.clone(),
-                chats: vec![self.head()],
+                chats: self.catalog.clone().unwrap_or_else(|| vec![self.head()]),
                 has_more: false,
             })),
             HeadTarget::Chat {
@@ -422,6 +504,39 @@ impl FakeHub {
             probe_id: probe_id.to_vec(),
             ciphertext: seal_head_witness(&self.world.runner_key, &witness).unwrap(),
         }
+    }
+    fn directory_replay<F: Flow>(&mut self, flow: &mut F, id: EffectId, after: u64, max: u32) {
+        self.directory_from.push(after);
+        let mut through = after;
+        let page: Vec<_> = self
+            .directory
+            .iter()
+            .filter(|(header, _)| header.cursor > after)
+            .take(max as usize)
+            .cloned()
+            .collect();
+        for (header, data) in page {
+            flow.frame(id, Frame::Header(header.clone()));
+            flow.frame(id, Frame::Data(data));
+            flow.frame(
+                id,
+                Frame::End {
+                    publication_id: header.publication_id.clone(),
+                },
+            );
+            through = header.cursor;
+        }
+        let has_more = self
+            .directory
+            .iter()
+            .any(|(header, _)| header.cursor > through);
+        flow.frame(
+            id,
+            Frame::PageEnd {
+                through_cursor: through,
+                has_more,
+            },
+        );
     }
     fn replay<F: Flow>(&mut self, flow: &mut F, id: EffectId, after: u64, max: u32) {
         self.replayed_from.push(after);

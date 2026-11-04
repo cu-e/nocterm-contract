@@ -16,7 +16,10 @@ use nocterm_hub_model::cloud::{
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
-use super::types::{WireError, WireInstance};
+use super::{
+    listing::WireChat,
+    types::{WireError, WireInstance},
+};
 
 /// A trusted runner.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
@@ -35,20 +38,6 @@ impl From<&TrustedRunner> for RunnerInfo {
             label: runner.label().to_owned(),
         }
     }
-}
-
-/// One witnessed chat of a catalog.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
-#[serde(rename_all = "camelCase")]
-pub struct WireChat {
-    /// `ChatRef` text, the id `openChat` takes.
-    pub chat_id: String,
-    pub control_revision: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[tsify(optional)]
-    pub head_sequence: Option<u64>,
-    pub deleted: bool,
-    pub witnessed_at_ms: f64,
 }
 
 /// `state`: `current` (`witnessedAtMs`), `unconfirmed` (`lastWitnessedAtMs` when ever
@@ -118,7 +107,7 @@ pub enum FlowOutput {
     Seats {
         seats: Vec<WireInstance>,
     },
-    /// `listChats`: one runner's witnessed catalog.
+    /// `listChats`: all rows of one runner, replacing its earlier rows (see `WireChat.status`).
     RunnerChats {
         runner: RunnerInfo,
         chats: Vec<WireChat>,
@@ -130,6 +119,20 @@ pub enum FlowOutput {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[tsify(optional)]
         error: Option<WireError>,
+    },
+    /// `listChats`: store `bytes` as the directory checkpoint of runner `runnerId`, in place of
+    /// the previous one, and pass it to the next `listChats`.
+    #[serde(rename_all = "camelCase")]
+    Directory {
+        runner_id: String,
+        #[serde(with = "serde_bytes")]
+        #[tsify(type = "Uint8Array")]
+        bytes: Vec<u8>,
+    },
+    /// `listChats`: a summary or directory round of `runner` was refused; rows stay.
+    DirectoryRefused {
+        runner: RunnerInfo,
+        error: WireError,
     },
     /// `openChat`: apply to the view (see `WireDelta`).
     Transcript {

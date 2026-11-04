@@ -11,7 +11,7 @@ use nocterm_keys::{
     KeyError, OpenError, SealError,
     cloud::{
         CheckpointKeyError, CloudCommandError, CloudMaterialError, CloudRecordError,
-        HeadCryptoError, ProviderSecretError,
+        HeadCryptoError, ProviderSecretError, SummaryCryptoError,
     },
 };
 
@@ -63,8 +63,10 @@ pub enum CloudDeviceError {
     NotClaimed,
     #[error("the account holds no provider key for this agent")]
     NoProviderKey,
-    #[error("a witnessed head or replay is behind the verified checkpoint")]
+    #[error("a witnessed head, replay or chat summary is behind what this device verified")]
     Rollback,
+    #[error("the runner signed two different summaries of one chat at one revision")]
+    SummaryConflict,
     #[error("the checkpoint is malformed, of another reducer version or of another chat")]
     Checkpoint,
     #[error("the checkpoint could not be sealed or opened")]
@@ -85,6 +87,8 @@ pub enum CloudDeviceError {
     Probe(#[from] HeadProbeError),
     #[error("the head probe box was refused")]
     HeadCrypto(#[from] HeadCryptoError),
+    #[error("the chat summary was refused")]
+    Summary(#[from] SummaryCryptoError),
     #[error("the Cloud command framing was refused")]
     Command(#[from] CommandError),
     #[error("the Cloud command box was refused")]

@@ -5,6 +5,7 @@ use nocterm_cloud_device::{
     DeviceIdentity,
     context::{AccountKeys, ChatRef, CloudSession},
     create::{ChatHost, CreateChat},
+    directory::VerifiedDirectory,
     discover::Discover,
     list::ListChats,
     nonces::Nonces,
@@ -19,7 +20,7 @@ use super::{
     CloudResult, WebCloudError,
     flow::{Running, WebChat, WebFlow},
     hex_id, js, millis,
-    types::{DeviceInput, NewChatHost},
+    types::{DeviceInput, ListOptions, NewChatHost},
     view::RunnerInfo,
 };
 use crate::WebAccount;
@@ -117,10 +118,13 @@ impl CloudDevice {
             .map(|session| session.runners().iter().map(RunnerInfo::from).collect())
             .unwrap_or_default()
     }
-    /// Every trusted runner's chat catalog, witnessed fresh (no replay).
+    /// Every trusted runner's chats: its directory of signed summaries (from the stored
+    /// `options.directories` checkpoints on) confirmed by a fresh catalog witness, never a
+    /// replay of a chat. With `options.watch` new summaries keep arriving and the flow never
+    /// ends.
     #[wasm_bindgen(js_name = listChats)]
-    pub fn list_chats(&self) -> Result<WebFlow, JsError> {
-        js(self.listing())
+    pub fn list_chats(&self, options: Option<ListOptions>) -> Result<WebFlow, JsError> {
+        js(self.listing_with(options.unwrap_or_default()))
     }
     /// Opens chat `chatId` (`ChatRef` text), resuming at `checkpoint` (the bytes of its last
     /// `checkpoint` output) when there is one.
@@ -179,12 +183,22 @@ impl CloudDevice {
         let shared = self.shared.borrow();
         Ok((shared.session()?, shared.device.clone()))
     }
+    #[cfg(test)]
     pub(crate) fn listing(&self) -> CloudResult<WebFlow> {
+        self.listing_with(ListOptions::default())
+    }
+    pub(crate) fn listing_with(&self, options: ListOptions) -> CloudResult<WebFlow> {
         let (session, device) = self.parts()?;
-        Ok(WebFlow::new(
-            Running::List(ListChats::new(session, device)),
-            self.shared.clone(),
-        ))
+        let checkpoints: Vec<VerifiedDirectory> = options
+            .directories
+            .into_iter()
+            .map(|bytes| VerifiedDirectory::from_bytes(bytes.into_vec()))
+            .collect();
+        let mut flow = ListChats::new(session, device).with_directories(&checkpoints);
+        if options.watch {
+            flow = flow.watching();
+        }
+        Ok(WebFlow::new(Running::List(flow), self.shared.clone()))
     }
     pub(crate) fn opened(
         &self,

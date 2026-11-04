@@ -4,8 +4,8 @@
 //! account id and account key digest match the hub it signed in to.
 use crate::{AccountScope, CloudDeviceError, records::HubTrustRecord};
 use nocterm_hub_model::cloud::capabilities::{
-    CLOUD_FEATURE_CHAT_KEY_MATERIAL, CLOUD_FEATURE_FRESH_HEAD, CLOUD_FEATURE_UNARY_PUBLISH,
-    CapabilityLimits, SignedCapabilities,
+    CLOUD_FEATURE_CHAT_DIRECTORY, CLOUD_FEATURE_CHAT_KEY_MATERIAL, CLOUD_FEATURE_FRESH_HEAD,
+    CLOUD_FEATURE_UNARY_PUBLISH, CapabilityLimits, SignedCapabilities,
 };
 
 /// The records among `records` made for this raw hub id, account and account key. Several
@@ -94,6 +94,10 @@ impl HubCapabilities {
     /// Chat key grants, which creating a chat needs.
     pub fn chat_key_material(&self) -> bool {
         self.limits.features & CLOUD_FEATURE_CHAT_KEY_MATERIAL != 0
+    }
+    /// Runner chat directories (ADR 0008), which listing chats with summaries needs.
+    pub fn chat_directory(&self) -> bool {
+        self.limits.features & CLOUD_FEATURE_CHAT_DIRECTORY != 0
     }
     /// Refuses unless the hub offers what reading chats needs.
     pub fn require_reading(&self) -> Result<(), CloudDeviceError> {

@@ -15,8 +15,8 @@ use crate::{
 use nocterm_hub_model::cloud::{
     CloudTextId, RunnerCoordinate,
     capabilities::{
-        CLOUD_FEATURE_CHAT_KEY_MATERIAL, CLOUD_FEATURE_FRESH_HEAD, CLOUD_FEATURE_UNARY_PUBLISH,
-        CapabilitiesClaim, CapabilityLimits, CapabilityWindow,
+        CLOUD_FEATURE_CHAT_DIRECTORY, CLOUD_FEATURE_CHAT_KEY_MATERIAL, CLOUD_FEATURE_FRESH_HEAD,
+        CLOUD_FEATURE_UNARY_PUBLISH, CapabilitiesClaim, CapabilityLimits, CapabilityWindow,
     },
 };
 use nocterm_keys::{
@@ -49,6 +49,10 @@ pub(crate) struct World {
 impl World {
     pub(crate) fn new() -> Self {
         Self::with_features(ALL_FEATURES)
+    }
+    /// A world whose hub also keeps runner chat directories (bit 256).
+    pub(crate) fn with_directory() -> Self {
+        Self::with_features(ALL_FEATURES | CLOUD_FEATURE_CHAT_DIRECTORY)
     }
     pub(crate) fn with_features(features: u64) -> Self {
         let account_pair = AccountKeyPair::generate().unwrap();

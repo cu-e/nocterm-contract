@@ -12,9 +12,9 @@ use nocterm_cloud_device::{
     discover::{Discover, Discovery},
     flow::{
         CollectionEntry, Effect, EffectFailure, Flow, Frame, Input, InstanceEntry, InstanceState,
-        ObjectEntry, RecordHeader, Step, StreamSelector,
+        ObjectEntry, RecordHeader, Step, StreamKind, StreamSelector,
     },
-    list::{ChatListUpdate, ListChats},
+    list::ListChats,
     open::{ChatAction, ChatUpdate, ModelChoice, OpenChat},
     provider::ProviderLease,
 };
@@ -28,7 +28,7 @@ use super::{
         ChatActionInput, DeviceInput, EffectInput, FlowOutput, FlowStep, StreamFrame, WireEffect,
         WireInstance, WirePublication, WireSelector,
     },
-    view::{RunnerInfo, WireChat, WireDelta, WireFreshness, command_state, ms},
+    view::{RunnerInfo, WireDelta, WireFreshness, command_state, ms},
 };
 
 /// A finite flow: `connect`, `listChats`, `deliver`, `createChat` or `lease`.
@@ -82,7 +82,7 @@ impl WebFlow {
             Running::Discover(flow) => convert(flow.next(now), |outcome| {
                 discovery(&mut shared.borrow_mut(), outcome)
             }),
-            Running::List(flow) => convert(flow.next(now), listed),
+            Running::List(flow) => convert(flow.next(now), super::listing::listed),
             Running::Deliver(flow, chat) => convert(flow.next(now), |update| {
                 if let Some(chat) = chat.upgrade() {
                     chat.borrow_mut().delivery(&update);
@@ -281,41 +281,17 @@ fn discovery(shared: &mut Shared, outcome: Discovery) -> FlowOutput {
     }
 }
 
-fn listed(update: ChatListUpdate) -> FlowOutput {
-    match update {
-        ChatListUpdate::Seats(seats) => FlowOutput::Seats {
-            seats: seats.iter().map(instance_out).collect(),
-        },
-        ChatListUpdate::Runner {
-            runner,
-            chats,
-            complete,
-        } => FlowOutput::RunnerChats {
-            runner: RunnerInfo::from(&runner),
-            chats: chats
-                .iter()
-                .map(|chat| WireChat {
-                    chat_id: chat.chat.to_string(),
-                    control_revision: chat.control_revision,
-                    head_sequence: chat.head_sequence,
-                    deleted: chat.deleted,
-                    witnessed_at_ms: ms(chat.witnessed_at_ms),
-                })
-                .collect(),
-            complete,
-        },
-        ChatListUpdate::Unreachable { runner, reason } => FlowOutput::Unreachable {
-            runner: RunnerInfo::from(&runner),
-            error: reason.map(|error| WebCloudError::from(error).wire()),
-        },
-    }
-}
-
 fn selector_out(selector: StreamSelector) -> WireSelector {
+    let (chat_id, directory) = match selector.stream {
+        StreamKind::Inbox => (None, false),
+        StreamKind::Chat(id) => (Some(id.to_vec()), false),
+        StreamKind::Directory => (None, true),
+    };
     WireSelector {
         runner_id: selector.runner_id.to_vec(),
         runner_key_epoch: selector.runner_key_epoch,
-        chat_id: selector.chat_id.map(|id| id.to_vec()),
+        chat_id,
+        directory,
     }
 }
 
@@ -427,7 +403,7 @@ const FAILURES: [(&str, EffectFailure); 7] = [
     ("ended", EffectFailure::Ended),
 ];
 
-fn instance_out(seat: &InstanceEntry) -> WireInstance {
+pub(super) fn instance_out(seat: &InstanceEntry) -> WireInstance {
     WireInstance {
         instance_id: seat.instance_id.clone(),
         agent_id: seat.agent_id.clone(),

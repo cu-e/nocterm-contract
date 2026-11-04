@@ -59,12 +59,23 @@ impl CloudSignable for SignRequest {
     }
 }
 
-/// `CloudSelector` of one stream: a chat (`chat_id`) or the runner inbox (`None`).
+/// `CloudSelector` of one stream of a runner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamSelector {
     pub runner_id: [u8; 16],
     pub runner_key_epoch: u64,
-    pub chat_id: Option<[u8; 16]>,
+    pub stream: StreamKind,
+}
+
+/// `CloudSelector.stream`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamKind {
+    /// `inbox`: the runner's commands.
+    Inbox,
+    /// `chat_id`: the events and snapshots of one chat.
+    Chat([u8; 16]),
+    /// `directory` (capability bit 256): the runner's chat summaries.
+    Directory,
 }
 
 /// `CloudService.ProbeHead` as plain fields. The client stops waiting at `expires_at_ms` and

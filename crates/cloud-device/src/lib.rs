@@ -1,5 +1,6 @@
 //! The sans-I/O Cloud device core: everything an account device decides about Cloud chats,
-//! shared by the web panel (through `nocterm-keys-wasm`) and the native client (ADR 0006, 0007).
+//! shared by the web panel (through `nocterm-keys-wasm`) and the native client (ADR 0006, 0007,
+//! 0008).
 //!
 //! Purpose: one implementation of the device side of Cloud chats. Clients execute the typed
 //! effects a flow hands out (sign, Store reads and writes, capability proof, head probe,
@@ -9,8 +10,8 @@
 //! Owns:
 //! - the effect protocol ([`flow`]: [`flow::Effect`], [`flow::Input`], [`flow::Frame`],
 //!   [`flow::Step`], [`flow::Flow`]) and the device flows over it: [`discover::Discover`] (hub
-//!   trust, capability proof, trusted runners), [`list::ListChats`] (catalog witnesses, no
-//!   replay), [`open::OpenChat`] (probe, incremental verified replay, Watch, checkpoints,
+//!   trust, capability proof, trusted runners), [`list::ListChats`] (directory summaries
+//!   confirmed by catalog witnesses, no replay), [`open::OpenChat`] (probe, incremental verified replay, Watch, checkpoints,
 //!   freshness), [`command::Deliver`] (wake, sign, seal, identical-bytes publish, receipt probe
 //!   on an unknown outcome), [`create::CreateChat`] (seat, compare-created records, grant
 //!   publication, claim wait) and [`provider::ProviderLease`] (own-runner provider lease);
@@ -27,6 +28,9 @@
 //!   keys, cursor, sequence and writer continuity, gaps, witnessed heads, the freshness levels
 //!   `Current`, `Unconfirmed` and `Withheld`, and sealed device checkpoints;
 //! - the transcript reducer every device shows, with deltas ([`transcript`]);
+//! - the runner chat directory as a device verifies it ([`directory`]): runner-signed summaries
+//!   sealed to the account, revision order, sealed directory checkpoints and the merge of
+//!   summaries with the runner's catalog witness (ADR 0008);
 //! - the building blocks of a new chat ([`create`]).
 //!
 //! Does not own: the network, storage, clocks beyond the `now_ms` the caller passes, the device
@@ -45,12 +49,16 @@
 //!   and writer order; a transcript is always a verified prefix, and it is called `Current` only
 //!   after a fresh witness was reached; a witness behind a verified checkpoint is refused;
 //! - a command is sealed once and every retry publishes exactly the same bytes;
+//! - a chat summary is applied only from the pinned runner, sealed to this account under its
+//!   routing context, and only when its revision is newer than the one held; it is display
+//!   data and never stands in for a replayed transcript;
 //! - chat keys and provider keys are opened per use and never retained by a value of this crate;
 //! - the transcript is display data: no row grants or admits anything.
 
 pub mod command;
 pub mod context;
 pub mod create;
+pub mod directory;
 pub mod discover;
 mod error;
 pub mod flow;

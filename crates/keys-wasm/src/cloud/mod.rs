@@ -2,13 +2,14 @@
 //! of `nocterm-cloud-device` (ADR 0007).
 //!
 //! The page executes effects (connect-es RPCs, the WebCrypto signature, its own storage of
-//! sealed checkpoints) and shows outputs; everything that needs a key or decides trust happens
+//! sealed chat and directory checkpoints) and shows outputs; everything that needs a key or decides trust happens
 //! here. Values cross as structured objects with generated TypeScript declarations
-//! ([`types`], [`view`]); nothing is JSON text. The account key, the account key pair,
+//! ([`types`], [`view`], the listing rows of `types::WireChat`); nothing is JSON text. The account key, the account key pair,
 //! collection keys, chat keys and provider keys never cross into JavaScript; the device key
 //! stays in the page's WebCrypto store and signs the bytes a `sign` effect names.
 mod device;
 mod flow;
+mod listing;
 pub mod types;
 pub mod view;
 
@@ -74,6 +75,8 @@ pub(crate) fn device_code(error: &CloudDeviceError) -> &'static str {
         E::NotClaimed => "not_claimed",
         E::NoProviderKey => "no_provider_key",
         E::Rollback => "rollback",
+        E::SummaryConflict => "summary_conflict",
+        E::Summary(_) => "summary",
         E::Checkpoint | E::CheckpointCrypto(_) => "checkpoint",
         E::Protocol => "protocol",
         E::Ended => "ended",

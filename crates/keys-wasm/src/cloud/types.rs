@@ -61,10 +61,14 @@ pub struct WireSelector {
     #[tsify(type = "Uint8Array")]
     pub runner_id: Vec<u8>,
     pub runner_key_epoch: u64,
-    /// The chat stream; absent for the runner inbox.
+    /// The chat stream; absent for the runner inbox and the directory.
     #[serde(default, skip_serializing_if = "Option::is_none", with = "serde_bytes")]
     #[tsify(optional, type = "Uint8Array")]
     pub chat_id: Option<Vec<u8>>,
+    /// True for the runner's chat directory (`CloudSelector.directory`, capability bit 256).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[tsify(optional)]
+    pub directory: bool,
 }
 
 /// `CloudPublication` (the header of `PublishOne`).
@@ -371,7 +375,8 @@ pub enum StreamFrame {
     Hint { head_cursor: u64 },
 }
 
+pub use super::listing::{ListOptions, WireChat, WireServer, WireSummary};
 pub use super::view::{
-    ChatActionInput, FlowOutput, ModelInput, NewChatHost, RunnerInfo, WireApproval, WireChat,
-    WireDelta, WireFreshness, WirePending, WireRow, WireRun, WireSession, WireTool, WireUsage,
+    ChatActionInput, FlowOutput, ModelInput, NewChatHost, RunnerInfo, WireApproval, WireDelta,
+    WireFreshness, WirePending, WireRow, WireRun, WireSession, WireTool, WireUsage,
 };

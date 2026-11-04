@@ -17,7 +17,8 @@ use crate::{
     command::{CommandAction, Deliver, DeliveryUpdate, UnsignedCommand},
     context::{ChatRef, CloudSession},
     flow::{
-        Arrival, Driven, Effect, EffectId, Flow, Frame, Input, Io, Machine, StreamSelector, Wait,
+        Arrival, Driven, Effect, EffectId, Flow, Frame, Input, Io, Machine, StreamKind,
+        StreamSelector, Wait,
     },
     policy::{MANAGED_PROVIDER, PromptPolicy},
     probe::{ProbeCall, ProbeTarget},
@@ -331,7 +332,7 @@ impl Reading {
         StreamSelector {
             runner_id: runner.id,
             runner_key_epoch: runner.key_epoch,
-            chat_id: Some(self.selector.chat_id()),
+            stream: StreamKind::Chat(self.selector.chat_id()),
         }
     }
     fn material(
