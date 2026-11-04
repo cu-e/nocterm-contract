@@ -17,6 +17,10 @@ service CloudService {
   rpc RunnerHeartbeat(CloudHeartbeat) returns (CloudHeartbeatReceipt);
   rpc RunnerStatus(CloudRunnerRef) returns (CloudRunnerStatus);
   rpc Publish(stream CloudPublishFrame) returns (CloudDeliveryReceipt);
+  // Capability bit 128, device only: one publication whose ciphertext fits one relay frame
+  // (<=16KiB), for clients without request streaming. Identical to Publish with one data frame
+  // and the finished marker, with the same idempotency by publication_id.
+  rpc PublishOne(CloudPublishOne) returns (CloudDeliveryReceipt);
   rpc Replay(CloudReplayRequest) returns (stream CloudReplayFrame);
   rpc Acknowledge(CloudAcknowledge) returns (CloudAcknowledged);
   rpc Watch(CloudWatchRequest) returns (stream CloudHint);
@@ -95,6 +99,10 @@ message CloudPublication {
   int64 retry_until_ms = 5;
 }
 message CloudPublishFinished {} // Followed only by request EOF; otherwise refuse.
+message CloudPublishOne {
+  CloudPublication header = 1;
+  bytes data = 2; // Exactly header.total_bytes, nonempty, <=16KiB; digest must match.
+}
 message CloudDeliveryReceipt {
   bytes publication_id = 1;
   uint64 cursor = 2;

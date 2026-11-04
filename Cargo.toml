@@ -10,6 +10,7 @@ publish = false
 repository = "https://github.com/cu-e/nocterm-contract"
 
 [workspace.dependencies]
+nocterm-cloud-device = { path = "crates/cloud-device" }
 nocterm-hub-model = { path = "crates/hub-model" }
 nocterm-hub-proto = { path = "crates/hub-proto" }
 nocterm-hub-grpc = { path = "crates/hub-grpc" }

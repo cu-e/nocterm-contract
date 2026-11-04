@@ -239,6 +239,12 @@ impl CloudService for CloudPeer {
         }
         Ok(Response::new(v1::CloudCapabilities { claim, signature }))
     }
+    async fn publish_one(
+        &self,
+        _: Request<v1::CloudPublishOne>,
+    ) -> Reply<v1::CloudDeliveryReceipt> {
+        Err(Status::unimplemented("unary publish"))
+    }
     async fn publish(
         &self,
         request: Request<Streaming<v1::CloudPublishFrame>>,

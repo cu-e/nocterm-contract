@@ -772,6 +772,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
+name = "nocterm-cloud-device"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "nocterm-hub-model",
+ "nocterm-keys",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "nocterm-hub-client"
 version = "0.1.0"
 dependencies = [
