@@ -1,6 +1,6 @@
 [package]
 name = "nocterm-cloud-device"
-description = "The sans-I/O Cloud device core: account records, hub trust, device flows over typed effects, a resumable verified reader with sealed checkpoints, the shared transcript and device commands."
+description = "The sans-I/O Cloud device core: account records, hub trust, device flows over typed effects, a resumable verified reader with sealed checkpoints, the shared transcript, device commands and per-chat SSH bindings and certificates."
 license = "Apache-2.0 OR MIT"
 version.workspace = true
 edition.workspace = true

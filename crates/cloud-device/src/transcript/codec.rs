@@ -1,5 +1,6 @@
 //! The canonical bytes of a transcript inside a device checkpoint (reducer version
 //! [`super::REDUCER_VERSION`]). Device-local and sealed; pending commands are not part of it.
+//! Version 2 appends the chat's SSH bindings and open requests after the flags.
 //!
 //! Integers are big-endian, texts and lists carry a u32 length, options a 0/1 tag.
 use super::{
@@ -154,7 +155,7 @@ impl Transcript {
         out.u64(self.control_revision);
         out.bool(self.deleted);
         out.bool(self.omitted_earlier);
-        Ok(())
+        self.ssh.encode(out)
     }
     pub(crate) fn decode(input: &mut Reader<'_>) -> Result<Self, CloudDeviceError> {
         let mut rows = Vec::new();
@@ -178,6 +179,7 @@ impl Transcript {
             control_revision: input.u64()?,
             deleted: input.bool()?,
             omitted_earlier: input.bool()?,
+            ssh: super::ChatSsh::decode(input)?,
             dirty: Dirty::everything(),
         };
         let ordered = transcript

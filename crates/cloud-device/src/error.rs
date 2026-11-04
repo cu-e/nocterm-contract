@@ -3,12 +3,16 @@ use nocterm_hub_model::{
     cloud::{
         CommandError, MaterialError, RecordError, capabilities::CapabilityError,
         events::EventPayloadError, head::HeadProbeError, payload::PayloadError,
-        provider::ProviderLeaseError, relay::RelayFormatError,
+        provider::ProviderLeaseError, relay::RelayFormatError, ssh::SshFormatError,
     },
     pop::SignatureError,
 };
 use nocterm_keys::{
     KeyError, OpenError, SealError,
+    agents::{
+        TrustError,
+        ssh_ca::{CaDocumentError, CaError, CertificateError},
+    },
     cloud::{
         CheckpointKeyError, CloudCommandError, CloudMaterialError, CloudRecordError,
         HeadCryptoError, ProviderSecretError, SummaryCryptoError,
@@ -113,4 +117,49 @@ pub enum CloudDeviceError {
     Seal(#[from] SealError),
     #[error("key generation failed")]
     Key(#[from] KeyError),
+    #[error("the SSH binding or certificate request was refused")]
+    Ssh(#[from] SshRefusal),
+    #[error("the SSH binding value was refused")]
+    SshFormat(#[from] SshFormatError),
+    #[error("the account's SSH CA document was refused")]
+    CaDocument(#[from] CaDocumentError),
+    #[error("the account's SSH CA could not sign the binding")]
+    SshCa(#[from] CaError),
+    #[error("the SSH certificate could not be issued")]
+    Certificate(#[from] CertificateError),
+    #[error("a server's SSH trust record was refused")]
+    SshTrust(#[from] TrustError),
+}
+
+/// Why a device does not bind a chat to servers or does not answer a runner's certificate
+/// request (contract ADR 0009). Each names a rule the device enforces itself; none depends on
+/// the runner or the hub telling the truth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SshRefusal {
+    #[error("the account has no SSH CA")]
+    NoCa,
+    #[error("the binding names another CA than the account's current one")]
+    OtherCa,
+    #[error("a chosen server is not one of the account's CA-trusted servers")]
+    UntrustedServer,
+    #[error("a trusted server's host key fingerprint is not a SHA-256 fingerprint")]
+    HostKeyUnknown,
+    #[error("no servers, too many servers or a server twice")]
+    Servers,
+    #[error("the binding window is empty or longer than 30 days")]
+    Window,
+    #[error("the verified transcript holds no pending request with this id")]
+    UnknownRequest,
+    #[error("the request belongs to an older binding of the chat")]
+    Superseded,
+    #[error("the binding was revoked, refused or has expired")]
+    Revoked,
+    #[error("the request is outside its binding's window")]
+    OutsideBinding,
+    #[error("the request names another subject key than the binding's first request")]
+    SubjectKeyChanged,
+    #[error("none of the requested servers is still trusted under the account's CA")]
+    NoTrustedServer,
+    #[error("the chat has no SSH binding")]
+    NotBound,
 }

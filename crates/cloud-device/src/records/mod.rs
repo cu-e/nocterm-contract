@@ -1,13 +1,15 @@
 //! The account's private Cloud records in personal Store collections.
 //!
 //! These layouts were defined by the native client and are specified here from the format
-//! (ADR 0006); the fixtures in `fixtures/cloud-device-v1/desktop-*.txt` are bytes produced by the
+//! (ADR 0006), as are the account SSH CA and its trusted servers (`agent_ssh_trust`, ADR 0009);
+//! the fixtures in `fixtures/cloud-device-v1/desktop-*.txt` are bytes produced by the
 //! native encoder and must stay identical. Each object is sealed by its collection key with
 //! [`nocterm_keys::CollectionKey::seal_object`], which binds collection id, object id and kind.
 mod hub_trust;
 mod material;
 mod provider_key;
 mod registry;
+mod ssh_trust;
 
 pub use hub_trust::{HUB_TRUST_KIND, HUB_TRUST_OBJECT, HubTrustRecord};
 pub use material::{
@@ -19,6 +21,7 @@ pub use registry::{
     MAX_TRUSTED_RUNNERS, RUNNER_REGISTRY_KIND, RUNNER_REGISTRY_OBJECT, RunnerPins, RunnerRegistry,
     TrustedRunner,
 };
+pub use ssh_trust::{SSH_TRUST_KIND, open_ca, open_trust};
 
 use crate::CloudDeviceError;
 use nocterm_keys::CollectionKey;

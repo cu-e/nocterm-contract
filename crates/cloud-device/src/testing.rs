@@ -5,6 +5,7 @@
     reason = "test fixtures fail loudly"
 )]
 pub(crate) mod hub;
+pub(crate) mod ssh;
 
 use crate::{
     DeviceIdentity,

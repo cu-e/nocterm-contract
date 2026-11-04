@@ -9,9 +9,11 @@
 //! caller takes them as a [`TranscriptDelta`].
 pub(crate) mod codec;
 mod delta;
+pub mod ssh;
 mod types;
 
 pub use delta::TranscriptDelta;
+pub use ssh::{BindingState, ChatSsh, PendingSshRequest};
 pub use types::{
     ApprovalRequest, CommandState, PendingCommand, PendingKind, Role, RunState, SessionCall,
     SessionStatus, ToolCall, ToolStatus, TranscriptRow,
@@ -33,8 +35,8 @@ pub const MAX_TRANSCRIPT_ROWS: usize = 4096;
 /// Commands of this device tracked at once; the oldest settled one goes first.
 pub const MAX_PENDING_COMMANDS: usize = 32;
 /// The reducer's version. A checkpoint made by another version is not restored: the chat is
-/// read again from the start.
-pub const REDUCER_VERSION: u16 = 1;
+/// read again from the start. Version 2 keeps the chat's SSH bindings ([`ChatSsh`]).
+pub const REDUCER_VERSION: u16 = 2;
 
 /// The reduced state of one chat.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -43,6 +45,7 @@ pub struct Transcript {
     runs: Vec<RunState>,
     approvals: Vec<ApprovalRequest>,
     pending: Vec<PendingCommand>,
+    ssh: ChatSsh,
     next_index: u64,
     control_revision: u64,
     deleted: bool,
@@ -94,6 +97,15 @@ impl Transcript {
     pub fn pending_commands(&self) -> &[PendingCommand] {
         &self.pending
     }
+    /// The chat's SSH bindings and the runner's unanswered certificate requests.
+    pub fn ssh(&self) -> &ChatSsh {
+        &self.ssh
+    }
+    /// This device revokes the binding `grant`; it answers none of its requests from now on.
+    pub(crate) fn withdraw_ssh(&mut self, grant: &[u8; 16]) {
+        self.ssh.withdraw(grant);
+        self.dirty.ssh = true;
+    }
 
     /// Starts tracking a command this device sends. A command already tracked is replaced.
     pub fn track(&mut self, command: PendingCommand) {
@@ -134,6 +146,7 @@ impl Transcript {
             runs: Some(self.runs.clone()),
             approvals: Some(self.approvals.clone()),
             pending: Some(self.pending.clone()),
+            ssh: Some(self.ssh.clone()),
             control_revision: self.control_revision,
             deleted: self.deleted,
             omitted_earlier: self.omitted_earlier,
@@ -163,6 +176,7 @@ impl Transcript {
             runs: dirty.runs.then(|| self.runs.clone()),
             approvals: dirty.approvals.then(|| self.approvals.clone()),
             pending: dirty.pending.then(|| self.pending.clone()),
+            ssh: dirty.ssh.then(|| self.ssh.clone()),
             control_revision: self.control_revision,
             deleted: self.deleted,
             omitted_earlier: self.omitted_earlier,
@@ -172,9 +186,17 @@ impl Transcript {
         self.rows.first().map_or(self.next_index, |row| row.index)
     }
 
-    /// Replaces the history with what a verified snapshot carries; pending commands stay.
+    /// Replaces the history with what a verified snapshot carries; pending commands and this
+    /// device's own binding revocations stay.
     pub fn restore(&mut self, snapshot: &CloudSnapshotPayload<'_>) {
         let pending = std::mem::take(&mut self.pending);
+        let withdrawn: Vec<[u8; 16]> = self
+            .ssh
+            .bindings()
+            .iter()
+            .filter(|state| state.withdrawn())
+            .map(|state| state.grant().id)
+            .collect();
         let next_index = self.next_index;
         *self = Self::new();
         self.next_index = next_index;
@@ -182,6 +204,9 @@ impl Transcript {
         self.omitted_earlier = snapshot.omitted_earlier;
         for event in &snapshot.events {
             self.apply(event);
+        }
+        for grant in &withdrawn {
+            self.ssh.withdraw(grant);
         }
         self.control_revision = self.control_revision.max(snapshot.control_revision);
         self.dirty = Dirty::everything();
@@ -260,6 +285,18 @@ impl Transcript {
                 self.dirty.flags = true;
             }
             CloudEventPayload::CommandAccepted { command, .. } => self.accepted(&command.id),
+            payload @ (CloudEventPayload::AuthenticationRequested(_)
+            | CloudEventPayload::SessionState(_)) => self.session_event(payload, at),
+            payload @ (CloudEventPayload::SshCertificateRequested(_)
+            | CloudEventPayload::SshAccessState(_)) => {
+                self.ssh.apply(payload, at);
+                self.dirty.ssh = true;
+            }
+        }
+    }
+    /// An SSH session's consent request or lifecycle.
+    fn session_event(&mut self, payload: &CloudEventPayload<'_>, at: u64) {
+        match payload {
             CloudEventPayload::AuthenticationRequested(request) => {
                 let binding = &request.binding;
                 let status = SessionStatus::AwaitingConsent {
@@ -284,8 +321,7 @@ impl Transcript {
                 let call = session_call(binding.attempt, &binding.access, ssh, None);
                 self.session(binding.run, call, status, at);
             }
-            CloudEventPayload::SshCertificateRequested(_)
-            | CloudEventPayload::SshAccessState(_) => {}
+            _ => {}
         }
     }
 

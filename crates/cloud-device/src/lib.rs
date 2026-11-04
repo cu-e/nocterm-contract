@@ -1,6 +1,6 @@
 //! The sans-I/O Cloud device core: everything an account device decides about Cloud chats,
 //! shared by the web panel (through `nocterm-keys-wasm`) and the native client (ADR 0006, 0007,
-//! 0008).
+//! 0008, 0009).
 //!
 //! Purpose: one implementation of the device side of Cloud chats. Clients execute the typed
 //! effects a flow hands out (sign, Store reads and writes, capability proof, head probe,
@@ -14,12 +14,14 @@
 //!   confirmed by catalog witnesses, no replay), [`open::OpenChat`] (probe, incremental verified replay, Watch, checkpoints,
 //!   freshness), [`command::Deliver`] (wake, sign, seal, identical-bytes publish, receipt probe
 //!   on an unknown outcome), [`create::CreateChat`] (seat, compare-created records, grant
-//!   publication, claim wait) and [`provider::ProviderLease`] (own-runner provider lease);
+//!   publication, claim wait), [`provider::ProviderLease`] (own-runner provider lease), and
+//!   [`ssh::BindServers`] and [`ssh::SshAnswer`] (a chat bound to CA-trusted servers and the
+//!   runner's per-chat certificates, ADR 0009);
 //! - the private account record layouts kept in personal Store collections: hub trust
 //!   (`cloud-hub-trust`), the trusted runner registry (`cloud-runner-registry`), wrapped chat
-//!   keys (`cloud-chat-material`), stored chat key grants (`cloud-chat-grant`) and own-agent
-//!   provider keys (`agent_provider_keys`), with their collection and object identifiers
-//!   ([`records`]);
+//!   keys (`cloud-chat-material`), stored chat key grants (`cloud-chat-grant`), own-agent
+//!   provider keys (`agent_provider_keys`) and the SSH CA with its trusted servers
+//!   (`agent_ssh_trust`), with their collection and object identifiers ([`records`]);
 //! - choosing the hub-trust record for a hub and account, and checking the hub's capability proof
 //!   against it ([`trust`]);
 //! - two-step device head probes and commands: canonical bytes out as a [`flow::SignRequest`],
@@ -27,7 +29,8 @@
 //! - the resumable verified reader of one chat ([`reader`]): record context, the pinned runner's
 //!   keys, cursor, sequence and writer continuity, gaps, witnessed heads, the freshness levels
 //!   `Current`, `Unconfirmed` and `Withheld`, and sealed device checkpoints;
-//! - the transcript reducer every device shows, with deltas ([`transcript`]);
+//! - the transcript reducer every device shows, with deltas, including the chat's SSH bindings
+//!   and open certificate requests ([`transcript`], [`transcript::ChatSsh`]);
 //! - the runner chat directory as a device verifies it ([`directory`]): runner-signed summaries
 //!   sealed to the account, revision order, sealed directory checkpoints and the merge of
 //!   summaries with the runner's catalog witness (ADR 0008);
@@ -53,6 +56,12 @@
 //!   routing context, and only when its revision is newer than the one held; it is display
 //!   data and never stands in for a replayed transcript;
 //! - chat keys and provider keys are opened per use and never retained by a value of this crate;
+//!   the SSH CA is opened per SSH flow and dropped with it;
+//! - a device answers an SSH certificate request only when the verified transcript holds it,
+//!   its binding is signed by the account's current CA, is not revoked, refused or expired and
+//!   contains the time, and its subject key is the binding's first; it certifies only requested
+//!   servers still trusted under that CA as bound, for at most 24 hours and never past the
+//!   binding, with the runner's `source-address` and `permit-pty` only;
 //! - the transcript is display data: no row grants or admits anything.
 
 pub mod command;
@@ -71,10 +80,11 @@ pub mod provider;
 pub mod reader;
 pub mod records;
 mod scope;
+pub mod ssh;
 #[cfg(test)]
 mod testing;
 pub mod transcript;
 pub mod trust;
 
-pub use error::CloudDeviceError;
+pub use error::{CloudDeviceError, SshRefusal};
 pub use scope::{AccountScope, DeviceIdentity};

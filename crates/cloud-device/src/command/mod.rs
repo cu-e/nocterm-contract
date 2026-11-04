@@ -15,9 +15,13 @@ use crate::{
 use nocterm_hub_model::cloud::{
     CloudRoute, CloudTextId, CommandContext, CommandHeader, CommandKeys, CommandKind,
     MAX_COMMAND_LIFETIME_MS, RunCoordinate, SignedCommand,
-    payload::{ApprovalChoice, CloudCommandPayload, GrantPayload, GrantReference},
+    payload::{
+        ApprovalChoice, CloudCommandPayload, GrantClass, GrantPayload, GrantReference,
+        ScopedGrantReference,
+    },
     provider::ProviderLeaseContext,
     relay::{PublicationMetadata, RelayBinding},
+    ssh::SignedSshBinding,
 };
 use nocterm_keys::{AccountKeyPair, PublicKey, cloud::seal_command, random_bytes};
 use sha2::{Digest, Sha256};
@@ -56,6 +60,107 @@ pub enum CommandAction<'a> {
         models: &'a [CloudTextId],
         capsule: &'a [u8],
     },
+    /// Bind the chat to servers under a CA-signed binding (`IssueGrant(SshBinding)`).
+    SshBinding { binding: &'a SignedSshBinding },
+    /// Answer certificate request `request` of binding `grant` (`IssueGrant(SshCertificate)`).
+    SshCertificate {
+        grant: GrantReference,
+        request: [u8; 16],
+        certificate: &'a [u8],
+    },
+    /// Revoke the chat's binding `grant` (`RevokeGrant(SshBinding)`).
+    RevokeSshBinding { grant: GrantReference },
+}
+
+/// What an action becomes: its command kind, run, admission lifetime and payload.
+struct Shape<'a> {
+    kind: CommandKind,
+    run: Option<RunCoordinate>,
+    lifetime: i64,
+    payload: CloudCommandPayload<'a>,
+}
+impl<'a> CommandAction<'a> {
+    fn shape(self, grant_id: [u8; 16], now_ms: i64) -> Result<Shape<'a>, CloudDeviceError> {
+        let (kind, run, lifetime, payload) = match self {
+            Self::Prompt { policy, text } => (
+                CommandKind::SubmitPrompt,
+                None,
+                policy.lifetime_ms(),
+                policy.prompt(text, now_ms)?,
+            ),
+            Self::Stop { run } => (
+                CommandKind::Stop,
+                Some(run),
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::Stop,
+            ),
+            Self::Allow { policy, run } => (
+                CommandKind::IssueGrant,
+                Some(run),
+                policy.lifetime_ms(),
+                policy.inference_grant(grant_id, now_ms)?,
+            ),
+            Self::Answer { approval, choice } => (
+                CommandKind::ResolveApproval,
+                Some(approval.run()),
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::ResolveApproval(Box::new(approval.answer(choice))),
+            ),
+            Self::Provider {
+                grant,
+                context,
+                models,
+                capsule,
+            } => (
+                CommandKind::IssueGrant,
+                None,
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::IssueGrant(Box::new(GrantPayload::Provider {
+                    grant,
+                    context: context.clone(),
+                    allowed_models: models.to_vec(),
+                    capsule,
+                })),
+            ),
+            Self::SshBinding { binding } => (
+                CommandKind::IssueGrant,
+                None,
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::IssueGrant(Box::new(GrantPayload::SshBinding {
+                    binding: binding.clone(),
+                })),
+            ),
+            Self::SshCertificate {
+                grant,
+                request,
+                certificate,
+            } => (
+                CommandKind::IssueGrant,
+                None,
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::IssueGrant(Box::new(GrantPayload::SshCertificate {
+                    grant,
+                    request,
+                    certificate,
+                })),
+            ),
+            Self::RevokeSshBinding { grant } => (
+                CommandKind::RevokeGrant,
+                None,
+                CONTROL_LIFETIME_MS,
+                CloudCommandPayload::RevokeGrant(ScopedGrantReference {
+                    class: GrantClass::SshBinding,
+                    grant,
+                }),
+            ),
+        };
+        Ok(Shape {
+            kind,
+            run,
+            lifetime,
+            payload,
+        })
+    }
 }
 
 /// A command waiting for the device signature.
@@ -85,7 +190,8 @@ impl UnsignedCommand {
             (random_bytes()?, random_bytes()?, random_bytes()?),
         )
     }
-    /// As [`Self::prepare`] with caller-chosen command id, nonce and grant id (fixtures only).
+    /// As [`Self::prepare`] with caller-chosen command id, nonce and grant id (fixtures, and
+    /// flows that track a command before they prepare it).
     pub fn prepare_with_ids(
         selector: &ChatSelector,
         account_public_key: [u8; 32],
@@ -98,48 +204,12 @@ impl UnsignedCommand {
         if !selector.scope().is_account_key(&account_public_key) {
             return Err(CloudDeviceError::Binding);
         }
-        let (kind, run, lifetime, payload) = match action {
-            CommandAction::Prompt { policy, text } => (
-                CommandKind::SubmitPrompt,
-                None,
-                policy.lifetime_ms(),
-                policy.prompt(text, now_ms)?,
-            ),
-            CommandAction::Stop { run } => (
-                CommandKind::Stop,
-                Some(run),
-                CONTROL_LIFETIME_MS,
-                CloudCommandPayload::Stop,
-            ),
-            CommandAction::Allow { policy, run } => (
-                CommandKind::IssueGrant,
-                Some(run),
-                policy.lifetime_ms(),
-                policy.inference_grant(grant_id, now_ms)?,
-            ),
-            CommandAction::Answer { approval, choice } => (
-                CommandKind::ResolveApproval,
-                Some(approval.run()),
-                CONTROL_LIFETIME_MS,
-                CloudCommandPayload::ResolveApproval(Box::new(approval.answer(choice))),
-            ),
-            CommandAction::Provider {
-                grant,
-                context,
-                models,
-                capsule,
-            } => (
-                CommandKind::IssueGrant,
-                None,
-                CONTROL_LIFETIME_MS,
-                CloudCommandPayload::IssueGrant(Box::new(GrantPayload::Provider {
-                    grant,
-                    context: context.clone(),
-                    allowed_models: models.to_vec(),
-                    capsule,
-                })),
-            ),
-        };
+        let Shape {
+            kind,
+            run,
+            lifetime,
+            payload,
+        } = action.shape(grant_id, now_ms)?;
         require_deadline(&payload, now_ms, device.session_expires_at_ms())?;
         let accept_before_ms = now_ms
             .checked_add(lifetime)

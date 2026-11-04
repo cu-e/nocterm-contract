@@ -374,6 +374,10 @@ pub enum StreamFrame {
 }
 
 pub use super::listing::{ListOptions, WireChat, WireServer, WireSummary};
+pub use super::ssh::{
+    BindOptions, SshServerInput, WireBinding, WireBoundServer, WireSsh, WireSshRequest,
+    WireSshTrust,
+};
 pub use super::view::{
     ChatActionInput, FlowOutput, ModelInput, NewChatHost, RunnerInfo, WireApproval, WireDelta,
     WireFreshness, WirePending, WireRow, WireRun, WireSession, WireTool, WireUsage,

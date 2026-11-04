@@ -11,7 +11,10 @@
 //! Commands are built here from the verified transcript ([`OpenChat::deliver`]) and run as their
 //! own [`Deliver`] flow; their outcomes come back through [`OpenChat::delivery`]. When the runner
 //! accepted a prompt of this device that waits for its model grant, the flow asks for it once
-//! ([`ChatUpdate::AllowRun`], ADR 0129 of the native client).
+//! ([`ChatUpdate::AllowRun`], ADR 0129 of the native client). When the runner asks for an SSH
+//! certificate that the verified history allows answering, the flow says so once
+//! ([`ChatUpdate::SshRequest`]); [`OpenChat::answer_ssh`], [`OpenChat::bind_servers`] and
+//! [`OpenChat::unbind_servers`] build the SSH commands (contract ADR 0009).
 use crate::{
     CloudDeviceError, DeviceIdentity,
     command::{CommandAction, Deliver, DeliveryUpdate, UnsignedCommand},
@@ -24,6 +27,7 @@ use crate::{
     probe::{ProbeCall, ProbeTarget},
     reader::{ChatReader, DeliveredOrigin, DeliveredRecord, Freshness, RoundEnd, VerifiedChat},
     records::{ChatMaterialRecord, ChatSelector, StoredObject},
+    ssh::{self, BindServers, ChatParts, SshAnswer, SshServerChoice},
     transcript::{CommandState, PendingCommand, PendingKind, Transcript, TranscriptDelta},
 };
 use nocterm_hub_model::cloud::{
@@ -50,6 +54,12 @@ pub enum ChatUpdate {
     /// [`ChatAction::Allow`] for this run.
     AllowRun {
         run: RunCoordinate,
+    },
+    /// The runner asks for an SSH certificate this device may answer: run
+    /// [`OpenChat::answer_ssh`] for `request` (an unlocked device answers inside the binding the
+    /// person signed, without asking again).
+    SshRequest {
+        request: [u8; 16],
     },
     /// A replay round was refused; the verified prefix stays and the next hint or refresh tries
     /// again.
@@ -131,6 +141,7 @@ impl OpenChat {
             },
             reported: None,
             allowed: Vec::new(),
+            announced: Vec::new(),
         })))
     }
     pub fn chat(&self) -> ChatRef {
@@ -163,6 +174,37 @@ impl OpenChat {
     ) -> Result<Deliver, CloudDeviceError> {
         self.0
             .with(|reading, _| reading.deliver(action, wake, now_ms))
+    }
+    /// Binds the chat to `servers` from the account's CA-trusted servers for `window_ms`
+    /// (seven days when `None`, at most thirty), replacing the current binding.
+    pub fn bind_servers(
+        &mut self,
+        servers: &[SshServerChoice],
+        window_ms: Option<i64>,
+        wake: Option<String>,
+        now_ms: i64,
+    ) -> Result<BindServers, CloudDeviceError> {
+        self.0.with(|reading, _| {
+            BindServers::for_chat(reading.parts(), servers, window_ms, wake, now_ms)
+        })
+    }
+    /// Revokes the chat's binding; this device answers none of its requests from now on.
+    pub fn unbind_servers(
+        &mut self,
+        wake: Option<String>,
+        now_ms: i64,
+    ) -> Result<Deliver, CloudDeviceError> {
+        self.0
+            .with(|reading, _| ssh::unbind(reading.parts(), wake, now_ms))
+    }
+    /// Answers the runner's certificate request `request` when the verified history allows it.
+    pub fn answer_ssh(
+        &mut self,
+        request: &[u8; 16],
+        now_ms: i64,
+    ) -> Result<SshAnswer, CloudDeviceError> {
+        self.0
+            .with(|reading, _| SshAnswer::for_chat(reading.parts(), request, now_ms))
     }
     /// Applies the outcome of a delivery of this chat; a receipt probes the runner again.
     pub fn delivery(&mut self, update: &DeliveryUpdate) {
@@ -232,11 +274,20 @@ pub(crate) struct Reading {
     watch: Watching,
     reported: Option<Freshness>,
     allowed: Vec<[u8; 16]>,
+    announced: Vec<[u8; 16]>,
 }
 
 type ChatIo = Io<Purpose, ChatUpdate>;
 
 impl Reading {
+    fn parts(&mut self) -> ChatParts<'_> {
+        ChatParts {
+            session: &self.session,
+            device: &self.device,
+            selector: &self.selector,
+            transcript: self.reader.transcript_mut(),
+        }
+    }
     fn deliver(
         &mut self,
         action: &ChatAction,
@@ -532,6 +583,18 @@ impl Reading {
             {
                 io.output(ChatUpdate::AllowRun { run: run.run });
             }
+        }
+        let ssh = transcript.ssh();
+        for pending in ssh.requests() {
+            let request = pending.request.request;
+            if self.announced.contains(&request) || ssh.eligible(&request).is_err() {
+                continue;
+            }
+            if self.announced.len() == MAX_ALLOWED {
+                self.announced.remove(0);
+            }
+            self.announced.push(request);
+            io.output(ChatUpdate::SshRequest { request });
         }
     }
     fn watch_ended(&mut self, now_ms: i64) {

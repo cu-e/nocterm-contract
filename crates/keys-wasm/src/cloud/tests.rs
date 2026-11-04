@@ -710,3 +710,57 @@ fn a_lease_names_the_keys_provider_and_model_and_an_expired_boot_is_its_own_code
     };
     assert_eq!(error.code, "boot_expired");
 }
+
+#[test]
+fn ssh_commands_need_a_verified_request_a_binding_or_the_accounts_ca() {
+    use super::types::{BindOptions, SshServerInput, WireSsh};
+    let mut hub = Replayer::new();
+    let (_, mut chat, _, _) = opened(&mut hub);
+    assert_eq!(chat.ssh(), WireSsh::default());
+    let code = |result: super::CloudResult<super::WebFlow>| result.unwrap_err().code();
+    assert_eq!(
+        code(chat.answering(&"44".repeat(16), NOW_MS)),
+        "ssh_unknown_request"
+    );
+    assert_eq!(code(chat.unbinding(None, NOW_MS)), "ssh_not_bound");
+    let server = |server_id: &str, port| {
+        vec![SshServerInput {
+            server_id: server_id.to_owned(),
+            port,
+        }]
+    };
+    let bind = |chat: &mut WebChat, servers, options| chat.binding(servers, options, NOW_MS);
+    assert_eq!(
+        code(bind(&mut chat, server("zz", 22), BindOptions::default())),
+        "argument"
+    );
+    assert_eq!(
+        code(bind(
+            &mut chat,
+            server(&"ab".repeat(16), 0),
+            BindOptions::default()
+        )),
+        "ssh_servers"
+    );
+    let month = BindOptions {
+        window_ms: Some(31.0 * 86_400_000.0),
+        wake: None,
+    };
+    assert_eq!(
+        code(bind(&mut chat, server(&"ab".repeat(16), 22), month)),
+        "ssh_window"
+    );
+    // The recorded account has no `agent_ssh_trust` collection, so it has no CA to bind with.
+    let mut flow = bind(
+        &mut chat,
+        server(&"ab".repeat(16), 22),
+        BindOptions::default(),
+    )
+    .unwrap();
+    let (_, last, _) = drive(&mut flow, &mut hub, NOW_MS);
+    assert!(
+        matches!(&last, FlowStep::Failed { error } if error.code == "ssh_no_ca"),
+        "{last:?}"
+    );
+    assert!(hub.published.is_empty());
+}

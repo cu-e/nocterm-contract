@@ -1,6 +1,6 @@
 [package]
 name = "nocterm-keys-wasm"
-description = "WebAssembly bindings of the Nocterm agent and Cloud device formats for the web panel: sealing a definition to a pool key, and one CloudDevice that runs the Cloud device flows."
+description = "WebAssembly bindings of the Nocterm agent and Cloud device formats for the web panel: sealing a definition to a pool key, and one CloudDevice that runs the Cloud device flows, SSH bindings and certificate answers included."
 license = "Apache-2.0 OR MIT"
 version.workspace = true
 edition.workspace = true

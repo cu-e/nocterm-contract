@@ -3,9 +3,9 @@
 //!
 //! A view applies a [`TranscriptDelta`] in this order: on `reset` it clears everything; it drops
 //! rows whose index is below `first_index`; when `changed_from` is set it drops the rows from
-//! that index on and appends `rows`; it replaces runs, approvals and pending commands that are
-//! present; it takes the scalar fields as they are.
-use super::{ApprovalRequest, PendingCommand, RunState, TranscriptRow};
+//! that index on and appends `rows`; it replaces runs, approvals, pending commands and the SSH
+//! bindings that are present; it takes the scalar fields as they are.
+use super::{ApprovalRequest, ChatSsh, PendingCommand, RunState, TranscriptRow};
 
 /// One transcript change. Plain data.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -20,6 +20,8 @@ pub struct TranscriptDelta {
     pub runs: Option<Vec<RunState>>,
     pub approvals: Option<Vec<ApprovalRequest>>,
     pub pending: Option<Vec<PendingCommand>>,
+    /// The chat's SSH bindings and open certificate requests, when they changed.
+    pub ssh: Option<ChatSsh>,
     pub control_revision: u64,
     pub deleted: bool,
     pub omitted_earlier: bool,
@@ -32,6 +34,7 @@ impl TranscriptDelta {
             && self.runs.is_none()
             && self.approvals.is_none()
             && self.pending.is_none()
+            && self.ssh.is_none()
     }
 }
 
@@ -47,6 +50,7 @@ pub(super) struct Dirty {
     pub(super) runs: bool,
     pub(super) approvals: bool,
     pub(super) pending: bool,
+    pub(super) ssh: bool,
     pub(super) flags: bool,
 }
 impl Dirty {
@@ -60,6 +64,7 @@ impl Dirty {
             runs: true,
             approvals: true,
             pending: true,
+            ssh: true,
             flags: true,
         }
     }

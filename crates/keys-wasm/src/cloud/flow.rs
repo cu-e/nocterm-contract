@@ -17,6 +17,7 @@ use nocterm_cloud_device::{
     list::ListChats,
     open::{ChatAction, ChatUpdate, ModelChoice, OpenChat},
     provider::ProviderLease,
+    ssh::{BindServers, SshAnswer},
 };
 use wasm_bindgen::prelude::*;
 
@@ -28,10 +29,11 @@ use super::{
         ChatActionInput, EffectInput, FlowOutput, FlowStep, StreamFrame, WireEffect, WireInstance,
         WirePublication, WireSelector,
     },
-    view::{RunnerInfo, WireDelta, WireFreshness, command_state, ms},
+    view::{RunnerInfo, WireDelta, WireFreshness, ms},
 };
 
-/// A finite flow: `connect`, `listChats`, `deliver`, `createChat` or `lease`.
+/// A finite flow: `connect`, `listChats`, `deliver`, `createChat`, `lease`, `bindServers`,
+/// `unbindServers` or `answerSsh`.
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct WebFlow {
@@ -46,6 +48,8 @@ pub(super) enum Running {
     Deliver(Deliver, Weak<RefCell<OpenChat>>),
     Create(CreateChat),
     Lease(ProviderLease, Weak<RefCell<OpenChat>>),
+    Bind(BindServers, Weak<RefCell<OpenChat>>),
+    Answer(SshAnswer, Weak<RefCell<OpenChat>>),
 }
 
 #[wasm_bindgen]
@@ -89,14 +93,13 @@ impl WebFlow {
             }),
             Running::List(flow) => convert(flow.next(now), super::listing::listed),
             Running::Deliver(flow, chat) => convert(flow.next(now), |update| {
-                if let Some(chat) = chat.upgrade() {
-                    chat.borrow_mut().delivery(&update);
-                }
-                FlowOutput::Delivery {
-                    command_id: hex::encode(update.command_id),
-                    state: command_state(update.state),
-                    cursor: update.cursor,
-                }
+                super::ssh::delivered(&update, chat)
+            }),
+            Running::Bind(flow, chat) => convert(flow.next(now), |update| {
+                super::ssh::ssh_output(update, chat)
+            }),
+            Running::Answer(flow, chat) => convert(flow.next(now), |update| {
+                super::ssh::ssh_output(update, chat)
             }),
             Running::Create(flow) => convert(flow.next(now), |created| {
                 let runners_reloaded = created.runners.is_some();
@@ -131,6 +134,8 @@ impl WebFlow {
             Running::Deliver(flow, _) => flow.resolve(id, input),
             Running::Create(flow) => flow.resolve(id, input),
             Running::Lease(flow, _) => flow.resolve(id, input),
+            Running::Bind(flow, _) => flow.resolve(id, input),
+            Running::Answer(flow, _) => flow.resolve(id, input),
         }
         Ok(())
     }
@@ -142,6 +147,8 @@ impl WebFlow {
             Running::Deliver(flow, _) => flow.frame(id, frame),
             Running::Create(flow) => flow.frame(id, frame),
             Running::Lease(flow, _) => flow.frame(id, frame),
+            Running::Bind(flow, _) => flow.frame(id, frame),
+            Running::Answer(flow, _) => flow.frame(id, frame),
         }
     }
 }
@@ -223,6 +230,13 @@ impl WebChat {
     pub(super) fn handle(&self) -> Weak<RefCell<OpenChat>> {
         Rc::downgrade(&self.chat)
     }
+    pub(super) fn open_chat(&self) -> &Rc<RefCell<OpenChat>> {
+        &self.chat
+    }
+    /// A flow of this chat's device.
+    pub(super) fn flow(&self, running: Running) -> WebFlow {
+        WebFlow::new(running, self.shared.clone())
+    }
     pub(super) fn chat_ref(&self) -> nocterm_cloud_device::context::ChatRef {
         self.chat.borrow().chat()
     }
@@ -241,6 +255,9 @@ impl WebChat {
             },
             ChatUpdate::AllowRun { run } => FlowOutput::AllowRun {
                 run: hex::encode(run.id),
+            },
+            ChatUpdate::SshRequest { request } => FlowOutput::SshRequest {
+                request_id: hex::encode(request),
             },
             ChatUpdate::Refused(error) => FlowOutput::Refused {
                 error: WebCloudError::from(error).wire(),

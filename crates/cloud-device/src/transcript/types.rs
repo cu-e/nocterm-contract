@@ -164,6 +164,12 @@ pub enum PendingKind {
     Allow,
     Answer,
     Provider,
+    /// Bind the chat to servers (`IssueGrant(SshBinding)`).
+    Bind,
+    /// Revoke the chat's binding (`RevokeGrant(SshBinding)`).
+    Unbind,
+    /// Answer a runner's certificate request (`IssueGrant(SshCertificate)`).
+    Certificate,
 }
 
 /// Where a command this device sent stands.

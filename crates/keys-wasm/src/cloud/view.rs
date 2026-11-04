@@ -18,6 +18,7 @@ use tsify_next::Tsify;
 
 use super::{
     listing::WireChat,
+    ssh::WireSsh,
     types::{WireError, WireInstance},
 };
 
@@ -151,6 +152,27 @@ pub enum FlowOutput {
     AllowRun {
         run: String,
     },
+    /// `openChat`: the runner asks for an SSH certificate this device may answer: call
+    /// `answerSsh(requestId)` while the chat is open.
+    #[serde(rename_all = "camelCase")]
+    SshRequest {
+        request_id: String,
+    },
+    /// `bindServers`: this device signed binding `grant` at `epoch`; the servers in
+    /// `needsCaUpdate` still hold the shared `authorized_keys` line.
+    #[serde(rename_all = "camelCase")]
+    SshBound {
+        grant: String,
+        epoch: f64,
+        needs_ca_update: Vec<String>,
+    },
+    /// `answerSsh`: this device signed a certificate for `servers` until `validBeforeMs`.
+    #[serde(rename_all = "camelCase")]
+    SshCertified {
+        request_id: String,
+        servers: Vec<String>,
+        valid_before_ms: f64,
+    },
     /// `openChat`: a replay round was refused; the verified prefix stays.
     Refused {
         error: WireError,
@@ -189,7 +211,7 @@ pub enum FlowOutput {
 
 /// A transcript change. Apply in order: on `reset` clear; drop rows with `index <
 /// firstIndex`; when `changedFrom` is set drop rows with `index >= changedFrom` and append
-/// `rows`; replace `runs`, `approvals` and `pending` when present; take the rest as is.
+/// `rows`; replace `runs`, `approvals`, `pending` and `ssh` when present; take the rest as is.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +231,9 @@ pub struct WireDelta {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tsify(optional)]
     pub pending: Option<Vec<WirePending>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub ssh: Option<WireSsh>,
     pub control_revision: u64,
     pub deleted: bool,
     pub omitted_earlier: bool,
@@ -232,6 +257,7 @@ impl From<&TranscriptDelta> for WireDelta {
                 .pending
                 .as_ref()
                 .map(|list| list.iter().map(WirePending::from).collect()),
+            ssh: delta.ssh.as_ref().map(WireSsh::from),
             control_revision: delta.control_revision,
             deleted: delta.deleted,
             omitted_earlier: delta.omitted_earlier,
@@ -525,6 +551,9 @@ impl From<&PendingCommand> for WirePending {
                 PendingKind::Allow => "allow",
                 PendingKind::Answer => "answer",
                 PendingKind::Provider => "provider",
+                PendingKind::Bind => "bind",
+                PendingKind::Unbind => "unbind",
+                PendingKind::Certificate => "certificate",
             }
             .to_owned(),
             text: pending.text.clone(),
