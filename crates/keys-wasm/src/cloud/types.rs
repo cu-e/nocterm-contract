@@ -33,6 +33,7 @@ pub enum FlowStep {
         output: FlowOutput,
     },
     /// Call `next` again after an answer, a frame, or once `untilMs` has passed.
+    #[serde(rename_all = "camelCase")]
     Idle {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[tsify(optional)]
