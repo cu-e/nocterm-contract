@@ -6,6 +6,30 @@ use core::fmt;
 mod reader;
 
 pub const MAX_TOOL_ARGUMENT_BYTES: usize = 128 * 1024;
+
+/// Every terminal tool a Cloud event may name, with the short label a client shows for it
+/// (`"Run command"`). The list is closed: an event naming another tool is refused.
+pub const TOOLS: [(&str, &str); 11] = [
+    ("list_terminals", "List terminals"),
+    ("open_terminal", "Connect"),
+    ("read_terminal", "Read terminal"),
+    ("send_input", "Send input"),
+    ("run_command", "Run command"),
+    ("exec_command", "Execute program"),
+    ("read_command", "Read command"),
+    ("cancel_command", "Cancel command"),
+    ("transfer_files", "Transfer files"),
+    ("read_transfer", "Read transfer"),
+    ("cancel_transfer", "Cancel transfer"),
+];
+
+/// The display label of terminal tool `name`; `None` for a name outside [`TOOLS`].
+pub fn tool_label(name: &str) -> Option<&'static str> {
+    TOOLS
+        .iter()
+        .find(|(tool, _)| *tool == name)
+        .map(|(_, label)| *label)
+}
 /// Most source paths one `transfer_files` call may name.
 pub const MAX_TRANSFER_SOURCES: usize = 64;
 
