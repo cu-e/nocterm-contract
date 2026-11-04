@@ -227,6 +227,33 @@ fn without_an_answer_the_records_are_an_unconfirmed_prefix() {
 }
 
 #[test]
+fn a_reader_is_opening_until_its_first_round_and_never_opening_again() {
+    let world = World::new();
+    let key = ChatKey::generate().unwrap();
+    let records = chain(&world, &key, 1);
+    let mut reader = ChatReader::new(&world.selector, &world.capabilities).unwrap();
+    assert_eq!(
+        reader.freshness(),
+        Freshness::Opening {
+            last_witnessed_at_ms: None
+        }
+    );
+    // A round without a witness or a probe confirms nothing: unconfirmed, not opening.
+    feed(&mut reader, &records[0], &key).unwrap();
+    let unconfirmed = Freshness::Unconfirmed {
+        last_witnessed_at_ms: None,
+    };
+    assert_eq!(
+        reader.page_end(1, false).unwrap(),
+        RoundEnd::Complete(unconfirmed)
+    );
+    assert_eq!(
+        reader.page_end(1, false).unwrap(),
+        RoundEnd::Complete(unconfirmed)
+    );
+}
+
+#[test]
 fn watch_driven_rounds_after_a_current_read_stay_current() {
     let world = World::new();
     let key = ChatKey::generate().unwrap();
@@ -436,7 +463,7 @@ fn a_checkpoint_restore_resumes_at_its_cursor_and_refuses_a_rollback() {
     assert_eq!(restored.transcript().rows(), reader.transcript().rows());
     assert_eq!(
         restored.freshness(),
-        Freshness::Unconfirmed {
+        Freshness::Opening {
             last_witnessed_at_ms: Some(NOW)
         }
     );

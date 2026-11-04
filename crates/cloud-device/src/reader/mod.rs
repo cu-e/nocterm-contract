@@ -13,7 +13,8 @@
 //!   the pinned runner's signature over exactly that context;
 //! - where it reaches a witnessed head or snapshot position, it is that witnessed record.
 //!
-//! Freshness says how much the reader knows ([`Freshness`]): a round after a fresh witness
+//! Freshness says how much the reader knows ([`Freshness`]): a new or restored reader is
+//! `Opening` until its first round completes; a round after a fresh witness
 //! ([`ChatReader::witness`]) that reaches the witnessed head is `Current`; one that ends below it
 //! is `Withheld` (the hub hid newer history the runner witnessed); a round after a probe the
 //! runner did not answer ([`ChatReader::unanswered`]) is `Unconfirmed`, a verified prefix that
@@ -40,6 +41,9 @@ use verify::{Limits, Origin, State};
 /// How far a reader's transcript is confirmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Freshness {
+    /// No round has finished since the reader was made or restored: a restored transcript is
+    /// shown, but nothing has been asked of the runner yet (not "the seat is asleep").
+    Opening { last_witnessed_at_ms: Option<i64> },
     /// A fresh head witness answered and the replay reached it. Later records that Watch hints
     /// bring are verified one by one and keep this state.
     Current { witnessed_at_ms: i64 },
@@ -122,7 +126,7 @@ impl ChatReader {
         Ok(Self {
             origin: Origin::of(selector)?,
             limits: Limits::of(capabilities)?,
-            freshness: Freshness::Unconfirmed {
+            freshness: Freshness::Opening {
                 last_witnessed_at_ms: witnessed.as_ref().map(|seen| seen.at_ms),
             },
             position,
@@ -289,7 +293,15 @@ impl ChatReader {
             None if std::mem::take(&mut self.unanswered) => Freshness::Unconfirmed {
                 last_witnessed_at_ms: self.witnessed.as_ref().map(|seen| seen.at_ms),
             },
-            None => self.freshness,
+            // A first round without any witness or probe confirms nothing either.
+            None => match self.freshness {
+                Freshness::Opening {
+                    last_witnessed_at_ms,
+                } => Freshness::Unconfirmed {
+                    last_witnessed_at_ms,
+                },
+                freshness => freshness,
+            },
         };
         Ok(RoundEnd::Complete(self.freshness))
     }

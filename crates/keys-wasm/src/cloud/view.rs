@@ -41,13 +41,21 @@ impl From<&TrustedRunner> for RunnerInfo {
     }
 }
 
-/// `state`: `current` (`witnessedAtMs`), `unconfirmed` (`lastWitnessedAtMs` when ever
+/// `state`: `opening` (`lastWitnessedAtMs` of a restored checkpoint: no round has finished yet,
+/// show the stored history without calling the seat asleep), `current` (`witnessedAtMs`),
+/// `unconfirmed` (`lastWitnessedAtMs` when ever
 /// witnessed: show "Seat asleep — stored history, may be incomplete" and offer Wake) or
 /// `withheld` (`witnessedAtMs`: the hub withholds newer history).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum WireFreshness {
+    #[serde(rename_all = "camelCase")]
+    Opening {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[tsify(optional)]
+        last_witnessed_at_ms: Option<f64>,
+    },
     #[serde(rename_all = "camelCase")]
     Current { witnessed_at_ms: f64 },
     #[serde(rename_all = "camelCase")]
@@ -69,6 +77,11 @@ pub(super) fn ms(value: i64) -> f64 {
 impl From<Freshness> for WireFreshness {
     fn from(freshness: Freshness) -> Self {
         match freshness {
+            Freshness::Opening {
+                last_witnessed_at_ms,
+            } => Self::Opening {
+                last_witnessed_at_ms: last_witnessed_at_ms.map(ms),
+            },
             Freshness::Current { witnessed_at_ms } => Self::Current {
                 witnessed_at_ms: ms(witnessed_at_ms),
             },

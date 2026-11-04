@@ -9,7 +9,7 @@
 //! accepted record anchor (optional) ‖ the last witnessed head and its time (optional) ‖ the
 //! transcript ([`crate::transcript`] codec). A checkpoint of another reducer version is refused,
 //! and the caller reads the chat again from the start. Pending commands and freshness are not
-//! stored: a restored reader is `Unconfirmed` until a new round.
+//! stored: a restored reader is `Opening` until a new round completes.
 use super::{ChatReader, Position, Witnessed};
 use crate::{
     CloudDeviceError,

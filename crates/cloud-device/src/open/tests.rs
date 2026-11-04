@@ -200,7 +200,7 @@ fn a_restored_checkpoint_shows_at_once_and_resumes_at_its_cursor() {
     assert_eq!(chat.transcript().rows().len(), 2, "shown before any effect");
     assert_eq!(
         chat.freshness(),
-        Freshness::Unconfirmed {
+        Freshness::Opening {
             last_witnessed_at_ms: Some(NOW)
         }
     );
