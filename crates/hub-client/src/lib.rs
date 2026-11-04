@@ -15,8 +15,12 @@
 //! Guarded runner heartbeat and device status calls retain bounded body/result
 //! ownership; runner deadline observations clone no credential or token.
 //! Cloud device flows (`nocterm-cloud-device`) sign through [`HubClient::sign_cloud`], which
-//! accepts only the core's sign requests for this device's key, and name the device with
-//! [`HubClient::cloud_device`]. A runner publishes sealed chat summaries to its directory with
+//! accepts only the core's sign requests for this device's key, name the device with
+//! [`HubClient::cloud_device`], and send their Cloud effects with [`HubClient::capabilities`],
+//! [`HubClient::probe_head`], [`HubClient::publish_one`], [`HubClient::replay`],
+//! [`HubClient::watch`] and [`HubClient::runner_status`]: exactly the bytes the core built, under
+//! this client's signer and token refresh, answered as the core's `Input` and `Frame` values or
+//! a [`CloudCallError`] with its `EffectFailure` (contract ADR 0010). A runner publishes sealed chat summaries to its directory with
 //! `CloudRunner::publish_summary` (capability bit 256, ADR 0008); devices and runners replay
 //! and watch it as `CloudSelector::Directory`, whose cursors have holes and never a gap.
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
@@ -33,6 +37,7 @@
 pub mod agents;
 mod client;
 pub mod cloud;
+mod cloud_calls;
 mod connect;
 mod error;
 mod keyset;
@@ -45,6 +50,7 @@ mod store;
 pub mod terminal;
 
 pub use client::{DeviceInfo, HubClient, Signed, SignedIn};
+pub use cloud_calls::{CloudCallError, CloudFrames, MAX_PROBE_WAIT_MS};
 pub use connect::{ConnectError, EndpointError, HubEndpoint, Trust, parse_fingerprint};
 pub use error::{ClientError, LinkError, OidcError, StatusCause, StatusCode};
 pub use keyset::{Keyset, KeysetError, NewKeyset, UnlockMethod};

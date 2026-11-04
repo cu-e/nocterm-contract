@@ -9,7 +9,7 @@ pub use bounds::{head_decoded_metadata_bytes, head_query_work_bytes, head_reply_
 pub use device::{CompletedHeadProbe, DeviceHeadProbes, PreparedHeadProbe};
 use nocterm_hub_model::cloud::{
     capabilities::{CLOUD_FEATURE_FRESH_HEAD, CapabilityLimits},
-    head::{MAX_HEAD_QUERY_BYTES, MAX_HEAD_REPLY_ENVELOPE_BYTES},
+    head::{MAX_HEAD_QUERY_BYTES, MAX_HEAD_QUERY_ENVELOPE_BYTES, MAX_HEAD_REPLY_ENVELOPE_BYTES},
     relay::MAX_RELAY_WIRE_BYTES,
 };
 pub use resident::{ResidentHeadQuery, ResidentHeadWitness};
@@ -36,6 +36,10 @@ fn require_wire(scope: &[u8], ciphertext: &[u8], maximum: usize) -> Result<(), C
         return Err(CloudError::Protocol);
     }
     Ok(())
+}
+/// The bound of a sealed head query on the wire, as a device sends it.
+pub(crate) fn require_head_query(scope: &[u8], ciphertext: &[u8]) -> Result<(), CloudError> {
+    require_wire(scope, ciphertext, MAX_HEAD_QUERY_ENVELOPE_BYTES)
 }
 fn require_reply(scope: &[u8], ciphertext: &[u8]) -> Result<(), CloudError> {
     require_wire(scope, ciphertext, MAX_HEAD_REPLY_ENVELOPE_BYTES)

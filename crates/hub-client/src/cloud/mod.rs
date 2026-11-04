@@ -3,6 +3,7 @@ mod command;
 mod material;
 mod probe;
 pub use material::PreparedChatKeyGrant;
+pub(crate) use probe::require_head_query;
 pub use probe::{
     CompletedHeadProbe, DeviceHeadProbes, IncomingHeadProbe, PreparedHeadProbe, ResidentHeadQuery,
     ResidentHeadWitness, RunnerHeadProbes, head_decoded_metadata_bytes, head_query_work_bytes,

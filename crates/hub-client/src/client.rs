@@ -19,9 +19,12 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use zeroize::Zeroizing;
 
+use crate::cloud_calls::{Calls, CloudCallError, CloudFrames};
 use crate::signer::{Credentials, Session, Signer, now_ms};
 use crate::store::SessionStore;
 use crate::{ClientError, HubEndpoint};
+use nocterm_cloud_device::command::Publication;
+use nocterm_cloud_device::flow::{Input, ProbeRequest, StreamSelector};
 
 /// Refresh the access token when it expires within this window.
 const REFRESH_MARGIN_MS: i64 = 60_000;
@@ -191,6 +194,55 @@ impl HubClient {
             return Err(ClientError::CloudSigner);
         }
         Ok(self.credentials.key.sign(value.signing_message()))
+    }
+
+    /// `CloudService.Capabilities { nonce }` for `Effect::Capabilities`: the hub's claim and
+    /// signature as `Input::Capabilities`, for `TrustedHub::verify_capabilities` (bounded only).
+    pub async fn capabilities(&self, nonce: [u8; 16]) -> Result<Input, CloudCallError> {
+        Calls::of(self).await?.capabilities(nonce).await
+    }
+
+    /// `CloudService.ProbeHead` with the core's sealed query (`Effect::Probe`): the runner's
+    /// reply as `Input::ProbeReply`. Waits until the probe expires, at most
+    /// [`crate::MAX_PROBE_WAIT_MS`]; nobody answering is [`CloudCallError::Unanswered`].
+    pub async fn probe_head(&self, request: &ProbeRequest) -> Result<Input, CloudCallError> {
+        Calls::of(self).await?.probe_head(request, now_ms()).await
+    }
+
+    /// `CloudService.PublishOne` with exactly the publication's bytes (`Effect::Publish`): the
+    /// hub's receipt as `Input::Receipt`. A lost answer after sending is
+    /// `EffectFailure::Unknown`, so the core retries the same bytes or probes for a receipt.
+    pub async fn publish_one(&self, publication: &Publication) -> Result<Input, CloudCallError> {
+        Calls::of(self).await?.publish_one(publication).await
+    }
+
+    /// `CloudService.Replay` (`Effect::Replay`): the frames to hand to `Flow::frame`.
+    pub async fn replay(
+        &self,
+        selector: StreamSelector,
+        after_cursor: u64,
+        max_records: u32,
+        max_bytes: u32,
+    ) -> Result<CloudFrames, CloudCallError> {
+        Calls::of(self)
+            .await?
+            .replay(&selector, after_cursor, max_records, max_bytes)
+            .await
+    }
+
+    /// `CloudService.Watch` (`Effect::Watch`): `Frame::Hint`s until the hub ends the stream.
+    pub async fn watch(
+        &self,
+        selector: StreamSelector,
+        after_cursor: u64,
+    ) -> Result<CloudFrames, CloudCallError> {
+        Calls::of(self).await?.watch(&selector, after_cursor).await
+    }
+
+    /// `CloudService.RunnerStatus` (`Effect::RunnerStatus`): the runner's signed status as
+    /// `Input::RunnerStatus`, verified by the core.
+    pub async fn runner_status(&self, runner: [u8; 16]) -> Result<Input, CloudCallError> {
+        Calls::of(self).await?.runner_status(runner).await
     }
 
     /// Unauthenticated sign-in service.

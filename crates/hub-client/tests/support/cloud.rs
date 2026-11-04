@@ -42,6 +42,47 @@ struct State {
     additional_capabilities: u64,
     oversized_capability_reply: bool,
     max_frame_bytes: Option<u32>,
+    hints: Vec<u64>,
+    proofs: Vec<DeviceProof>,
+}
+
+/// The device proof of possession one call carried, as the hub would verify it.
+#[derive(Clone, Debug)]
+pub struct DeviceProof {
+    pub method: &'static str,
+    pub token: String,
+    pub device: String,
+    pub nonce: String,
+    pub signed_at_ms: i64,
+    pub proof: Vec<u8>,
+}
+impl DeviceProof {
+    fn of<T>(method: &'static str, request: &Request<T>) -> Option<Self> {
+        let text = |key: &str| Some(request.metadata().get(key)?.to_str().ok()?.to_owned());
+        Some(Self {
+            method,
+            token: text("authorization")?.strip_prefix("Bearer ")?.to_owned(),
+            device: text("x-nocterm-device")?,
+            nonce: text("x-nocterm-nonce")?,
+            signed_at_ms: text("x-nocterm-ts")?.parse().ok()?,
+            proof: request
+                .metadata()
+                .get_bin("x-nocterm-proof-bin")?
+                .to_bytes()
+                .ok()?
+                .to_vec(),
+        })
+    }
+    /// The signed message of `pop::request_message` for this call.
+    pub fn message(&self) -> Vec<u8> {
+        nocterm_hub_model::pop::request_message(
+            HUB_ID,
+            &format!("/nocterm.hub.v1.CloudService/{}", self.method),
+            &self.token,
+            &self.nonce,
+            self.signed_at_ms,
+        )
+    }
 }
 #[derive(Clone)]
 pub struct CloudHarness {
@@ -82,6 +123,10 @@ impl CloudHarness {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_CHAT_DIRECTORY;
     }
+    pub fn enable_unary_publish(&self) {
+        lock(&self.state).additional_capabilities |=
+            nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_UNARY_PUBLISH;
+    }
     pub fn enable_head_probes(&self) {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRESH_HEAD;
@@ -112,6 +157,20 @@ impl CloudHarness {
     }
     pub fn replay(&self, frames: Vec<v1::CloudReplayFrame>) {
         lock(&self.state).replay = frames;
+    }
+    /// The head cursors a `Watch` sends before it ends.
+    pub fn hints(&self, cursors: Vec<u64>) {
+        lock(&self.state).hints = cursors;
+    }
+    /// The device proofs of the calls a device made, in order.
+    pub fn proofs(&self) -> Vec<DeviceProof> {
+        lock(&self.state).proofs.clone()
+    }
+    fn prove<T>(&self, method: &'static str, request: &Request<T>) -> Result<(), Status> {
+        let proof =
+            DeviceProof::of(method, request).ok_or_else(|| Status::unauthenticated("device"))?;
+        lock(&self.state).proofs.push(proof);
+        Ok(())
     }
     pub fn release_receipt(&self) {
         self.release.notify_one();
@@ -166,9 +225,7 @@ impl CloudService for CloudPeer {
         {
             return Err(Status::permission_denied("device only"));
         }
-        if request.metadata().get("authorization").is_none() {
-            return Err(Status::unauthenticated("device"));
-        }
+        self.0.prove("ProbeHead", &request)?;
         Ok(Response::new(
             self.0.heads.submit(request.into_inner()).await?,
         ))
@@ -210,6 +267,9 @@ impl CloudService for CloudPeer {
         &self,
         request: Request<v1::CloudCapabilitiesRequest>,
     ) -> Reply<v1::CloudCapabilities> {
+        if let Some(proof) = DeviceProof::of("Capabilities", &request) {
+            lock(&self.0.state).proofs.push(proof);
+        }
         let nonce = request
             .into_inner()
             .nonce
@@ -245,9 +305,44 @@ impl CloudService for CloudPeer {
     }
     async fn publish_one(
         &self,
-        _: Request<v1::CloudPublishOne>,
+        request: Request<v1::CloudPublishOne>,
     ) -> Reply<v1::CloudDeliveryReceipt> {
-        Err(Status::unimplemented("unary publish"))
+        self.0.prove("PublishOne", &request)?;
+        let request = request.into_inner();
+        let header = request
+            .header
+            .ok_or_else(|| Status::invalid_argument("header"))?;
+        let id = header
+            .publication_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("id"))?;
+        let digest = header
+            .ciphertext_sha256
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("digest"))?;
+        let binding = RelayBinding::from_canonical_bytes(&header.binding)
+            .map_err(|_| Status::invalid_argument("binding"))?;
+        let metadata = PublicationMetadata::new(id, binding, header.total_bytes, digest)
+            .map_err(|_| Status::invalid_argument("metadata"))?;
+        let mut verifier = PublicationVerifier::new(metadata.clone());
+        verifier
+            .chunk(&request.data)
+            .and_then(|_| verifier.finish_marker())
+            .and_then(|()| verifier.end_of_stream())
+            .map_err(|_| Status::invalid_argument("data"))?;
+        let cursor = retention::publish(
+            &mut lock(&self.0.state).publications,
+            &metadata,
+            request.data,
+        )?;
+        self.0.published.notify_one();
+        Ok(Response::new(v1::CloudDeliveryReceipt {
+            publication_id: metadata.id().to_vec(),
+            cursor,
+            ciphertext_sha256: metadata.digest().to_vec(),
+        }))
     }
     async fn publish(
         &self,
@@ -334,6 +429,8 @@ impl CloudService for CloudPeer {
                 &request,
                 nocterm_hub_model::cloud::runner_request::RunnerMethod::Replay,
             )?;
+        } else {
+            self.0.prove("Replay", &request)?;
         }
         let frames = {
             let state = lock(&self.0.state);
@@ -409,9 +506,7 @@ impl CloudService for CloudPeer {
         {
             return Err(Status::permission_denied("device status scope"));
         }
-        if request.metadata().get("authorization").is_none() {
-            return Err(Status::unauthenticated("device"));
-        }
+        self.0.prove("RunnerStatus", &request)?;
         if request.get_ref().runner_id != [2; 16] {
             return Err(Status::not_found("runner"));
         }
@@ -443,8 +538,14 @@ impl CloudService for CloudPeer {
         )?))
     }
     type WatchStream = Hints;
-    async fn watch(&self, _: Request<v1::CloudWatchRequest>) -> Reply<Self::WatchStream> {
-        Err(Status::unimplemented("fixture"))
+    async fn watch(&self, request: Request<v1::CloudWatchRequest>) -> Reply<Self::WatchStream> {
+        self.0.prove("Watch", &request)?;
+        let hints: Vec<_> = lock(&self.0.state)
+            .hints
+            .iter()
+            .map(|&head_cursor| Ok(v1::CloudHint { head_cursor }))
+            .collect();
+        Ok(Response::new(Box::pin(tokio_stream::iter(hints))))
     }
     async fn list_streams(&self, _: Request<v1::CloudListStreams>) -> Reply<v1::CloudStreams> {
         Err(Status::unimplemented("fixture"))
