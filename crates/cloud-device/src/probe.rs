@@ -143,6 +143,13 @@ impl UnsignedHeadProbe {
     pub fn signing_bytes(&self) -> Result<Vec<u8>, CloudDeviceError> {
         Ok(self.query.canonical_bytes()?)
     }
+    /// The signing bytes as a request a device signing service accepts (`HubClient::sign_cloud`).
+    pub fn sign_request(&self) -> Result<SignRequest, CloudDeviceError> {
+        Ok(SignRequest::new(
+            self.signing_bytes()?,
+            self.query.issuer.signing_key,
+        ))
+    }
     /// Verifies the device signature and seals the query to the runner.
     pub fn seal(
         self,
@@ -193,6 +200,15 @@ impl SealedHeadProbe {
     pub fn expires_at_ms(&self) -> i64 {
         self.query.window.expires_at_ms
     }
+    /// The `ProbeHead` request ([`Effect::Probe`](crate::flow::Effect::Probe)) of this query.
+    pub fn request(&self) -> ProbeRequest {
+        ProbeRequest {
+            scope: self.scope.clone(),
+            probe_id: self.probe_id(),
+            ciphertext: self.ciphertext.clone(),
+            expires_at_ms: self.expires_at_ms(),
+        }
+    }
     /// Opens `CloudHeadProbeReply` and returns the witnessed value.
     pub fn open_reply(
         &self,
@@ -239,7 +255,8 @@ impl ProbeCall {
             now_ms,
             (nonces.fill()?, nonces.fill()?),
         )?;
-        let request = SignRequest::new(probe.signing_bytes()?, device.signing_key());
+        let request = probe.sign_request()?;
+        debug_assert_eq!(request.signing_key(), device.signing_key());
         Ok((Self::Unsigned(Box::new(probe)), request))
     }
     /// Seals the signed query; the returned request goes to `ProbeHead`.
@@ -255,12 +272,7 @@ impl ProbeCall {
             return Err(CloudDeviceError::Protocol);
         };
         let sealed = probe.seal(keys.pair(), &signature)?;
-        let request = ProbeRequest {
-            scope: sealed.scope().to_vec(),
-            probe_id: sealed.probe_id(),
-            ciphertext: sealed.ciphertext().to_vec(),
-            expires_at_ms: sealed.expires_at_ms(),
-        };
+        let request = sealed.request();
         *self = Self::Sealed(Box::new(sealed));
         Ok(request)
     }
