@@ -1,19 +1,12 @@
 //! Actual gRPC framing, immutable source capture and ciphertext-only publication.
 mod support;
 
-use nocterm_hub_client::{
-    cloud::{CloudClient, CloudError, CloudReplayItem, CloudSelector},
-    now_ms,
-};
+use nocterm_hub_client::cloud::{CloudClient, CloudError, CloudReplayItem, CloudSelector};
 use nocterm_hub_model::cloud::{
-    CloudRoute, CommandContext, CommandKind, RunnerCoordinate,
+    CloudRoute, RunnerCoordinate,
     relay::{MAX_RELAY_FRAME_BYTES, PublicationMetadata, RelayBinding},
 };
 use nocterm_hub_proto::v1::{self, cloud_replay_frame::Frame};
-use nocterm_keys::{
-    KdfParams, UnlockKdf, UnlockKey,
-    cloud::{RunnerEncryptionKey, open_command},
-};
 use sha2::{Digest, Sha256};
 use support::FakeHub;
 
@@ -244,66 +237,6 @@ async fn publication_streams_bounded_chunks_and_checks_receipt_digest() -> TestR
     let mut upload = cloud.begin_publication(fresh)?;
     upload.write(b"new").await?;
     assert!(matches!(upload.finish().await, Err(CloudError::Protocol)));
-    Ok(())
-}
-
-#[tokio::test]
-async fn device_command_signature_comes_from_actual_sdk_subject_and_plaintext_stays_sealed()
--> TestResult {
-    let hub = FakeHub::start_cloud().await;
-    let (client, cloud) = cloud(&hub).await?;
-    let kdf = UnlockKdf::new(KdfParams::MINIMUM, vec![4; 16])?;
-    let unlock = UnlockKey::from_vault_password("correct horse battery", &kdf)?;
-    let keyset = client.create_keyset("acc-1", &unlock, &kdf).await?.keyset;
-    let runner = RunnerEncryptionKey::generate()?;
-    let context = CommandContext {
-        nonce: [8; 16],
-        expected_chat_revision: 0,
-        run: None,
-        kind: CommandKind::SubmitPrompt,
-        issued_at_ms: now_ms(),
-        accept_before_ms: now_ms() + 60_000,
-    };
-    let payload = b"private user prompt";
-    let prepared = cloud.prepare_command(
-        &keyset,
-        &runner.public_key(),
-        route(&cloud),
-        context,
-        payload,
-    )?;
-    let opened = open_command(
-        &runner,
-        &keyset.public_key(),
-        &route(&cloud),
-        prepared.ciphertext(),
-    )?;
-    assert_eq!(opened.command()?.payload(), payload);
-    assert_eq!(
-        opened.command()?.header().issuer().device_id,
-        *cloud.subject().device()
-    );
-    assert_eq!(
-        opened.command()?.header().issuer().signing_key,
-        cloud.subject().signing_key()
-    );
-    assert_eq!(
-        opened.command()?.header().issuer().access_token_digest,
-        <[u8; 32]>::from(Sha256::digest(b"access"))
-    );
-    assert!(
-        !prepared
-            .ciphertext()
-            .windows(payload.len())
-            .any(|part| part == payload)
-    );
-    let receipt = cloud.publish_prepared(&prepared).await?;
-    assert_eq!(receipt.publication_id, prepared.metadata().id());
-    client.sign_out();
-    assert!(matches!(
-        cloud.publish_prepared(&prepared).await,
-        Err(CloudError::SourceChanged)
-    ));
     Ok(())
 }
 

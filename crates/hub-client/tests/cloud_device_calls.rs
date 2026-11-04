@@ -22,7 +22,7 @@ use nocterm_hub_model::cloud::{
 use nocterm_hub_proto::v1;
 use nocterm_keys::{
     AccountKeyPair, DeviceKey,
-    cloud::{RunnerEncryptionKey, RunnerSigningKey, seal_head_witness},
+    cloud::{RunnerEncryptionKey, RunnerSigningKey, open_command, seal_head_witness},
 };
 use sha2::{Digest, Sha256};
 use support::{FakeHub, HUB_ID, cloud::DeviceProof};
@@ -94,7 +94,7 @@ async fn a_core_command_is_published_with_exactly_its_bytes_under_this_devices_p
 {
     let hub = FakeHub::start_cloud().await;
     let device = device(&hub).await?;
-    let runner = AccountKeyPair::generate()?;
+    let runner = RunnerEncryptionKey::generate()?;
     let selector = ChatSelector::new(
         device.hub.scope().clone(),
         RUNNER,
@@ -133,6 +133,26 @@ async fn a_core_command_is_published_with_exactly_its_bytes_under_this_devices_p
     assert!(publication.is_receipt(&publication_id, cursor, &ciphertext_sha256));
     let stored = hub.cloud().ok_or("fixture")?.publications();
     assert_eq!(stored[0].1, publication.ciphertext());
+    // Only the pinned runner opens it, and it names this device's session as its issuer.
+    let route = stored[0]
+        .0
+        .binding()
+        .command_route()
+        .ok_or("a command")?
+        .clone();
+    let opened = open_command(
+        &runner,
+        &device.pair.public_key(),
+        &route,
+        publication.ciphertext(),
+    )?;
+    let issuer = opened.command()?.header().issuer().clone();
+    assert_eq!(issuer.device_id.as_str(), "dev-1");
+    assert_eq!(issuer.signing_key, identity.signing_key());
+    assert_eq!(
+        issuer.access_token_digest,
+        <[u8; 32]>::from(Sha256::digest(b"access"))
+    );
     let proofs = hub.cloud().ok_or("fixture")?.proofs();
     let methods: Vec<_> = proofs.iter().map(|proof| proof.method).collect();
     assert_eq!(methods, ["Capabilities", "PublishOne"]);

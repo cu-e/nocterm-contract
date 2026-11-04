@@ -8,8 +8,9 @@
 //! terminal driver over the Link, and typed errors ([`ClientError`]) for all of them.
 //! Cloud clients capture original sign-in ownership, stream bounded opaque records and
 //! keep runner-only credentials separate from ordinary account-device sessions.
-//! One-shot fresh-head probes preserve the original login/challenge/deadline;
-//! staging authenticated native outbox bytes never rewrites signed commands.
+//! A runner answers fresh-head probes and publishes its records and summaries; everything a
+//! device decides (queries, commands, chat key grants, verification) is the core's
+//! (`nocterm-cloud-device`), and this crate only transports its bytes.
 //! Guarded capability/Store acquisition retains actual body and accepted metadata
 //! owners; immutable hub information is shared rather than deeply cloned.
 //! Guarded runner heartbeat and device status calls retain bounded body/result

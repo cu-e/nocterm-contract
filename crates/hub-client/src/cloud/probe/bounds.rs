@@ -1,8 +1,5 @@
 //! Logical SDK head-buffer components, independent of transport/RSS baseline.
-use super::{
-    CompletedHeadProbe, DeviceHeadProbes, IncomingHeadProbe, PreparedHeadProbe, ResidentHeadQuery,
-    ResidentHeadWitness, RunnerHeadProbes,
-};
+use super::{IncomingHeadProbe, ResidentHeadQuery, RunnerHeadProbes};
 use crate::{cloud::transport, signer::CredentialCapture};
 use nocterm_hub_model::cloud::{
     MAX_ID_BYTES,
@@ -72,13 +69,9 @@ pub fn head_decoded_metadata_bytes() -> usize {
         + size_of::<CredentialCapture>()
         + size_of::<SignedHeadQuery>()
         + size_of::<SignedHeadWitness>()
-        + size_of::<DeviceHeadProbes>()
         + size_of::<RunnerHeadProbes>()
-        + size_of::<PreparedHeadProbe>()
         + size_of::<IncomingHeadProbe>()
-        + size_of::<CompletedHeadProbe>()
         + size_of::<ResidentHeadQuery>()
-        + size_of::<ResidentHeadWitness>()
         + size_of::<v1::CloudHeadProbe>()
         + size_of::<v1::CloudHeadProbeReply>()
         + size_of::<v1::CloudNextHeadProbe>()
