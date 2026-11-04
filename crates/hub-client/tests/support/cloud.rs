@@ -78,6 +78,10 @@ impl CloudHarness {
     pub fn oversized_capability_reply(&self, enabled: bool) {
         lock(&self.state).oversized_capability_reply = enabled;
     }
+    pub fn enable_chat_directory(&self) {
+        lock(&self.state).additional_capabilities |=
+            nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_CHAT_DIRECTORY;
+    }
     pub fn enable_head_probes(&self) {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRESH_HEAD;

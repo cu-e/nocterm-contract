@@ -15,6 +15,8 @@ use support::FakeHub;
 use zeroize::Zeroizing;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "cloud_runner/directory.rs"]
+mod directory;
 #[path = "cloud_runner/lifetimes.rs"]
 mod lifetimes;
 #[path = "cloud_runner/reclaim.rs"]

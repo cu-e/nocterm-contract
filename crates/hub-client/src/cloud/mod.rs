@@ -16,7 +16,7 @@ mod runner_credentials;
 mod transport;
 mod watch;
 pub use command::{CloudCommandInvocation, PreparedCloudCommand};
-pub use runner::CloudRunner;
+pub use runner::{CloudRunner, SUMMARY_RETRY_MS};
 pub use runner_credentials::RunnerSession;
 pub use watch::CloudWatch;
 mod status;

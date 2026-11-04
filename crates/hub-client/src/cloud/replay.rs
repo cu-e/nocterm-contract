@@ -16,6 +16,9 @@ pub enum CloudSelector {
         runner: RunnerCoordinate,
         chat: [u8; 16],
     },
+    /// The runner's chat directory (capability bit 256): sealed summaries only, the latest per
+    /// chat, so cursors have holes and there is never a gap.
+    Directory(RunnerCoordinate),
 }
 impl CloudSelector {
     pub(super) fn wire(&self) -> Result<v1::CloudSelector, CloudError> {
@@ -27,6 +30,10 @@ impl CloudSelector {
             Self::Chat { runner, chat } => {
                 (*runner, v1::cloud_selector::Stream::ChatId(chat.to_vec()))
             }
+            Self::Directory(runner) => (
+                *runner,
+                v1::cloud_selector::Stream::Directory(v1::CloudRunnerDirectory {}),
+            ),
         };
         if runner.key_epoch == 0 {
             return Err(CloudError::Protocol);
@@ -48,6 +55,21 @@ impl CloudSelector {
                     && binding.chat_id() == *chat
                     && matches!(binding.kind(), RelayKind::Event | RelayKind::Snapshot)
             }
+            Self::Directory(runner) => {
+                binding.runner() == *runner && binding.kind() == RelayKind::Summary
+            }
+        }
+    }
+    pub(super) fn is_directory(&self) -> bool {
+        matches!(self, Self::Directory(_))
+    }
+    /// The next delivered cursor: consecutive, except in a directory, whose superseded
+    /// summaries leave holes.
+    fn follows(&self, last: u64, cursor: u64) -> bool {
+        if self.is_directory() {
+            cursor > last
+        } else {
+            last.checked_add(1) == Some(cursor)
         }
     }
 }
@@ -88,7 +110,10 @@ impl CloudDeliveryOrigin {
                     key,
                 })
             }
-            (RelayKind::Event | RelayKind::Snapshot, Some(Issuer::RunnerId(runner))) => {
+            (
+                RelayKind::Event | RelayKind::Snapshot | RelayKind::Summary,
+                Some(Issuer::RunnerId(runner)),
+            ) => {
                 let runner: [u8; 16] = runner
                     .as_slice()
                     .try_into()
@@ -267,6 +292,7 @@ impl CloudReplay {
             }
             Some(Frame::Gap(gap)) => {
                 if self.records != 0
+                    || self.selector.is_directory()
                     || gap.retained_from_cursor == 0
                     || gap.retained_from_cursor.saturating_sub(1) <= self.last
                 {
@@ -303,9 +329,7 @@ impl CloudReplay {
     ) -> Result<CloudReplayItem<'_>, CloudError> {
         // Any malformed header or abandoned body poisons this stream.
         self.poisoned = true;
-        if header.cursor != self.last.checked_add(1).ok_or(CloudError::Protocol)?
-            || self.records >= self.max_records
-        {
+        if !self.selector.follows(self.last, header.cursor) || self.records >= self.max_records {
             return Err(CloudError::Protocol);
         }
         let wire = header.publication.ok_or(CloudError::Protocol)?;
