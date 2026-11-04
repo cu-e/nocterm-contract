@@ -229,7 +229,7 @@ pub(super) fn end(
     let kind = match binding.kind() {
         RelayKind::Event => RecordKind::Event,
         RelayKind::Snapshot => RecordKind::Snapshot,
-        RelayKind::Command | RelayKind::ChatKeyGrant => {
+        RelayKind::Command | RelayKind::ChatKeyGrant | RelayKind::Summary => {
             return Err(CloudDeviceError::ReplaySource);
         }
     };

@@ -116,12 +116,23 @@ message CloudSelector {
   oneof stream {
     CloudRunnerInbox inbox = 3; // Commands across this runner's chats.
     bytes chat_id = 4; // Exact16, delivered events/snapshots of one chat.
+    // Capability bit 256: this runner's chat directory (relay kind 5 Summary).
+    CloudRunnerDirectory directory = 5;
   }
 }
 // Command and capability-bit8 ChatKeyGrant routing share this cursor. Key
 // material is <=256 bytes and cannot authorize execution. A missing/invalid key
 // must refuse command admission; never synthesize a default key to advance it.
 message CloudRunnerInbox {}
+// Capability bit 256 (ADR 0008 of the contract). Only the exact runner of the selector
+// publishes here, only relay kind 5 Summary (<= MAX_SEALED_SUMMARY_BYTES, one relay frame);
+// account devices replay and watch it, never publish or acknowledge it. The hub keeps the
+// latest summary per (directory, binding chat id): it retains the highest summary revision of
+// a chat and marks every other summary of that chat purged, so storage is O(chats). Replay
+// therefore has cursor holes, never a gap frame; Watch hints follow new summaries. Purge and
+// ListStreams do not apply to directories; retiring the runner deletes its directory. A hub
+// without bit 256 refuses this selector as an unknown stream.
+message CloudRunnerDirectory {}
 message CloudReplayRequest {
   CloudSelector selector = 1;
   uint64 after_cursor = 2;

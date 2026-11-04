@@ -62,6 +62,7 @@ fn selected(selector: &v1::CloudSelector, meta: &PublicationMetadata) -> bool {
             Some(Stream::Inbox(_)) => {
                 matches!(binding.kind(), RelayKind::Command | RelayKind::ChatKeyGrant)
             }
+            Some(Stream::Directory(_)) => binding.kind() == RelayKind::Summary,
             None => false,
         }
 }
