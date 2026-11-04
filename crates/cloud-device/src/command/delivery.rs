@@ -14,9 +14,10 @@
 //!    window ends it is `Unreachable`.
 //!
 //! A command kept across a restart ([`super::StoredCommand`]) resumes at step 3 with the same
-//! sealed bytes ([`Deliver::resume`]). Its earlier run may have been admitted already, so after a
-//! receipt it reports `Delivered` and then asks the runner once whether it admitted the command:
-//! `Accepted` or `Refused` follow when the runner answers. That is the one case of two updates.
+//! sealed bytes ([`crate::open::OpenChat::resume`]). Its earlier run may have been admitted
+//! already, so after a receipt it reports `Delivered` and then asks the runner once whether it
+//! admitted the command: `Accepted` or `Refused` follow when the runner answers. That is the one
+//! case of two updates.
 use super::{SealedCommand, UnsignedCommand};
 use crate::{
     CloudDeviceError, DeviceIdentity,
