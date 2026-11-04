@@ -16,7 +16,9 @@
 //! ownership; runner deadline observations clone no credential or token.
 //! Cloud device flows (`nocterm-cloud-device`) sign through [`HubClient::sign_cloud`], which
 //! accepts only the core's sign requests for this device's key, and name the device with
-//! [`HubClient::cloud_device`].
+//! [`HubClient::cloud_device`]. A runner publishes sealed chat summaries to its directory with
+//! `CloudRunner::publish_summary` (capability bit 256, ADR 0008); devices and runners replay
+//! and watch it as `CloudSelector::Directory`, whose cursors have holes and never a gap.
 //! Does not own: where keys and tokens are stored (callers persist the device seed and
 //! provide a [`SessionStore`] for tokens), how a device is named (callers pass a
 //! [`DeviceInfo`]), terminal rendering, or vault encryption (`nocterm-keys`).

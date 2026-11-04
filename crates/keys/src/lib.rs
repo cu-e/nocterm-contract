@@ -13,6 +13,8 @@
 //! Also owns per-chat key wraps/grants, runner-signed encrypted events/snapshots,
 //! and purpose-separated encryption of native journal slots. Read-only head probes
 //! have separate signed purposes and account-key replies, independent of ChatKey.
+//! Chat summaries are runner-signed and sealed to the account key (purpose 22), so a device
+//! lists chats without a chat key or replay.
 //! Native head cells use a distinct runner-derived key and finite purpose18 blob.
 //! Provider credentials use a separate non-restorable boot recipient with finite
 //! stable-runner attestation; opening returns a zeroizing secret owner.

@@ -6,12 +6,12 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 
 | Crate | Purpose |
 | --- | --- |
-| `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages |
+| `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages; Cloud canonical formats, including runner chat summaries (`cloud::summary`) |
 | `nocterm-hub-proto` | protobuf schema (`proto/`) compiled to prost messages, plus its descriptor set |
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
-| `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`) |
-| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes, create chats, lease an own runner's provider key), a resumable reader with sealed checkpoints and the freshness levels Current, Unconfirmed and Withheld, the shared transcript with deltas, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md)) |
-| `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants |
+| `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`), runner chat directories (`CloudSelector::Directory`, `CloudRunner::publish_summary`) |
+| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes, create chats, lease an own runner's provider key), a resumable reader with sealed checkpoints and the freshness levels Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md)) |
+| `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants, Cloud boxes (commands, records, head probes, chat summaries) |
 | `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
 
@@ -338,6 +338,24 @@ an upload queue. Guarded device signing rejects tokens over1024bytes and hub/dev
 over128bytes under the same lock used for signing, before cloning them. Existing unguarded
 signing policy is unchanged. These are logical SDK buffer bounds, not process RSS or the
 Tonic/HTTP2/TLS/runtime/allocator baseline.
+
+### Runner chat directory
+
+Capability bit 256 (`CLOUD_FEATURE_CHAT_DIRECTORY`) adds a per-runner directory stream
+(`CloudSelector.directory = 5`, relay kind 5 `Summary`) of chat summaries
+([ADR 0008](docs/adr/0008-runner-chat-directory.md)). `cloud::summary::ChatSummary` (format 1,
+signed body at most 2048 bytes) carries a chat's head, control revision, times, title, host,
+last model, state, pending approvals, bound servers and runner features under a
+`SummaryContext` (chat coordinate and a per-chat revision). The runner signs it
+(`RunnerSigningKey::attest_summary`) and seals it to the account key
+(`nocterm_keys::cloud::seal_summary`, purpose 22, at most 2190 bytes, one relay frame) and
+publishes it under `SummaryContext::publication_id` (`CloudRunner::publish_summary`). The hub
+keeps the highest revision per chat and purges the rest, so directory replays have cursor holes
+and no gaps. A device opens summaries with `open_summary` under its runner pins and lists chats
+with `ListChats` without replaying any chat: an older revision never replaces a newer one, and
+the runner's fresh catalog witness confirms each row (`Current`, `Stale`, `Unsummarized`) while
+the runner is awake; a sleeping runner's rows show as of their last activity. A summary is
+display data and grants nothing. Independent vectors are in `fixtures/cloud-summary-v1/`.
 
 ### Memory-only provider grants
 

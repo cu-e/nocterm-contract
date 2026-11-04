@@ -11,7 +11,9 @@
 //! an account key's fingerprint (`accountKeyFingerprint`), and run the account's Cloud chats
 //! as a browser device ([`cloud`]: one `CloudDevice` with the flows `connect`, `listChats`,
 //! `openChat`, `deliver`, `createChat` and `lease` of `nocterm-cloud-device`, structured values
-//! with generated TypeScript declarations, no JSON text). All cryptography is
+//! with generated TypeScript declarations, no JSON text; `listChats` lists from the runners'
+//! chat directories and hands out sealed directory checkpoints the page stores per runner).
+//! All cryptography is
 //! `nocterm-keys`; this crate only converts text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.

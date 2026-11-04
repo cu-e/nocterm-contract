@@ -10,7 +10,8 @@
 //! view-only prompts, exact reconciliation facts and tool-argument fingerprints,
 //! finite Local/SSH session startup, original login proofs and descriptive lifecycle,
 //! fresh stable-authority capabilities, scoped runner proofs, finite boot descriptors
-//! and bounded nonce-bound read-only catalog/head/receipt witnesses. Native
+//! and bounded nonce-bound read-only catalog/head/receipt witnesses, and runner-signed
+//! chat summaries with their directory routing (`cloud::summary`, ADR 0008). Native
 //! per-chat head contexts remain independent of content-key generations.
 //! Also owns the vocabulary of managed agents (`agents`): scopes, instance roles, listings,
 //! resource requests, typed refusal reasons, the pool key bundle, the host attestation of a
