@@ -4,10 +4,11 @@
 //! the panel replays it against the real wasm module: `connectSeeded(rawHub, null, nonceSeed)`,
 //! then `listChats({watch: true})`, then `openChat(chat.chatId)`, then `openChat(chat.chatId,
 //! checkpoint)`, then `listChats({directories: [the first listing's directory checkpoint],
-//! watch: true})`, in this order, so every probe id is one with a recorded reply. The hub has
-//! the chat directory (bit 256); a provider lease needs no recorded reply. Regenerate with
-//! `cargo test -p nocterm-keys-wasm write_web_session_fixture -- --ignored` (fresh random keys
-//! each time: copy the file into the panel afterwards).
+//! watch: true})`, then (with the SSH rows of `ssh.rs` and the later and SSH records in the
+//! stream) `openChat(chat.chatId)` and `answerSsh`, in this order, so every probe id is one with
+//! a recorded reply. The hub has the chat directory (bit 256); a provider lease needs no
+//! recorded reply. Regenerate with `cargo test -p nocterm-keys-wasm write_web_session_fixture --
+//! --ignored` (fresh random keys each time: copy the file into the panel afterwards).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -48,6 +49,8 @@ use crate::WebAccount;
 mod chat;
 mod directory;
 pub(super) mod lease;
+pub(super) mod replay;
+mod ssh;
 
 pub(super) const NOW: i64 = 1_800_000_000_000;
 pub(super) const NOW_MS: f64 = 1_800_000_000_000.0;
@@ -199,6 +202,8 @@ pub(super) struct Recorder {
     pub(super) head: Option<HeadRecordAnchor>,
     pub(super) capabilities: Map<String, Value>,
     pub(super) replies: Map<String, Value>,
+    /// What the device published, in order (the runner opens its SSH commands).
+    pub(super) published: Vec<WireEffect>,
 }
 impl Recorder {
     fn collection(&mut self, account: &WebAccount, id: &str, kind: &str) -> CollectionKey {
@@ -293,6 +298,10 @@ impl Hub for Recorder {
                 ciphertext,
                 ..
             } => Answer::Input(self.probe(scope, probe_id, ciphertext)),
+            WireEffect::Publish { .. } => {
+                self.published.push(effect.clone());
+                store_answer(&self.rows, effect)
+            }
             effect => store_answer(&self.rows, effect),
         }
     }
@@ -541,8 +550,13 @@ fn directory_checkpoint(outputs: Vec<FlowOutput>) -> Vec<u8> {
 }
 
 /// Runs the documented order against the live recorder, then a lease (it draws no recorded
-/// nonce, but must reach its first lease with these rows).
-fn run_order(account: &WebAccount, recorder: &mut Recorder, chat_id: &str) {
+/// nonce, but must reach its first lease with these rows); returns the device and its first
+/// open of the chat.
+fn run_order(
+    account: &WebAccount,
+    recorder: &mut Recorder,
+    chat_id: &str,
+) -> (CloudDevice, WebChat) {
     let device = CloudDevice::made(account, device_input()).unwrap();
     let mut connect = device.discover(
         RAW_HUB,
@@ -590,6 +604,7 @@ fn run_order(account: &WebAccount, recorder: &mut Recorder, chat_id: &str) {
             .any(|output| matches!(output, FlowOutput::Lease { .. })),
         "{leased:?}"
     );
+    (device, chat)
 }
 
 /// The session file: the recorded rows and answers of `run_order`.
@@ -601,8 +616,10 @@ fn generate() -> Value {
         head: None,
         capabilities: Map::new(),
         replies: Map::new(),
+        published: Vec::new(),
     };
     let selector = store(&mut recorder, &account, &chat_key);
+    ssh::store(&mut recorder, &account);
     let own = lease::store(&mut recorder, &account, &selector);
     recorder.rows.runner_status = hex_of(&own, "runnerStatus");
     let sealed = chat::records(&selector, &chat_key);
@@ -618,11 +635,33 @@ fn generate() -> Value {
     recorder.rows.directory = vec![summary];
     recorder.head = Some(visible[5].1.clone());
     let chat_id = nocterm_cloud_device::context::ChatRef::of(&selector).to_string();
-    run_order(&account, &mut recorder, &chat_id);
+    let (device, mut chat) = run_order(&account, &mut recorder, &chat_id);
+    // The SSH part follows once the later text record is in the stream.
+    let visible_records = recorder.rows.records.clone();
+    recorder
+        .rows
+        .records
+        .extend(later.iter().map(|(r, _)| r.clone()));
+    let mut ssh = ssh::record(
+        &mut recorder,
+        &account,
+        &device,
+        &mut chat,
+        &selector,
+        &chat_key,
+    );
+    recorder.rows.records = visible_records;
     let (collections, objects) = rows_json(&recorder);
+    // The trust collection is the `ssh` part's: an account without it has no CA.
+    let trust = |row: &Value| row["kind"] == nocterm_cloud_device::records::SSH_TRUST_KIND;
+    let (trust_collections, collections): (Vec<_>, Vec<_>) =
+        collections.into_iter().partition(trust);
+    let (trust_objects, objects): (Vec<_>, Vec<_>) = objects.into_iter().partition(trust);
+    ssh["collection"] = trust_collections.into_iter().next().unwrap();
+    ssh["objects"] = Value::Array(trust_objects);
     json!({
         "comment": "Generated by crates/keys-wasm/src/cloud/fixture/mod.rs; public test values only.",
-        "order": "connectSeeded(rawHub, null, nonceSeed); listChats({watch: true}); openChat(chat.chatId); openChat(chat.chatId, checkpoint of the first); listChats({directories: [directory of the first listing], watch: true})",
+        "order": "connectSeeded(rawHub, null, nonceSeed); listChats({watch: true}); openChat(chat.chatId); openChat(chat.chatId, checkpoint of the first); listChats({directories: [directory of the first listing], watch: true}); with ssh.collection, ssh.objects and chat.later + ssh.records in the stream: openChat(chat.chatId), then answerSsh(ssh.request.requestId)",
         "now": NOW,
         "rawHub": RAW_HUB,
         "accountId": ACCOUNT,
@@ -658,6 +697,7 @@ fn generate() -> Value {
             "later": [later_summary],
         },
         "own": own,
+        "ssh": ssh,
     })
 }
 

@@ -3,144 +3,19 @@
     clippy::expect_used,
     reason = "test fixtures fail loudly"
 )]
-use std::sync::OnceLock;
-
-use nocterm_cloud_device::nonces::Nonces;
 use nocterm_hub_model::cloud::{CommandKind, payload::CloudCommandPayload, relay::RelayBinding};
 use nocterm_keys::{
     PublicKey,
     cloud::{RunnerEncryptionKey, open_command},
 };
-use serde_json::Value;
 
 use super::fixture::{
-    self, Answer, Hub, NONCE_SEED, NOW_MS, RAW_HUB, RUNNER_ENCRYPTION_SEED, Rows, drive, hex_of,
-    store_answer,
+    self, NOW_MS, RUNNER_ENCRYPTION_SEED, drive,
+    replay::{Replayer, account, connected},
 };
-use super::types::{
-    ChatActionInput, EffectInput, FlowOutput, FlowStep, ModelInput, WireCollection, WireEffect,
-    WireObject,
-};
+use super::types::{ChatActionInput, EffectInput, FlowOutput, FlowStep, ModelInput, WireEffect};
 use super::{CloudDevice, WebChat};
-use crate::WebAccount;
 
-fn account() -> &'static WebAccount {
-    static ACCOUNT: OnceLock<WebAccount> = OnceLock::new();
-    ACCOUNT.get_or_init(fixture::account)
-}
-fn recorded() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../../fixtures/cloud-device-v1/web-session.json"
-    ))
-    .unwrap()
-}
-
-/// The page's executor over the recorded session only, as the panel's tests replay it.
-struct Replayer {
-    session: Value,
-    rows: Rows,
-    /// The runner answers probes (false: a sleeping seat).
-    awake: bool,
-    /// Answers to `publish`, in order, before the default receipt.
-    publish: Vec<EffectInput>,
-    published: Vec<WireEffect>,
-}
-impl Replayer {
-    fn new() -> Self {
-        let session = recorded();
-        let collections = session["collections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| {
-                let wire = WireCollection {
-                    collection_id: c["collectionId"].as_str().unwrap().to_owned(),
-                    kind: c["kind"].as_str().unwrap().to_owned(),
-                    personal: c["personal"].as_bool().unwrap(),
-                    deleted: c["deleted"].as_bool().unwrap(),
-                };
-                (wire, hex_of(c, "wrappedKey"))
-            })
-            .collect();
-        let objects = session["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|o| WireObject {
-                collection_id: o["collectionId"].as_str().unwrap().to_owned(),
-                object_id: o["objectId"].as_str().unwrap().to_owned(),
-                kind: o["kind"].as_str().unwrap().to_owned(),
-                version: o["version"].as_u64().unwrap(),
-                deleted: o["deleted"].as_bool().unwrap(),
-                ciphertext: hex_of(o, "ciphertext"),
-            })
-            .collect();
-        let rows = Rows {
-            collections,
-            objects,
-            records: session["chat"]["records"].as_array().unwrap().clone(),
-            directory: session["directory"]["records"].as_array().unwrap().clone(),
-            runner_status: hex_of(&session["own"], "runnerStatus"),
-        };
-        Self {
-            session,
-            rows,
-            awake: true,
-            publish: Vec::new(),
-            published: Vec::new(),
-        }
-    }
-    fn chat_id(&self) -> String {
-        self.session["chat"]["chatId"].as_str().unwrap().to_owned()
-    }
-}
-impl Hub for Replayer {
-    fn answer(&mut self, effect: &WireEffect) -> Answer {
-        let failed = |failure: &str| {
-            Answer::Input(EffectInput::Failed {
-                failure: failure.to_owned(),
-            })
-        };
-        match effect {
-            WireEffect::Capabilities { nonce } => {
-                let answer = &self.session["capabilities"][hex::encode(nonce)];
-                Answer::Input(EffectInput::Capabilities {
-                    claim: hex_of(answer, "claim"),
-                    signature: hex_of(answer, "signature"),
-                })
-            }
-            WireEffect::Probe { probe_id, .. } => {
-                let reply = &self.session["probeReplies"][hex::encode(probe_id)];
-                if !self.awake || reply.is_null() {
-                    return failed("unavailable");
-                }
-                Answer::Input(EffectInput::ProbeReply {
-                    scope: hex_of(reply, "scope"),
-                    probe_id: probe_id.clone(),
-                    ciphertext: hex_of(reply, "ciphertext"),
-                })
-            }
-            WireEffect::Publish { .. } => {
-                self.published.push(effect.clone());
-                if self.publish.is_empty() {
-                    store_answer(&self.rows, effect)
-                } else {
-                    Answer::Input(self.publish.remove(0))
-                }
-            }
-            effect => store_answer(&self.rows, effect),
-        }
-    }
-}
-
-/// A connected device, as the recorded order begins.
-fn connected(hub: &mut Replayer) -> (CloudDevice, Vec<FlowOutput>) {
-    let device = CloudDevice::made(account(), fixture::device_input()).unwrap();
-    let mut connect = device.discover(RAW_HUB, None, Nonces::seeded(NONCE_SEED));
-    let (outputs, last, _) = drive(&mut connect, hub, NOW_MS);
-    assert!(matches!(last, FlowStep::Done), "{last:?}");
-    (device, outputs)
-}
 /// Connected, listed and the chat opened, as recorded.
 fn opened(hub: &mut Replayer) -> (CloudDevice, WebChat, Vec<FlowOutput>, Vec<u32>) {
     let (device, _) = connected(hub);

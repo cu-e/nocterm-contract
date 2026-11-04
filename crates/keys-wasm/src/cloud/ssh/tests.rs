@@ -205,3 +205,135 @@ fn every_ssh_refusal_has_its_own_stable_code() {
     unique.dedup();
     assert_eq!(unique.len(), codes.len());
 }
+
+/// The recorded session's state of a chat (`current`, `unconfirmed`, …) from a flow's outputs.
+fn freshness_of(outputs: &[crate::cloud::types::FlowOutput]) -> Vec<String> {
+    outputs
+        .iter()
+        .filter_map(|output| match output {
+            crate::cloud::types::FlowOutput::Freshness { freshness } => Some(
+                serde_json::to_value(freshness).unwrap()["state"]
+                    .as_str()?
+                    .to_owned(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_recorded_certificate_request_is_answered_for_the_admitted_server_and_turns_active() {
+    use crate::cloud::fixture::{
+        NOW_MS, drive,
+        replay::{Replayer, connected},
+    };
+    use crate::cloud::types::{FlowOutput, FlowStep, StreamFrame};
+    let mut hub = Replayer::with_ssh();
+    let (device, _) = connected(&mut hub);
+    // The recorded order's earlier flows draw nonces 1–8; nothing answers them here.
+    hub.awake = false;
+    for _ in 0..2 {
+        drive(&mut device.listing().unwrap(), &mut hub, NOW_MS);
+        drive(
+            &mut device.opened(&hub.chat_id(), None).unwrap(),
+            &mut hub,
+            NOW_MS,
+        );
+    }
+    hub.awake = true;
+    let ssh = hub.session["ssh"].clone();
+    let request_id = ssh["request"]["requestId"].as_str().unwrap().to_owned();
+    let mut chat = device.opened(&hub.chat_id(), None).unwrap();
+    let (outputs, _, watches) = drive(&mut chat, &mut hub, NOW_MS);
+    assert_eq!(freshness_of(&outputs), ["current"]);
+    assert!(
+        outputs
+            .iter()
+            .any(|o| matches!(o, FlowOutput::SshRequest { request_id: id } if *id == request_id))
+    );
+    let wire = chat.ssh();
+    let bound = &wire.bindings[0];
+    assert_eq!(bound.grant, ssh["binding"]["grant"].as_str().unwrap());
+    assert_eq!(bound.access.as_deref(), Some("pending"));
+    let servers: Vec<_> = bound
+        .servers
+        .iter()
+        .map(|s| (s.host.as_str(), s.port, s.reach.as_deref()))
+        .collect();
+    assert_eq!(
+        servers,
+        [
+            ("10.0.0.5", 2222, Some("admitted")),
+            ("bastion.acme.io", 22, Some("unreachable"))
+        ]
+    );
+    assert_eq!(wire.requests[0].request_id, request_id);
+
+    let mut answer = chat.answering(&request_id, NOW_MS).unwrap();
+    let (outputs, last, _) = drive(&mut answer, &mut hub, NOW_MS);
+    assert!(matches!(last, FlowStep::Done), "{last:?}");
+    let Some(FlowOutput::SshCertified {
+        servers,
+        valid_before_ms,
+        ..
+    }) = outputs.first()
+    else {
+        panic!("certified: {outputs:?}");
+    };
+    assert_eq!(serde_json::json!(servers), ssh["request"]["servers"]);
+    assert_eq!(
+        ssh["request"]["validBeforeMs"].as_f64(),
+        Some(*valid_before_ms)
+    );
+    assert_eq!(hub.published.len(), 1);
+
+    let later = ssh["later"].as_array().unwrap().clone();
+    hub.rows.records.extend(later);
+    chat.frame_input(watches[0], StreamFrame::Hint { head_cursor: 12 });
+    drive(&mut chat, &mut hub, NOW_MS);
+    let wire = chat.ssh();
+    assert_eq!(wire.bindings[0].access.as_deref(), Some("active"));
+    assert!(wire.requests.is_empty());
+}
+
+#[test]
+fn a_listing_shows_the_servers_the_runners_summary_names() {
+    use crate::cloud::fixture::{
+        NOW_MS, drive,
+        replay::{Replayer, connected},
+    };
+    use crate::cloud::types::FlowOutput;
+    let mut hub = Replayer::new();
+    let (device, _) = connected(&mut hub);
+    let summary = hub.session["ssh"]["directory"].as_array().unwrap().clone();
+    hub.rows.directory.extend(summary);
+    let (outputs, ..) = drive(&mut device.listing().unwrap(), &mut hub, NOW_MS);
+    let summary = outputs
+        .iter()
+        .rev()
+        .find_map(|output| match output {
+            FlowOutput::RunnerChats { chats, .. } => chats[0].summary.clone(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(summary.features, 1);
+    let servers: Vec<_> = summary
+        .servers
+        .iter()
+        .map(|s| {
+            (
+                s.host.as_str(),
+                s.port,
+                s.state.as_str(),
+                s.valid_before_ms.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        servers,
+        [
+            ("10.0.0.5", 2222, "active", true),
+            ("bastion.acme.io", 22, "unreachable", false)
+        ]
+    );
+}

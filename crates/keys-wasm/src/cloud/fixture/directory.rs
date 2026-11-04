@@ -1,14 +1,14 @@
 //! The runner's chat directory in the recorded session (ADR 0008): one signed and sealed
-//! summary of the chat at the recorded head, and one later summary that arrives by Watch with
-//! the later record.
+//! summary of the chat at the recorded head, one later summary that arrives by Watch with the
+//! later record, and one after the chat's SSH binding that names its servers.
 use nocterm_cloud_device::records::ChatSelector;
 use nocterm_hub_model::cloud::{
     CloudTextId,
     head::HeadRecordAnchor,
     relay::RelayBinding,
     summary::{
-        ChatState, ChatSummary, SummaryContext, SummaryHead, SummaryHost, SummaryModel,
-        title_from_prompt,
+        BoundServer, ChatState, ChatSummary, SUMMARY_FEATURE_SSH_BINDING, SummaryContext,
+        SummaryHead, SummaryHost, SummaryModel, title_from_prompt,
     },
 };
 use nocterm_keys::{
@@ -103,4 +103,21 @@ pub(super) fn records(
     );
     let second = record(selector, account, 2, 2, summary(later, later_at_ms));
     (first, second)
+}
+
+/// The directory record at revision 3 (cursor 3) of the chat whose newest record is `head` (its
+/// SSH access, at `at_ms`): it names the bound `servers` and the SSH binding feature.
+pub(super) fn bound(
+    selector: &ChatSelector,
+    account: &WebAccount,
+    head: &HeadRecordAnchor,
+    at_ms: i64,
+    servers: Vec<BoundServer>,
+) -> Value {
+    let summary = ChatSummary {
+        servers,
+        features: SUMMARY_FEATURE_SSH_BINDING,
+        ..summary(head, at_ms)
+    };
+    record(selector, account, 3, 3, summary)
 }

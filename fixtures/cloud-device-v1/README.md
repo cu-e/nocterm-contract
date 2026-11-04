@@ -33,13 +33,27 @@ Watch, the runner's directory (`directory.records`: the signed and sealed summar
 recorded head, of the managed agent `directory.agentId`; `directory.later`: the summary after
 the later record, which arrives by a directory Watch), and `own`: the runner's signed boot as
 `RunnerStatus` returns it (current for 29 minutes from `now`) with the provider and model of
-the own agent's key.
+the own agent's key; and `ssh`, the chat's SSH binding (ADR 0009): the account's
+`agent_ssh_trust` collection (`ssh.collection`, `ssh.objects`: the CA document of
+`ssh.caFingerprint` and three trust records, `ssh.servers` describes them: `db-1` on the
+per-server line, `bastion` still on the shared line, one server trusted under an earlier CA),
+the device's binding of the chat to the first two (`ssh.binding`, `IssueGrant(SshBinding)`),
+the runner's records 8–10 that follow `chat.later` (`ssh.records`: the accepted binding command,
+`SshAccessState` pending with `db-1` admitted and `bastion` unreachable, and
+`SshCertificateRequested` `ssh.request` for `db-1`), its records 11–12 after the device's answer
+that arrive by Watch (`ssh.later`: the accepted certificate command and `SshAccessState` active
+until `ssh.request.validBeforeMs`), and the directory summary after them that names both servers
+with feature 1 (`ssh.directory`, revision 3). These rows are kept apart from `collections` and
+`objects`: an account without them has no CA.
 
 Probe ids and the capability nonce come from `nonceSeed` (a `testing` build's
 `CloudDevice.connectSeeded`), so a replay must start the flows in the recorded `order`:
 `connectSeeded(rawHub, null, nonceSeed)`, `listChats({watch: true})`, `openChat(chat.chatId)`,
 `openChat(chat.chatId, checkpoint)` with the first open's checkpoint, then
-`listChats({directories: [the first listing's directory checkpoint], watch: true})`. A probe
+`listChats({directories: [the first listing's directory checkpoint], watch: true})`, then, with
+the SSH rows and `chat.later` and `ssh.records` in the stream, `openChat(chat.chatId)` (a
+current read that announces `ssh.request.requestId`; nonces 9 and 10) and
+`answerSsh(ssh.request.requestId)` (no probe). A probe
 whose id has no recorded reply is answered `unavailable` (a sleeping seat: the read is
 `unconfirmed`). A provider lease (`lease(chat, own.agentId)`) draws no recorded nonce and may run
 at any point. Collection, account-material, chat and boot keys are random and the file is

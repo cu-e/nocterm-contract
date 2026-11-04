@@ -4,6 +4,7 @@
 use nocterm_cloud_device::records::ChatSelector;
 use nocterm_hub_model::cloud::{
     CloudTextId, CommandIssuer, CommandKind, RecordContext, RecordKind, RecordPosition,
+    RunCoordinate,
     events::{
         AcceptedCommand, AcceptedPrompt, CloudEvent, CloudEventPayload, CloudRunStatus,
         CloudTextChannel, CloudUsage,
@@ -102,48 +103,60 @@ fn events(at: u64) -> Vec<Vec<u8>> {
 
 /// The sealed records as the runner publishes them.
 pub(super) fn records(selector: &ChatSelector, key: &ChatKey) -> Vec<(Value, HeadRecordAnchor)> {
-    let signer = RunnerSigningKey::from_seed(&RUNNER_SIGNING_SEED);
     let bodies = events(u64::try_from(NOW - 600_000).unwrap());
     bodies
         .iter()
         .enumerate()
         .map(|(index, body)| {
-            let sequence = u64::try_from(index + 1).unwrap();
-            let tag = u8::try_from(sequence).unwrap();
-            let position = RecordPosition {
-                writer_epoch: 1,
-                sequence,
-                journal_sequence: sequence,
-                revision: sequence,
-            };
-            let context = RecordContext::new(
-                selector.coordinate().unwrap(),
-                position,
-                [tag; 16],
+            seal(
+                selector,
+                key,
+                u64::try_from(index + 1).unwrap(),
                 Some(RUN),
+                body,
             )
-            .unwrap();
-            let sealed = seal_event(key, &signer, context.clone(), body).unwrap();
-            let digest: [u8; 32] = Sha256::digest(&sealed).into();
-            let anchor = HeadRecordAnchor {
-                kind: RecordKind::Event,
-                position: context.position(),
-                id: context.id(),
-                run: context.run(),
-                ciphertext_digest: digest,
-            };
-            let record = json!({
-                "publicationId": hex::encode([0xa0 + tag; 16]),
-                "binding": hex::encode(RelayBinding::event(context).canonical_bytes().unwrap()),
-                "totalBytes": sealed.len(),
-                "ciphertextSha256": hex::encode(digest),
-                "cursor": sequence,
-                "originAccountId": ACCOUNT,
-                "originSigningKey": hex::encode(RUNNER_PROOF),
-                "originRunnerId": hex::encode(RUNNER_ID),
-                "data": hex::encode(&sealed),
-            });
-            (record, anchor)
         })
         .collect()
+}
+
+/// The event `body` sealed and signed as the runner publishes it at `sequence` (also its chat
+/// cursor and control revision), in `run` (`None`: chat-scoped), with its head anchor.
+pub(super) fn seal(
+    selector: &ChatSelector,
+    key: &ChatKey,
+    sequence: u64,
+    run: Option<RunCoordinate>,
+    body: &[u8],
+) -> (Value, HeadRecordAnchor) {
+    let signer = RunnerSigningKey::from_seed(&RUNNER_SIGNING_SEED);
+    let tag = u8::try_from(sequence).unwrap();
+    let position = RecordPosition {
+        writer_epoch: 1,
+        sequence,
+        journal_sequence: sequence,
+        revision: sequence,
+    };
+    let context =
+        RecordContext::new(selector.coordinate().unwrap(), position, [tag; 16], run).unwrap();
+    let sealed = seal_event(key, &signer, context.clone(), body).unwrap();
+    let digest: [u8; 32] = Sha256::digest(&sealed).into();
+    let anchor = HeadRecordAnchor {
+        kind: RecordKind::Event,
+        position: context.position(),
+        id: context.id(),
+        run: context.run(),
+        ciphertext_digest: digest,
+    };
+    let record = json!({
+        "publicationId": hex::encode([0xa0 + tag; 16]),
+        "binding": hex::encode(RelayBinding::event(context).canonical_bytes().unwrap()),
+        "totalBytes": sealed.len(),
+        "ciphertextSha256": hex::encode(digest),
+        "cursor": sequence,
+        "originAccountId": ACCOUNT,
+        "originSigningKey": hex::encode(RUNNER_PROOF),
+        "originRunnerId": hex::encode(RUNNER_ID),
+        "data": hex::encode(&sealed),
+    });
+    (record, anchor)
 }
