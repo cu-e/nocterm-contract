@@ -95,6 +95,7 @@ pub(crate) fn device_code(error: &CloudDeviceError) -> &'static str {
         E::SummaryConflict => "summary_conflict",
         E::Summary(_) => "summary",
         E::Checkpoint | E::CheckpointCrypto(_) => "checkpoint",
+        E::StoredCommand => "stored_command",
         E::Protocol => "protocol",
         E::Ended => "ended",
         E::Effect(_) => "effect",

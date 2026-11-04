@@ -75,6 +75,8 @@ pub enum CloudDeviceError {
     Checkpoint,
     #[error("the checkpoint could not be sealed or opened")]
     CheckpointCrypto(#[from] CheckpointKeyError),
+    #[error("the stored command is malformed, of another format or does not open for this chat")]
+    StoredCommand,
     #[error("the client answered an effect it was not asked for, or with another kind of input")]
     Protocol,
     #[error("the flow has already ended")]

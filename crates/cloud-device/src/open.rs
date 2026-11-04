@@ -9,7 +9,9 @@
 //! freshness when it changed, and a new sealed checkpoint for the client to store.
 //!
 //! Commands are built here from the verified transcript ([`OpenChat::deliver`]) and run as their
-//! own [`Deliver`] flow; their outcomes come back through [`OpenChat::delivery`]. When the runner
+//! own [`Deliver`] flow; their outcomes come back through [`OpenChat::delivery`]. A command that
+//! has not settled when the client quits is kept with [`OpenChat::stored`] and resumed with
+//! [`OpenChat::resume`] (same bytes, pending row again). When the runner
 //! accepted a prompt of this device that waits for its model grant, the flow asks for it once
 //! ([`ChatUpdate::AllowRun`], ADR 0129 of the native client). When the runner asks for an SSH
 //! certificate that the verified history allows answering, the flow says so once
@@ -17,7 +19,7 @@
 //! [`OpenChat::unbind_servers`] build the SSH commands (contract ADR 0009).
 use crate::{
     CloudDeviceError, DeviceIdentity,
-    command::{CommandAction, Deliver, DeliveryUpdate, UnsignedCommand},
+    command::{CommandAction, Deliver, DeliveryUpdate, StoredCommand, UnsignedCommand, stored},
     context::{ChatRef, CloudSession},
     flow::{
         Arrival, Driven, Effect, EffectId, Flow, Frame, Input, Io, Machine, StreamKind,
@@ -174,6 +176,29 @@ impl OpenChat {
     ) -> Result<Deliver, CloudDeviceError> {
         self.0
             .with(|reading, _| reading.deliver(action, wake, now_ms))
+    }
+    /// `deliver`'s command as the client keeps it across a restart, once the device signed it
+    /// (call it when the delivery first asks to publish); `None` before.
+    pub fn stored(&self, deliver: &Deliver) -> Result<Option<StoredCommand>, CloudDeviceError> {
+        let reading = self.0.machine();
+        stored::keep(
+            &reading.session,
+            &reading.selector,
+            reading.reader.transcript(),
+            deliver,
+        )
+    }
+    /// Resumes a command an earlier run of this chat kept ([`Self::stored`]): its pending row
+    /// shows again and the same bytes are published; `None` when nothing is left to deliver
+    /// ([`crate::command::stored`]). Forget the stored bytes once the delivery ends.
+    pub fn resume(
+        &mut self,
+        stored: &StoredCommand,
+        wake: Option<String>,
+        now_ms: i64,
+    ) -> Result<Option<Deliver>, CloudDeviceError> {
+        self.0
+            .with(|reading, _| stored::resume(reading.parts(), stored, wake, now_ms))
     }
     /// Binds the chat to `servers` from the account's CA-trusted servers for `window_ms`
     /// (seven days when `None`, at most thirty), replacing the current binding.

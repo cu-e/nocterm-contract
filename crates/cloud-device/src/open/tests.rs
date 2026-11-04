@@ -388,3 +388,107 @@ fn a_chat_of_an_untrusted_runner_is_refused() {
     );
     assert!("x-y-1".parse::<ChatRef>().is_err());
 }
+
+fn prompt() -> ChatAction {
+    ChatAction::Prompt {
+        text: "hello".to_owned(),
+        model: Some(ModelChoice {
+            provider: MANAGED_PROVIDER.to_owned(),
+            model: "m".to_owned(),
+        }),
+    }
+}
+/// A prompt whose first publication had an unknown outcome, kept before the application quit.
+fn kept_prompt(hub: &mut FakeHub) -> (StoredCommand, [u8; 16]) {
+    let mut chat = open(hub, None);
+    hub.run(&mut chat, NOW);
+    let mut delivery = chat.deliver(&prompt(), None, NOW).unwrap();
+    assert!(
+        chat.stored(&delivery).unwrap().is_none(),
+        "nothing before the signature"
+    );
+    hub.publish
+        .push_back(Input::Failed(crate::flow::EffectFailure::Unknown));
+    hub.run(&mut delivery, NOW);
+    assert_eq!(hub.published.len(), 1);
+    (
+        chat.stored(&delivery).unwrap().unwrap(),
+        delivery.command_id(),
+    )
+}
+
+#[test]
+fn a_command_kept_across_a_restart_shows_pending_again_and_republishes_the_same_bytes() {
+    let (mut hub, _) = chat_hub();
+    let (stored, command) = kept_prompt(&mut hub);
+    let mut chat = open(&hub, None);
+    hub.run(&mut chat, NOW + 5);
+    let mut resumed = chat.resume(&stored, None, NOW + 5).unwrap().unwrap();
+    assert_eq!(resumed.command_id(), command);
+    let pending = &chat.transcript().pending_commands()[0];
+    assert_eq!(
+        (pending.text.as_str(), pending.kind, pending.state),
+        ("hello", PendingKind::Prompt, CommandState::Sending)
+    );
+    assert!(
+        chat.resume(&stored, None, NOW + 5).unwrap().is_none(),
+        "tracked once"
+    );
+    let (updates, ended) = hub.run(&mut resumed, NOW + 5);
+    assert!(matches!(ended, Ended::Done));
+    let (first, again) = (&hub.published[0], &hub.published[1]);
+    assert_eq!(first.publication_id(), again.publication_id());
+    assert_eq!(first.ciphertext(), again.ciphertext());
+    assert_eq!(updates.len(), 1, "the sleeping runner decided nothing more");
+    assert_eq!(updates[0].state, CommandState::Delivered);
+    assert!(
+        hub.effects.ends_with(&["sign", "probe"]),
+        "asked whether admitted"
+    );
+}
+
+#[test]
+fn a_resumed_command_the_runner_admitted_settles_accepted() {
+    let (mut hub, _) = chat_hub();
+    let (stored, _) = kept_prompt(&mut hub);
+    let mut chat = open(&hub, None);
+    hub.run(&mut chat, NOW + 5);
+    hub.receipt = nocterm_hub_model::cloud::head::ReceiptOutcome::Accepted {
+        control_revision: 1,
+    };
+    let mut resumed = chat.resume(&stored, None, NOW + 5).unwrap().unwrap();
+    let (updates, _) = hub.run(&mut resumed, NOW + 5);
+    let states: Vec<_> = updates.iter().map(|update| update.state).collect();
+    assert_eq!(states, [CommandState::Delivered, CommandState::Accepted]);
+}
+
+#[test]
+fn a_kept_command_whose_run_started_or_whose_window_ended_is_not_sent_again() {
+    let (mut hub, key) = chat_hub();
+    let (stored, command) = kept_prompt(&mut hub);
+    let mut late = open(&hub, None);
+    hub.run(&mut late, NOW + 5);
+    let ended = late
+        .resume(&stored, None, NOW + crate::policy::DEFAULT_LIFETIME_MS + 1)
+        .unwrap();
+    assert!(ended.is_none());
+    assert_eq!(
+        late.transcript().pending_commands()[0].state,
+        CommandState::Unreachable
+    );
+    let selector = hub.world.selector.clone();
+    hub.event(
+        &selector,
+        &key,
+        &prompt_accepted(&hub, command, 1),
+        Some(RUN),
+    );
+    let mut chat = open(&hub, None);
+    hub.run(&mut chat, NOW + 6);
+    assert!(chat.resume(&stored, None, NOW + 6).unwrap().is_none());
+    assert_eq!(
+        chat.transcript().pending_commands()[0].state,
+        CommandState::Accepted
+    );
+    assert_eq!(hub.published.len(), 1);
+}

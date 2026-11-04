@@ -12,6 +12,11 @@
 //!    attempt the runner is asked whether it admitted the command (a receipt probe): `Accepted`
 //!    and `Conflict` settle it, `NotFound` republishes at once. When the command's admission
 //!    window ends it is `Unreachable`.
+//!
+//! A command kept across a restart ([`super::StoredCommand`]) resumes at step 3 with the same
+//! sealed bytes ([`Deliver::resume`]). Its earlier run may have been admitted already, so after a
+//! receipt it reports `Delivered` and then asks the runner once whether it admitted the command:
+//! `Accepted` or `Refused` follow when the runner answers. That is the one case of two updates.
 use super::{SealedCommand, UnsignedCommand};
 use crate::{
     CloudDeviceError, DeviceIdentity,
@@ -64,10 +69,39 @@ impl Deliver {
             wake,
             attempts: 0,
             phase: Phase::Start,
+            resumed: Resumed::No,
+        }))
+    }
+    /// Resumes a command sealed by an earlier run with exactly its bytes (see the module).
+    pub(crate) fn resume(
+        session: Arc<CloudSession>,
+        device: DeviceIdentity,
+        selector: ChatSelector,
+        sealed: SealedCommand,
+        command_id: [u8; 16],
+        wake: Option<String>,
+    ) -> Self {
+        Self(Driven::new(Delivery {
+            session,
+            device,
+            command_id,
+            selector,
+            command: None,
+            sealed: Some(sealed),
+            probe: None,
+            wake,
+            attempts: 0,
+            phase: Phase::Start,
+            resumed: Resumed::Publishing,
         }))
     }
     pub fn command_id(&self) -> [u8; 16] {
         self.0.machine().command_id
+    }
+    /// The sealed command once the device signed it; keep it ([`crate::open::OpenChat::stored`])
+    /// to resume the delivery after a restart.
+    pub fn sealed(&self) -> Option<&SealedCommand> {
+        self.0.machine().sealed.as_ref()
     }
 }
 impl Flow for Deliver {
@@ -89,6 +123,16 @@ enum Phase {
     Waiting(i64),
     Busy,
     Finished,
+}
+
+/// Whether this delivery resumes a command of an earlier run, and how far its check got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Resumed {
+    No,
+    /// Publishing the stored bytes again.
+    Publishing,
+    /// Delivered; asking the runner once whether it admitted the command already.
+    Confirming,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +157,7 @@ pub(crate) struct Delivery {
     wake: Option<String>,
     attempts: u32,
     phase: Phase,
+    resumed: Resumed,
 }
 impl Delivery {
     fn settle(
@@ -127,6 +172,14 @@ impl Delivery {
             cursor,
         });
         self.phase = Phase::Finished;
+    }
+    /// After the wake: sign a new command, or publish a resumed one.
+    fn proceed(&mut self, io: &mut Io<Purpose, DeliveryUpdate>) -> Result<(), CloudDeviceError> {
+        if self.sealed.is_some() {
+            self.publish(io)
+        } else {
+            self.sign(io)
+        }
     }
     fn sign(&mut self, io: &mut Io<Purpose, DeliveryUpdate>) -> Result<(), CloudDeviceError> {
         let command = self.command.as_ref().ok_or(CloudDeviceError::Protocol)?;
@@ -187,7 +240,17 @@ impl Delivery {
                 &ciphertext_sha256,
             ) =>
             {
-                self.settle(io, CommandState::Delivered, Some(cursor));
+                if self.resumed == Resumed::Publishing {
+                    io.output(DeliveryUpdate {
+                        command_id: self.command_id,
+                        state: CommandState::Delivered,
+                        cursor: Some(cursor),
+                    });
+                    self.resumed = Resumed::Confirming;
+                    self.receipt_probe(io, now_ms)?;
+                } else {
+                    self.settle(io, CommandState::Delivered, Some(cursor));
+                }
             }
             Input::Receipt { .. }
             | Input::Failed(EffectFailure::Unavailable | EffectFailure::Unknown) => {
@@ -205,7 +268,21 @@ impl Delivery {
         now_ms: i64,
     ) -> Result<(), CloudDeviceError> {
         let mut probe = self.probe.take().ok_or(CloudDeviceError::Protocol)?;
-        match probe.answered(self.session.keys(), input, now_ms) {
+        let answer = probe.answered(self.session.keys(), input, now_ms);
+        if self.resumed == Resumed::Confirming {
+            // Delivered already: only an admission decided by the runner adds to it.
+            match answer {
+                Ok(Some(HeadValue::CommandReceipt(ReceiptOutcome::Accepted { .. }))) => {
+                    self.settle(io, CommandState::Accepted, None);
+                }
+                Ok(Some(HeadValue::CommandReceipt(ReceiptOutcome::Conflict))) => {
+                    self.settle(io, CommandState::Refused, None);
+                }
+                _ => self.phase = Phase::Finished,
+            }
+            return Ok(());
+        }
+        match answer {
             Ok(Some(HeadValue::CommandReceipt(ReceiptOutcome::NotFound))) => {
                 self.phase = Phase::Waiting(now_ms);
             }
@@ -246,10 +323,10 @@ impl Machine for Delivery {
                         io.issue(Purpose::Wake, start);
                         Ok(())
                     }
-                    Err(_) => self.sign(io),
+                    Err(_) => self.proceed(io),
                 }
             }
-            Purpose::Wake => self.sign(io),
+            Purpose::Wake => self.proceed(io),
             Purpose::Sign => {
                 let Input::Signature(signature) = input else {
                     return Err(CloudDeviceError::Protocol);
@@ -283,7 +360,7 @@ impl Machine for Delivery {
                     io.issue(Purpose::Seats, Effect::ListInstances);
                     self.phase = Phase::Busy;
                 } else {
-                    self.sign(io)?;
+                    self.proceed(io)?;
                 }
                 Ok(Wait::Busy)
             }

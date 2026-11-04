@@ -45,12 +45,23 @@ impl VerifiedChat {
 }
 
 fn key(selector: &ChatSelector, keys: &AccountKeys) -> Result<CheckpointKey, CloudDeviceError> {
+    chat_key(LABEL, selector, keys)
+}
+
+/// The key that seals device-local state of one chat generation under `label`: derived from the
+/// account key and `label` ‖ chat coordinate ‖ runner pins ‖ authority fingerprint ‖ account key
+/// digest, so it opens only for the same account, hub, chat generation and runner pins.
+pub(crate) fn chat_key(
+    label: &[u8],
+    selector: &ChatSelector,
+    keys: &AccountKeys,
+) -> Result<CheckpointKey, CloudDeviceError> {
     let scope = selector.scope();
     if !scope.is_account_key(&keys.public_key()) {
         return Err(CloudDeviceError::Binding);
     }
     let pins = selector.pins();
-    let mut context = LABEL.to_vec();
+    let mut context = label.to_vec();
     context.extend_from_slice(&selector.coordinate()?.canonical_bytes()?);
     for part in [pins.encryption, pins.signing, pins.proof] {
         context.extend_from_slice(&part);

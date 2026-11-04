@@ -7,7 +7,8 @@
 //!    [`Publication`] to send with `CloudService.PublishOne`.
 //!
 //! Keep the returned publication and resend exactly its bytes on retry: the publication id makes
-//! the hub's delivery idempotent and the expected chat revision stops a second admission.
+//! the hub's delivery idempotent and the expected chat revision stops a second admission. Across
+//! a restart keep it as a [`StoredCommand`] ([`stored`]).
 use crate::{
     CloudDeviceError, DeviceIdentity, flow::SignRequest, policy::PromptPolicy,
     records::ChatSelector, transcript::ApprovalRequest, trust::HubCapabilities,
@@ -28,7 +29,9 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub mod delivery;
+pub mod stored;
 pub use delivery::{Deliver, DeliveryUpdate};
+pub use stored::StoredCommand;
 
 /// How long a stop or an approval answer may wait for admission.
 pub const CONTROL_LIFETIME_MS: i64 = 10 * 60 * 1000;
