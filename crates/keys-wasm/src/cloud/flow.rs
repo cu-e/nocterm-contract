@@ -115,6 +115,8 @@ impl WebFlow {
                 }
                 convert(flow.next(now), |lease| FlowOutput::Lease {
                     grant: hex::encode(lease.grant),
+                    provider: lease.provider,
+                    model: lease.model,
                     expires_at_ms: ms(lease.expires_at_ms),
                     renew_at_ms: ms(lease.renew_at_ms),
                 })

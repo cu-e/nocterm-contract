@@ -174,10 +174,14 @@ pub enum FlowOutput {
         /// The registry was read again; `runners()` has the new list.
         runners_reloaded: bool,
     },
-    /// `lease`: the hub delivered the provider lease; the flow renews it at `renewAtMs`.
+    /// `lease`: the hub delivered the provider lease; the flow renews it at `renewAtMs`. A
+    /// prompt to this own-runner chat names `{provider, model}` (the leased key's, the one model
+    /// the lease allows).
     #[serde(rename_all = "camelCase")]
     Lease {
         grant: String,
+        provider: String,
+        model: String,
         expires_at_ms: f64,
         renew_at_ms: f64,
     },

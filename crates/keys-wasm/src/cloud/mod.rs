@@ -23,6 +23,7 @@ pub use device::CloudDevice;
 pub use flow::{WebChat, WebFlow};
 
 use nocterm_cloud_device::CloudDeviceError;
+use nocterm_hub_model::cloud::provider::ProviderLeaseError;
 use wasm_bindgen::JsError;
 
 use types::WireError;
@@ -94,6 +95,8 @@ pub(crate) fn device_code(error: &CloudDeviceError) -> &'static str {
         E::Protocol => "protocol",
         E::Ended => "ended",
         E::Effect(_) => "effect",
+        // The runner's last signed boot is no longer current: it stopped announcing itself.
+        E::ProviderLease(ProviderLeaseError::Time) => "boot_expired",
         E::ProviderLease(_) | E::ProviderSecret(_) => "provider",
         E::Capability(_) => "capability",
         E::Probe(_) | E::HeadCrypto(_) => "probe",
