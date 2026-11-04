@@ -80,6 +80,7 @@ pub mod provider;
 pub mod reader;
 pub mod records;
 mod scope;
+pub mod seat;
 pub mod ssh;
 #[cfg(test)]
 mod testing;

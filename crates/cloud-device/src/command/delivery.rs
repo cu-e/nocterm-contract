@@ -1,7 +1,9 @@
 //! The `Deliver` flow: one command from signature to a settled outcome.
 //!
-//! 1. A managed seat is woken first when the caller names its agent (`StartInstance` for the
-//!    chat), so a sleeping seat receives the command; a refusal to wake does not stop delivery.
+//! 1. A managed seat is woken first when the caller names its agent: the agent's enrolled seat
+//!    is started for the chat ([`crate::seat`]: `ListInstances`, then `StartInstance` of that
+//!    seat's pool), so a sleeping seat receives the command. An agent without an enrolled seat,
+//!    or a refusal to wake, does not stop delivery.
 //! 2. The device signs the command header; the command is sealed once.
 //! 3. The sealed publication is published with `PublishOne`. Every retry sends exactly the same
 //!    bytes under the same publication id, so the hub delivers it at most once.
@@ -91,6 +93,7 @@ enum Phase {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Purpose {
+    Seats,
     Wake,
     Sign,
     Publish,
@@ -233,6 +236,19 @@ impl Machine for Delivery {
             return Err(CloudDeviceError::Protocol);
         };
         match purpose {
+            Purpose::Seats => {
+                let agent_id = self.wake.take().ok_or(CloudDeviceError::Protocol)?;
+                let chat_id = Some(self.selector.chat_id());
+                match crate::seat::listed(input)
+                    .and_then(|seats| crate::seat::start(&seats, &agent_id, chat_id))
+                {
+                    Ok(start) => {
+                        io.issue(Purpose::Wake, start);
+                        Ok(())
+                    }
+                    Err(_) => self.sign(io),
+                }
+            }
             Purpose::Wake => self.sign(io),
             Purpose::Sign => {
                 let Input::Signature(signature) = input else {
@@ -263,14 +279,8 @@ impl Machine for Delivery {
     ) -> Result<Wait, CloudDeviceError> {
         match self.phase {
             Phase::Start => {
-                if let Some(agent_id) = self.wake.take() {
-                    io.issue(
-                        Purpose::Wake,
-                        Effect::StartInstance {
-                            agent_id,
-                            chat_id: Some(hex::encode(self.selector.chat_id())),
-                        },
-                    );
+                if self.wake.is_some() {
+                    io.issue(Purpose::Seats, Effect::ListInstances);
                     self.phase = Phase::Busy;
                 } else {
                     self.sign(io)?;

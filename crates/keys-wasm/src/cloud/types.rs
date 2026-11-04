@@ -185,10 +185,13 @@ pub enum WireEffect {
         #[tsify(type = "Uint8Array")]
         data: Vec<u8>,
     },
-    /// `AgentService.StartInstance`; answer `instance`.
+    /// `AgentService.StartInstance { agentId, poolId, chatId }`; answer `instance`. `poolId` is
+    /// the pool of the agent's enrolled seat (the core found it with `listInstances`): send it
+    /// as it is, so the call wakes that seat and never provisions one.
     #[serde(rename_all = "camelCase")]
     StartInstance {
         agent_id: String,
+        pool_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         #[tsify(optional)]
         chat_id: Option<String>,
@@ -236,6 +239,8 @@ pub struct WireObject {
 pub struct WireInstance {
     pub instance_id: String,
     pub agent_id: String,
+    /// `Instance.poolId`; a seat is woken only through its own pool.
+    pub pool_id: String,
     /// The Cloud runner id in lowercase hex, once the host created it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[tsify(optional)]

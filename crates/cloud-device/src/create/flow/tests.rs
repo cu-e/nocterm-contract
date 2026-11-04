@@ -16,6 +16,7 @@ fn seat(hub: &mut FakeHub, state: InstanceState) {
     hub.instances.push(InstanceEntry {
         instance_id: "seat-1".to_owned(),
         agent_id: "agent-1".to_owned(),
+        pool_id: "pool-1".to_owned(),
         runner_id: Some([0x02; 16]),
         state,
     });
@@ -44,7 +45,7 @@ fn a_managed_chat_starts_its_seat_stores_its_records_and_waits_for_the_claim() {
     let (created, ended) = hub.run(&mut flow, NOW);
     assert!(created.is_empty());
     assert!(matches!(ended, Ended::Idle(Some(at)) if at == NOW + CLAIM_RETRY_MS));
-    assert_eq!(hub.effects[0], "start_instance");
+    assert_eq!(hub.effects[..2], ["list_instances", "start_instance"]);
     assert_eq!(count(&hub, "create_collection"), 2, "material and grant");
     assert_eq!(count(&hub, "put_object"), 2);
     assert_eq!(hub.published.len(), 1);
@@ -125,6 +126,17 @@ fn a_seat_without_an_enrolled_runner_or_an_untrusted_runner_is_refused() {
         ended,
         Ended::Failed(CloudDeviceError::NotEnrolled)
     ));
+    assert!(
+        !hub.effects.contains(&"start_instance"),
+        "a chat never provisions a seat"
+    );
+    let mut hub = FakeHub::new(World::new());
+    let (_, ended) = hub.run(&mut managed(&hub, None), NOW);
+    assert!(matches!(
+        ended,
+        Ended::Failed(CloudDeviceError::NotEnrolled)
+    ));
+    assert_eq!(hub.effects, ["list_instances"]);
 
     let mut hub = FakeHub::new(World::new());
     let mut flow = CreateChat::new(

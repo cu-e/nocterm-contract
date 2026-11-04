@@ -425,11 +425,14 @@ impl FakeHub {
                     ciphertext_sha256: publication.ciphertext_sha256().to_vec(),
                 })
             }
-            Effect::StartInstance { agent_id, .. } => {
+            Effect::StartInstance {
+                agent_id, pool_id, ..
+            } => {
                 self.effects.push("start_instance");
+                // A pool without a seat of the agent would provision one: the fake refuses it.
                 self.instances
                     .iter()
-                    .find(|seat| seat.agent_id == agent_id)
+                    .find(|seat| seat.agent_id == agent_id && seat.pool_id == pool_id)
                     .map_or(Input::Failed(EffectFailure::NotFound), |seat| {
                         Input::Instance(seat.clone())
                     })

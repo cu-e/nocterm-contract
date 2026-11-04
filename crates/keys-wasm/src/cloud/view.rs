@@ -209,6 +209,11 @@ pub enum FlowOutput {
         /// The registry was read again; `runners()` has the new list.
         runners_reloaded: bool,
     },
+    /// `wakeSeat`: the agent's enrolled seat was started (an agent without one fails with
+    /// `not_enrolled`; a chat never provisions a seat).
+    Woken {
+        instance: WireInstance,
+    },
     /// `lease`: the hub delivered the provider lease; the flow renews it at `renewAtMs`. A
     /// prompt to this own-runner chat names `{provider, model}` (the leased key's, the one model
     /// the lease allows).

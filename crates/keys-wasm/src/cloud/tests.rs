@@ -581,7 +581,7 @@ fn optional_input_fields_accept_an_explicit_absent_value() {
     ));
     let seat: EffectInput = serde_json::from_value(json!({
         "kind": "instance",
-        "instance": { "instanceId": "i", "agentId": "a", "runnerId": null, "state": "ready" },
+        "instance": { "instanceId": "i", "agentId": "a", "poolId": "p", "runnerId": null, "state": "ready" },
     }))
     .unwrap();
     assert!(matches!(

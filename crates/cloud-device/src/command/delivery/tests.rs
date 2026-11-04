@@ -141,12 +141,13 @@ fn a_managed_seat_is_woken_first_and_a_refusal_to_wake_does_not_stop_delivery() 
     hub.instances.push(InstanceEntry {
         instance_id: "i-1".to_owned(),
         agent_id: "agent".to_owned(),
+        pool_id: "pool-1".to_owned(),
         runner_id: Some([0x02; 16]),
         state: InstanceState::Suspended,
     });
     let mut flow = delivery(&hub, Some("agent"));
     let (updates, _) = hub.run(&mut flow, NOW);
-    assert_eq!(hub.effects[0], "start_instance");
+    assert_eq!(hub.effects[..2], ["list_instances", "start_instance"]);
     assert_eq!(updates[0].state, CommandState::Delivered);
     let mut hub = FakeHub::new(World::new());
     let mut flow = delivery(&hub, Some("unknown agent"));

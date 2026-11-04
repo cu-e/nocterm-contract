@@ -1,7 +1,9 @@
 //! The `CreateChat` flow (ADR 0122 of the native client, now in the core for every device).
 //!
-//! 1. A managed agent's seat is started for the new chat (`StartInstance` with the chat id); its
-//!    runner must be enrolled. An own runner is named directly. A runner missing from the
+//! 1. A managed agent's enrolled seat is started for the new chat ([`crate::seat`]:
+//!    `ListInstances`, then `StartInstance` of that seat's pool with the chat id); an agent
+//!    without one is [`CloudDeviceError::NotEnrolled`], and no seat is ever provisioned for a
+//!    chat. An own runner is named directly. A runner missing from the
 //!    registry makes the flow read the registry again once.
 //! 2. The chat material is compare-created (`PutObject` at version 0) in `cloud-chat-material`,
 //!    then the sealed grant in `cloud-chat-grant`; a missing personal collection is created
@@ -123,6 +125,7 @@ impl Kind {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Purpose {
+    Seats,
     Seat,
     RegistryKey,
     RegistryObject(Vec<u8>),
@@ -448,16 +451,10 @@ impl Creating {
     /// The next step towards a claimed chat, once nothing is outstanding.
     fn advance(&mut self, io: &mut CreateIo, now_ms: i64) -> Result<Wait, CloudDeviceError> {
         let Some(runner) = self.runner else {
-            let ChatHost::Managed { agent_id } = &self.host else {
+            let ChatHost::Managed { .. } = &self.host else {
                 return Err(CloudDeviceError::Protocol);
             };
-            io.issue(
-                Purpose::Seat,
-                Effect::StartInstance {
-                    agent_id: agent_id.clone(),
-                    chat_id: Some(hex::encode(self.chat_id)),
-                },
-            );
+            io.issue(Purpose::Seats, Effect::ListInstances);
             return Ok(Wait::Busy);
         };
         if self.session.runner(&runner).is_err() {
@@ -531,6 +528,15 @@ impl Machine for Creating {
             return Err(CloudDeviceError::Protocol);
         };
         match purpose {
+            Purpose::Seats => {
+                let ChatHost::Managed { agent_id } = &self.host else {
+                    return Err(CloudDeviceError::Protocol);
+                };
+                let seats = crate::seat::listed(input)?;
+                let start = crate::seat::start(&seats, agent_id, Some(self.chat_id))?;
+                io.issue(Purpose::Seat, start);
+                Ok(())
+            }
             Purpose::Seat => self.seat(input),
             purpose @ (Purpose::RegistryKey | Purpose::RegistryObject(_)) => {
                 self.registry(io, purpose, input)

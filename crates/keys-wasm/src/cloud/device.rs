@@ -155,6 +155,24 @@ impl CloudDevice {
     ) -> Result<WebFlow, JsError> {
         js(from_js(host, "chat host").and_then(|host| self.creating(host, chat_id)))
     }
+    /// Wakes the enrolled seat of managed agent `agentId`, for chat `chatId` (`ChatRef` text)
+    /// when one is named: `listInstances`, then `startInstance` of that seat's pool.
+    #[wasm_bindgen(js_name = wakeSeat)]
+    pub fn wake_seat(&self, agent_id: &str, chat_id: Option<String>) -> Result<WebFlow, JsError> {
+        let chat = js(chat_id
+            .map(|text| {
+                text.parse::<nocterm_cloud_device::context::ChatRef>()
+                    .map_err(|_| super::WebCloudError::Argument("chat id"))
+            })
+            .transpose())?;
+        Ok(WebFlow::new(
+            super::flow::Running::Wake(nocterm_cloud_device::seat::WakeSeat::new(
+                agent_id,
+                chat.map(|chat| chat.chat_id),
+            )),
+            self.shared.clone(),
+        ))
+    }
     /// Leases `agentId`'s own provider key to the runner of `chat` and renews it while the flow
     /// runs.
     pub fn lease(&self, chat: &WebChat, agent_id: &str) -> Result<WebFlow, JsError> {

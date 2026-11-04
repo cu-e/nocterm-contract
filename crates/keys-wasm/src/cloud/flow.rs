@@ -17,6 +17,7 @@ use nocterm_cloud_device::{
     list::ListChats,
     open::{ChatAction, ChatUpdate, ModelChoice, OpenChat},
     provider::ProviderLease,
+    seat::WakeSeat,
     ssh::{BindServers, SshAnswer},
 };
 use wasm_bindgen::prelude::*;
@@ -32,8 +33,8 @@ use super::{
     view::{RunnerInfo, WireDelta, WireFreshness, ms},
 };
 
-/// A finite flow: `connect`, `listChats`, `deliver`, `createChat`, `lease`, `bindServers`,
-/// `unbindServers` or `answerSsh`.
+/// A finite flow: `connect`, `listChats`, `deliver`, `createChat`, `wakeSeat`, `lease`,
+/// `bindServers`, `unbindServers` or `answerSsh`.
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct WebFlow {
@@ -47,6 +48,7 @@ pub(super) enum Running {
     List(ListChats),
     Deliver(Deliver, Weak<RefCell<OpenChat>>),
     Create(CreateChat),
+    Wake(WakeSeat),
     Lease(ProviderLease, Weak<RefCell<OpenChat>>),
     Bind(BindServers, Weak<RefCell<OpenChat>>),
     Answer(SshAnswer, Weak<RefCell<OpenChat>>),
@@ -112,6 +114,9 @@ impl WebFlow {
                     runners_reloaded,
                 }
             }),
+            Running::Wake(flow) => convert(flow.next(now), |seat| FlowOutput::Woken {
+                instance: instance_out(&seat),
+            }),
             Running::Lease(flow, chat) => {
                 if let Some(chat) = chat.upgrade() {
                     flow.set_control_revision(chat.borrow().transcript().control_revision());
@@ -133,6 +138,7 @@ impl WebFlow {
             Running::List(flow) => flow.resolve(id, input),
             Running::Deliver(flow, _) => flow.resolve(id, input),
             Running::Create(flow) => flow.resolve(id, input),
+            Running::Wake(flow) => flow.resolve(id, input),
             Running::Lease(flow, _) => flow.resolve(id, input),
             Running::Bind(flow, _) => flow.resolve(id, input),
             Running::Answer(flow, _) => flow.resolve(id, input),
@@ -146,6 +152,7 @@ impl WebFlow {
             Running::List(flow) => flow.frame(id, frame),
             Running::Deliver(flow, _) => flow.frame(id, frame),
             Running::Create(flow) => flow.frame(id, frame),
+            Running::Wake(flow) => flow.frame(id, frame),
             Running::Lease(flow, _) => flow.frame(id, frame),
             Running::Bind(flow, _) => flow.frame(id, frame),
             Running::Answer(flow, _) => flow.frame(id, frame),
@@ -421,9 +428,15 @@ pub(crate) fn wire_effect(effect: Effect) -> WireEffect {
             },
             data: publication.ciphertext().to_vec(),
         },
-        Effect::StartInstance { agent_id, chat_id } => {
-            WireEffect::StartInstance { agent_id, chat_id }
-        }
+        Effect::StartInstance {
+            agent_id,
+            pool_id,
+            chat_id,
+        } => WireEffect::StartInstance {
+            agent_id,
+            pool_id,
+            chat_id,
+        },
         Effect::ListInstances => WireEffect::ListInstances,
         Effect::RunnerStatus { runner_id } => WireEffect::RunnerStatus {
             runner_id: runner_id.to_vec(),
@@ -454,6 +467,7 @@ pub(super) fn instance_out(seat: &InstanceEntry) -> WireInstance {
     WireInstance {
         instance_id: seat.instance_id.clone(),
         agent_id: seat.agent_id.clone(),
+        pool_id: seat.pool_id.clone(),
         runner_id: seat.runner_id.map(hex::encode),
         state: STATES
             .iter()
@@ -474,6 +488,7 @@ fn instance_in(seat: WireInstance) -> CloudResult<InstanceEntry> {
             .map_or(InstanceState::Unknown, |(_, state)| *state),
         instance_id: seat.instance_id,
         agent_id: seat.agent_id,
+        pool_id: seat.pool_id,
     })
 }
 

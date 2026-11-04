@@ -137,9 +137,13 @@ pub enum Effect {
     },
     /// `CloudService.PublishOne` with exactly these bytes; answer [`Input::Receipt`].
     Publish(Publication),
-    /// `AgentService.StartInstance`; answer [`Input::Instance`].
+    /// `AgentService.StartInstance { agent_id, pool_id, chat_id }`; answer [`Input::Instance`].
+    /// The core asks only for a seat the agent already has: `pool_id` is the pool of an
+    /// enrolled seat it found with [`Effect::ListInstances`] ([`crate::seat`]), never empty, so
+    /// the call wakes that seat and never provisions one. Send the fields as they are.
     StartInstance {
         agent_id: String,
+        pool_id: String,
         /// The chat id in lowercase hex.
         chat_id: Option<String>,
     },
@@ -187,6 +191,8 @@ pub enum InstanceState {
 pub struct InstanceEntry {
     pub instance_id: String,
     pub agent_id: String,
+    /// `Instance.pool_id`: the pool the seat runs in.
+    pub pool_id: String,
     /// The Cloud runner id, once the host created it.
     pub runner_id: Option<[u8; 16]>,
     pub state: InstanceState,
