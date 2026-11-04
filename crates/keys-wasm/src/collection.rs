@@ -20,8 +20,8 @@ const READABLE_KINDS: &[&str] = &["profile"];
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct WebCollectionKey {
-    collection_id: String,
-    key: CollectionKey,
+    pub(crate) collection_id: String,
+    pub(crate) key: CollectionKey,
 }
 
 #[wasm_bindgen]
@@ -63,7 +63,7 @@ impl WebAccount {
 }
 
 impl WebAccount {
-    fn own_collection(
+    pub(crate) fn own_collection(
         &self,
         collection_id: &str,
         wrapped_key: &[u8],

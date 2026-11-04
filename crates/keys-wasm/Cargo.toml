@@ -1,6 +1,6 @@
 [package]
 name = "nocterm-keys-wasm"
-description = "WebAssembly bindings of the Nocterm agent formats for the web panel: sealing a definition to a pool key."
+description = "WebAssembly bindings of the Nocterm agent and Cloud device formats for the web panel: sealing a definition to a pool key, reading and driving Cloud chats."
 license = "Apache-2.0 OR MIT"
 version.workspace = true
 edition.workspace = true
@@ -12,6 +12,8 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+hex.workspace = true
+nocterm-cloud-device.workspace = true
 nocterm-hub-model.workspace = true
 nocterm-keys.workspace = true
 serde_json.workspace = true
@@ -22,6 +24,9 @@ wasm-bindgen.workspace = true
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
 uuid = { workspace = true, features = ["js"] }
+
+[dev-dependencies]
+sha2.workspace = true
 
 [lints]
 workspace = true

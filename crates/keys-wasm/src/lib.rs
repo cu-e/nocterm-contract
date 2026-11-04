@@ -8,16 +8,22 @@
 //! (`checkPoolKeys`), verify a host's runner attestation, and read the account's saved server
 //! profiles: open a collection key (`openCollection`, or `openGrantedCollection` under the
 //! granter's pinned key), open its profile objects (`WebCollectionKey.openObject`) and show
-//! an account key's fingerprint (`accountKeyFingerprint`). All cryptography is
+//! an account key's fingerprint (`accountKeyFingerprint`), and read and drive the account's
+//! Cloud chats as a browser device ([`cloud`]: hub trust, capability proof, trusted runners,
+//! device-signed head probes, verified replay into a transcript, prompt / stop / inference
+//! grant / approval commands and new chats over `nocterm-cloud-device`). All cryptography is
 //! `nocterm-keys`; this crate only converts text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants: secrets never cross into JavaScript (only public keys, fingerprints and sealed
 //! bytes), except the recovery key of a new keyset, which the page shows the user once, and
 //! the plaintext of profile objects (kind `profile`, which hold no secrets); the account key,
-//! collection keys and objects of any other kind (credentials) stay inside WebAssembly; a
-//! granted collection key opens only under the granter key the caller pinned; errors are typed
-//! here and become strings only at the boundary.
+//! collection keys, chat keys and objects of any other kind (credentials, Cloud records) stay
+//! inside WebAssembly, and Cloud records come back only as handles and display data; the device
+//! key stays in the page's WebCrypto store, and a signature the page supplies is verified
+//! against the device key named in the signed bytes before anything is sealed; a granted
+//! collection key opens only under the granter key the caller pinned; errors are typed here
+//! and become strings only at the boundary (Cloud refusals start with a stable `[code]`).
 
 use nocterm_hub_model::agents::{
     AgentScope, PoolKeys, PoolTrust, ScopeKind, SignedHostRunnerAttestation, check_pool_keys,
@@ -34,6 +40,7 @@ use nocterm_keys::{
 };
 use wasm_bindgen::prelude::*;
 
+pub mod cloud;
 mod collection;
 
 pub use collection::{WebCollectionKey, account_key_fingerprint};
@@ -77,6 +84,9 @@ pub enum WebError {
     /// The granter's key is not the one the caller pinned.
     #[error(transparent)]
     Pin(#[from] nocterm_keys::PinError),
+    /// A new collection key could not be wrapped or its name sealed.
+    #[error(transparent)]
+    SealCollection(#[from] nocterm_keys::SealError),
     /// Objects of this kind stay sealed in the browser.
     #[error("objects of kind {0:?} are not opened in the browser")]
     SealedKind(String),

@@ -876,9 +876,12 @@ name = "nocterm-keys-wasm"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "hex",
+ "nocterm-cloud-device",
  "nocterm-hub-model",
  "nocterm-keys",
  "serde_json",
+ "sha2",
  "thiserror",
  "uuid",
  "wasm-bindgen",
