@@ -45,7 +45,7 @@ pub const DIRECTORY_PAGE_RECORDS: u32 = MAX_RELAY_PAGE_RECORDS;
 /// Bytes one directory page may carry: a full page of the largest sealed summaries.
 #[allow(
     clippy::cast_possible_truncation,
-    reason = "64 sealed summaries of at most 2190 bytes fit u32"
+    reason = "64 sealed summaries of at most MAX_SEALED_SUMMARY_BYTES fit u32"
 )]
 pub const DIRECTORY_PAGE_BYTES: u32 = DIRECTORY_PAGE_RECORDS * MAX_SEALED_SUMMARY_BYTES as u32;
 

@@ -64,10 +64,19 @@ pub const MAX_REQUEST_BYTES: usize = MAX_SIGNED_BINDING_BYTES + 1024;
 /// names are not addresses. Runners and nodes check their configured egress with it; a decoder
 /// of a request keeps applying only the character rule of [`SshCertificateRequest::validate`].
 pub fn is_source_address(entry: &str) -> bool {
-    let (address, prefix) = entry.split_once('/').unwrap_or((entry, ""));
-    let prefix_ok = |maximum: u8| {
-        prefix.is_empty()
-            || (!prefix.starts_with('+') && prefix.parse::<u8>().is_ok_and(|bits| bits <= maximum))
+    let (address, prefix) = match entry.split_once('/') {
+        Some((address, prefix)) => (address, Some(prefix)),
+        None => (entry, None),
+    };
+    // A prefix is canonical decimal: present after `/`, digits only, no leading zero.
+    let prefix_ok = |maximum: u8| match prefix {
+        None => true,
+        Some(prefix) => {
+            !prefix.is_empty()
+                && prefix.bytes().all(|byte| byte.is_ascii_digit())
+                && (prefix == "0" || !prefix.starts_with('0'))
+                && prefix.parse::<u8>().is_ok_and(|bits| bits <= maximum)
+        }
     };
     entry.len() <= MAX_SOURCE_ADDRESS_BYTES
         && match address.parse::<std::net::IpAddr>() {

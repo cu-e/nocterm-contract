@@ -322,3 +322,33 @@ fn a_session_access_selects_nothing_in_another_epoch_ca_or_for_a_changed_server_
         binding.targets[0].route_fingerprint()
     );
 }
+
+#[test]
+fn a_source_address_is_an_ip_with_an_optional_canonical_prefix() {
+    for good in [
+        "203.0.113.7",
+        "203.0.113.0/24",
+        "0.0.0.0/0",
+        "198.51.100.1/32",
+        "2001:db8::1",
+        "2001:db8::/32",
+        "::/128",
+    ] {
+        assert!(super::is_source_address(good), "{good} is an address");
+    }
+    for bad in [
+        "203.0.113.7/",
+        "203.0.113.7/33",
+        "203.0.113.7/+8",
+        "203.0.113.7/08",
+        "203.0.113.7/-1",
+        "203.0.113.7/ 8",
+        "2001:db8::/129",
+        "2001:db8::/",
+        "host.example",
+        "",
+        "/24",
+    ] {
+        assert!(!super::is_source_address(bad), "{bad:?} is not an address");
+    }
+}
