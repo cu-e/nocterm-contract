@@ -23,7 +23,12 @@
 //! - access update: field(`nocterm/cloud-ssh-access/v1`) ‖ grant id 16 ‖ grant epoch u64 ‖ access
 //!   tag (1 pending, 2 active ‖ request 16 ‖ valid before i64, 3 refused ‖ reason u8, 4 revoked,
 //!   5 expired) ‖ u8 count ‖ (server 16 ‖ reach u8)*.
+//!
+//! A bound server is also a session target: [`SshBinding::target_access`] is the
+//! `SubmitPrompt.target` a device names it with and [`SshBinding::target_of_access`] the server
+//! a runner selects for one (contract ADR 0011, `session_target`).
 mod codec;
+mod session_target;
 
 use super::{ChatCoordinate, CloudTextId, CommandError, MaterialError, payload::GrantReference};
 use crate::pop::{self, SignatureError};

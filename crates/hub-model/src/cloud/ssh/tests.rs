@@ -262,3 +262,63 @@ fn an_access_update_names_each_server_once_and_closed_tags_only() {
         );
     }
 }
+
+#[test]
+fn a_bound_servers_session_access_matches_the_independent_vectors() {
+    let binding = binding();
+    let db = SshServerId::of_profile("profile-db");
+    let access = binding.target_access(&db).unwrap();
+    assert_eq!(access.target.host_key, [0xa1; 32]);
+    assert_eq!(access.target.route.to_vec(), fixture("target-route-db"));
+    assert_eq!(access.target.principal, id("deploy"));
+    assert_eq!(
+        access.target.workspace.to_vec(),
+        fixture("target-workspace-db")
+    );
+    assert_eq!(access.authentication.public_key, binding.ca_key);
+    assert_eq!(
+        access.authentication.credential_revision.to_vec(),
+        fixture("target-credential")
+    );
+    assert_eq!(binding.target_of_access(&access), binding.target(&db));
+    assert!(
+        binding
+            .target_access(&SshServerId::of_profile("other"))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_session_access_selects_nothing_in_another_epoch_ca_or_for_a_changed_server_entry() {
+    let binding = binding();
+    let db = SshServerId::of_profile("profile-db");
+    let access = binding.target_access(&db).unwrap();
+    let mut newer = binding.clone();
+    newer.grant.epoch += 1;
+    assert!(newer.target_of_access(&access).is_none());
+    let mut other_ca = binding.clone();
+    other_ca.ca_key = [0x77; 32];
+    assert!(other_ca.target_of_access(&access).is_none());
+    for change in [
+        |t: &mut SshTarget| t.port = 2200,
+        |t: &mut SshTarget| t.host = CloudTextId::new("db2.example.org").unwrap(),
+        |t: &mut SshTarget| t.user = CloudTextId::new("root").unwrap(),
+        |t: &mut SshTarget| t.host_key_sha256 = [0xb1; 32],
+        |t: &mut SshTarget| t.server = SshServerId::from_bytes([9; 16]),
+    ] {
+        let mut changed = binding.clone();
+        change(&mut changed.targets[0]);
+        assert!(changed.target_of_access(&access).is_none());
+    }
+    // The workspace is the account on the server, whatever address or port reaches it.
+    let mut moved = binding.targets[0].clone();
+    moved.port = 2200;
+    assert_eq!(
+        moved.workspace_fingerprint(),
+        binding.targets[0].workspace_fingerprint()
+    );
+    assert_ne!(
+        moved.route_fingerprint(),
+        binding.targets[0].route_fingerprint()
+    );
+}

@@ -11,6 +11,10 @@ targets, its signed framing under the CA key, a certificate request `44…` for 
 from two source addresses for eight hours, and an `SshAccessUpdate` that reports the request
 active with one admitted and one unreachable server.
 
+`target-route-db`, `target-workspace-db` and `target-credential` are the session access of the
+first bound server (contract ADR 0011): its route and workspace fingerprints and the binding's
+credential revision, each a SHA-256 over a labelled layout (see `generate.py`).
+
 Canonical fields are big-endian with u32 byte-length prefixes, u8 counts, closed numeric tags
 and exact EOF (contract ADR 0009). The signed framing is field(signing bytes) ‖ Ed25519
 signature by the CA key.

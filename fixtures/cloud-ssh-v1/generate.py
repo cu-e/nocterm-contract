@@ -45,7 +45,19 @@ access = (field(b"nocterm/cloud-ssh-access/v1") + bytes([0x33]) * 16 + pack(">Q"
           + b"\x02" + bytes([0x44]) * 16 + pack(">q", ISSUED + 8 * HOUR)
           + b"\x02" + db + b"\x01" + cache + b"\x02")
 
+# A bound server as a session target (contract ADR 0011).
+db_key = bytes([0xa1]) * 32
+route = sha256(field(b"nocterm/cloud-ssh-target-route/v1") + db + text("db.example.org")
+               + pack(">H", 22) + text("deploy") + db_key).digest()
+workspace = sha256(field(b"nocterm/cloud-ssh-target-workspace/v1") + db + text("deploy")
+                   + db_key).digest()
+credential = sha256(field(b"nocterm/cloud-ssh-target-credential/v1") + bytes([0x33]) * 16
+                    + pack(">Q", ISSUED) + public(ca)).digest()
+
 for name, value in {
+    "target-route-db": route,
+    "target-workspace-db": workspace,
+    "target-credential": credential,
     "ca-public": public(ca),
     "subject-public": public(subject),
     "server-db": db,
