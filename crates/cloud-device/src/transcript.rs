@@ -13,7 +13,7 @@ pub mod ssh;
 mod types;
 
 pub use delta::TranscriptDelta;
-pub use ssh::{BindingState, ChatSsh, PendingSshRequest};
+pub use ssh::{BindingState, ChatSsh, PendingSshRequest, SessionTarget};
 pub use types::{
     ApprovalRequest, CommandState, PendingCommand, PendingKind, Role, RunState, SessionCall,
     SessionStatus, ToolCall, ToolOutcome, ToolStatus, TranscriptRow,

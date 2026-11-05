@@ -34,6 +34,7 @@ use crate::{
 };
 use nocterm_hub_model::cloud::{
     RunCoordinate, events::CloudRunStatus, head::HeadValue, payload::ApprovalChoice,
+    ssh::SshServerId,
 };
 use nocterm_keys::CollectionKey;
 use std::sync::Arc;
@@ -78,10 +79,13 @@ pub struct ModelChoice {
 /// What the person asks of an open chat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatAction {
-    /// A prompt; without a model, the latest run's.
+    /// A prompt; without a model, the latest run's. With a `server`, it runs against that bound
+    /// server ([`crate::transcript::ChatSsh::session_targets`]); without one, at the runner's
+    /// default destination.
     Prompt {
         text: String,
         model: Option<ModelChoice>,
+        server: Option<SshServerId>,
     },
     /// Stop a run; without one, the active run.
     Stop {
@@ -231,6 +235,10 @@ impl OpenChat {
         self.0
             .with(|reading, _| SshAnswer::for_chat(reading.parts(), request, now_ms))
     }
+    /// The bound servers a prompt may name now (`ChatAction::Prompt { server }`).
+    pub fn session_targets(&self, now_ms: i64) -> Vec<crate::transcript::SessionTarget> {
+        self.transcript().ssh().session_targets(now_ms)
+    }
     /// Applies the outcome of a delivery of this chat; a receipt probes the runner again.
     pub fn delivery(&mut self, update: &DeliveryUpdate) {
         self.0.with(|reading, _| {
@@ -323,8 +331,16 @@ impl Reading {
         let run_state = |id: &[u8; 16]| transcript.run_by_id(id).ok_or(CloudDeviceError::NoRun);
         let policy;
         let (command_action, kind, text, run) = match action {
-            ChatAction::Prompt { text, model } => {
-                policy = prompt_policy(transcript, model.as_ref())?;
+            ChatAction::Prompt {
+                text,
+                model,
+                server,
+            } => {
+                policy = match server {
+                    Some(server) => prompt_policy(transcript, model.as_ref())?
+                        .with_target(transcript.ssh().session_target(server, now_ms)?.access),
+                    None => prompt_policy(transcript, model.as_ref())?,
+                };
                 (
                     CommandAction::Prompt {
                         policy: &policy,

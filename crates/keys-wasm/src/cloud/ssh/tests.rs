@@ -194,6 +194,7 @@ fn every_ssh_refusal_has_its_own_stable_code() {
         R::SubjectKeyChanged,
         R::NoTrustedServer,
         R::NotBound,
+        R::NotSelectable,
     ];
     let codes: Vec<&str> = all
         .iter()
@@ -268,6 +269,13 @@ fn a_recorded_certificate_request_is_answered_for_the_admitted_server_and_turns_
         ]
     );
     assert_eq!(wire.requests[0].request_id, request_id);
+    let targets = chat.targets(NOW_MS).unwrap();
+    let selectable: Vec<_> = targets
+        .iter()
+        .map(|t| (t.host.as_str(), t.port, t.active))
+        .collect();
+    assert_eq!(selectable, [("10.0.0.5", 2222, false)]);
+    assert_eq!(targets[0].server_id, bound.servers[0].server_id);
 
     let mut answer = chat.answering(&request_id, NOW_MS).unwrap();
     let (outputs, last, _) = drive(&mut answer, &mut hub, NOW_MS);
@@ -294,6 +302,7 @@ fn a_recorded_certificate_request_is_answered_for_the_admitted_server_and_turns_
     let wire = chat.ssh();
     assert_eq!(wire.bindings[0].access.as_deref(), Some("active"));
     assert!(wire.requests.is_empty());
+    assert!(chat.targets(NOW_MS).unwrap()[0].active);
 }
 
 #[test]

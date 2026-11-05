@@ -8,12 +8,19 @@
 //! runner reports a certificate for them, a newer request of the same binding arrives, or the
 //! binding is revoked, refused or expires. This is display and answer-eligibility data; the
 //! answering device still checks the CA, the trusted servers and the time itself.
+//!
+//! The servers of the current binding that the runner admitted are the chat's selectable session
+//! targets ([`ChatSsh::session_targets`], contract ADR 0011): a prompt names one with its
+//! [`TargetAccess`], which the runner matches against the binding it admitted.
 use super::codec::{Reader, Writer};
 use crate::{CloudDeviceError, error::SshRefusal};
 use nocterm_hub_model::cloud::{
     events::CloudEventPayload,
-    payload::GrantReference,
-    ssh::{SignedSshBinding, SshAccess, SshAccessUpdate, SshCertificateRequest},
+    payload::{GrantReference, TargetAccess},
+    ssh::{
+        SignedSshBinding, SshAccess, SshAccessUpdate, SshCertificateRequest, SshServerId,
+        SshServerReach,
+    },
 };
 
 /// Bindings remembered per chat; the oldest goes first.
@@ -78,6 +85,19 @@ pub struct PendingSshRequest {
     pub at_ms: u64,
 }
 
+/// A bound server a prompt may run against: its binding entry, the session access that names
+/// it, and whether a certificate is active now (otherwise the runner waits for an account
+/// device to answer its request before it signs in).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionTarget {
+    pub server: SshServerId,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub access: TargetAccess,
+    pub active: bool,
+}
+
 /// The chat's SSH bindings and open requests.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChatSsh {
@@ -131,6 +151,62 @@ impl ChatSsh {
             return Err(SshRefusal::SubjectKeyChanged);
         }
         Ok(asked)
+    }
+    /// The bound servers a prompt may name at `now_ms`, in binding order: those of the current
+    /// binding, inside its window, that the runner admitted (its latest report names them
+    /// admitted, or before a report, its open request asks for them).
+    pub fn session_targets(&self, now_ms: i64) -> Vec<SessionTarget> {
+        let Some(state) = self.current() else {
+            return Vec::new();
+        };
+        let Some(binding) = state.binding().map(SignedSshBinding::binding) else {
+            return Vec::new();
+        };
+        if !binding.window.contains(now_ms) {
+            return Vec::new();
+        }
+        let active = state.update.as_ref().is_some_and(|update| {
+            matches!(update.access, SshAccess::Active { valid_before_ms, .. } if valid_before_ms > now_ms)
+        });
+        let admitted = |server: &SshServerId| match &state.update {
+            Some(update) => update
+                .servers
+                .iter()
+                .any(|status| &status.server == server && status.reach == SshServerReach::Admitted),
+            None => self.requests.iter().any(|pending| {
+                pending.request.binding.binding().grant == state.grant
+                    && pending.request.servers.contains(server)
+            }),
+        };
+        binding
+            .targets
+            .iter()
+            .filter(|target| admitted(&target.server))
+            .filter_map(|target| {
+                Some(SessionTarget {
+                    server: target.server,
+                    host: target.host.as_str().to_owned(),
+                    port: target.port,
+                    user: target.user.as_str().to_owned(),
+                    access: binding.target_access(&target.server)?,
+                    active,
+                })
+            })
+            .collect()
+    }
+    /// The session target of bound server `server` at `now_ms`.
+    pub fn session_target(
+        &self,
+        server: &SshServerId,
+        now_ms: i64,
+    ) -> Result<SessionTarget, SshRefusal> {
+        if self.current().and_then(BindingState::binding).is_none() {
+            return Err(SshRefusal::NotBound);
+        }
+        self.session_targets(now_ms)
+            .into_iter()
+            .find(|target| &target.server == server)
+            .ok_or(SshRefusal::NotSelectable)
     }
     fn state(&self, grant: &[u8; 16]) -> Option<&BindingState> {
         self.bindings.iter().find(|state| &state.grant.id == grant)

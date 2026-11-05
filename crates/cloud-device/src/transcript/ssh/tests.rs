@@ -7,7 +7,7 @@ use crate::{
     error::SshRefusal,
     testing::{
         NOW, World,
-        ssh::{GRANT, SUBJECT, binding, ca, reported, request, requested},
+        ssh::{GRANT, SUBJECT, binding, ca, reported, reported_reach, request, requested, server},
     },
     transcript::{
         Transcript,
@@ -146,4 +146,47 @@ fn the_bindings_and_open_requests_survive_a_checkpoint() {
     assert_eq!(restored.ssh(), transcript.ssh());
     let mut truncated = Reader(&out.0[..out.0.len() - 1]);
     assert!(Transcript::decode(&mut truncated).is_err());
+}
+
+#[test]
+fn the_session_targets_are_the_admitted_servers_of_the_current_binding() {
+    let world = World::new();
+    let mut transcript = Transcript::new();
+    assert!(transcript.ssh().session_targets(NOW).is_empty());
+    assert_eq!(
+        transcript.ssh().session_target(&server("db"), NOW),
+        Err(SshRefusal::NotBound)
+    );
+    // Before a report, the open request names what the runner admitted.
+    requested_once(&world, &mut transcript, 1, GRANT);
+    let signed = binding(&world, &ca(), GRANT, &["db", "cache"]);
+    let targets = transcript.ssh().session_targets(NOW);
+    assert_eq!(targets.len(), 1);
+    let db = &targets[0];
+    assert_eq!((db.server, db.port, db.active), (server("db"), 22, false));
+    assert_eq!(
+        (db.host.as_str(), db.user.as_str()),
+        ("db.example.org", "deploy")
+    );
+    assert_eq!(
+        Some(&db.access),
+        signed.binding().target_access(&server("db")).as_ref()
+    );
+    assert_eq!(
+        transcript.ssh().session_target(&server("cache"), NOW),
+        Err(SshRefusal::NotSelectable)
+    );
+    // A report decides; an active certificate is shown as such until it lapses.
+    let active = SshAccess::Active {
+        request: [1; 16],
+        valid_before_ms: NOW + 10,
+    };
+    transcript.apply(&reported_reach(2, GRANT, active, &["db"], &["cache"]));
+    let ssh = transcript.ssh();
+    assert!(ssh.session_target(&server("db"), NOW).unwrap().active);
+    assert!(!ssh.session_target(&server("db"), NOW + 10).unwrap().active);
+    let after = NOW - 1_000 + DEFAULT_BINDING_WINDOW_MS;
+    assert!(ssh.session_targets(after).is_empty());
+    transcript.apply(&reported(3, GRANT, SshAccess::Revoked));
+    assert!(transcript.ssh().session_targets(NOW).is_empty());
 }

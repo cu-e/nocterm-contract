@@ -134,6 +134,20 @@ pub struct WireSshRequest {
     pub not_after_ms: f64,
 }
 
+/// A bound server a prompt may name (`ChatActionInput.server = serverId`). `active`: a
+/// certificate is valid now; otherwise the runner waits for an account device to answer its
+/// request before it signs in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub struct WireSessionTarget {
+    pub server_id: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub active: bool,
+}
+
 /// The chat's SSH bindings, newest last, and its open certificate requests.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi)]
@@ -251,6 +265,7 @@ pub(super) fn refusal_code(refusal: SshRefusal) -> &'static str {
         SshRefusal::SubjectKeyChanged => "ssh_subject_key",
         SshRefusal::NoTrustedServer => "ssh_no_trusted_server",
         SshRefusal::NotBound => "ssh_not_bound",
+        SshRefusal::NotSelectable => "ssh_not_selectable",
     }
 }
 
@@ -310,6 +325,11 @@ impl WebChat {
     pub fn ssh(&self) -> WireSsh {
         WireSsh::from(self.open_chat().borrow().transcript().ssh())
     }
+    /// The bound servers a prompt may name at `nowMs`, in binding order.
+    #[wasm_bindgen(js_name = sessionTargets)]
+    pub fn session_targets(&self, now_ms: f64) -> Result<Vec<WireSessionTarget>, JsError> {
+        js(self.targets(now_ms))
+    }
     /// Binds the chat to `servers`, replacing its binding; outputs `sshBound`, then `delivery`.
     #[wasm_bindgen(js_name = bindServers)]
     pub fn bind_servers(
@@ -341,6 +361,22 @@ impl WebChat {
 }
 
 impl WebChat {
+    pub(crate) fn targets(&self, now_ms: f64) -> CloudResult<Vec<WireSessionTarget>> {
+        let now = millis(now_ms, "time")?;
+        Ok(self
+            .open_chat()
+            .borrow()
+            .session_targets(now)
+            .into_iter()
+            .map(|target| WireSessionTarget {
+                server_id: hex::encode(target.server.as_bytes()),
+                host: target.host,
+                port: target.port,
+                user: target.user,
+                active: target.active,
+            })
+            .collect())
+    }
     pub(crate) fn binding(
         &mut self,
         servers: Vec<SshServerInput>,

@@ -276,6 +276,7 @@ fn a_delivered_prompt_is_pending_until_accepted_and_then_asks_for_its_model_gran
             provider: MANAGED_PROVIDER.to_owned(),
             model: "m".to_owned(),
         }),
+        server: None,
     };
     let mut delivery = chat.deliver(&action, None, NOW).unwrap();
     let command = delivery.command_id();
@@ -334,6 +335,7 @@ fn commands_need_their_subject_in_the_verified_transcript() {
     let prompt = ChatAction::Prompt {
         text: "hi".to_owned(),
         model: None,
+        server: None,
     };
     assert!(matches!(
         chat.deliver(&prompt, None, NOW),
@@ -396,6 +398,7 @@ fn prompt() -> ChatAction {
             provider: MANAGED_PROVIDER.to_owned(),
             model: "m".to_owned(),
         }),
+        server: None,
     }
 }
 /// A prompt whose first publication had an unknown outcome, kept before the application quit.

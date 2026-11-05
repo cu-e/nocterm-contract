@@ -613,12 +613,17 @@ pub struct ModelInput {
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ChatActionInput {
-    /// Without a model, the latest run's.
+    /// Without a model, the latest run's. With `server` (32 hex, a `serverId` of
+    /// `sessionTargets`), the prompt runs against that bound server; without, at the runner's
+    /// default destination.
     Prompt {
         text: String,
         #[serde(default)]
         #[tsify(optional)]
         model: Option<ModelInput>,
+        #[serde(default)]
+        #[tsify(optional)]
+        server: Option<String>,
     },
     /// Without a run, the active run.
     Stop {

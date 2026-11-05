@@ -189,6 +189,7 @@ fn a_prompt_retries_identical_bytes_and_carries_the_latest_runs_model() {
     let action = ChatActionInput::Prompt {
         text: "and the disks?".to_owned(),
         model: None,
+        server: None,
     };
     let mut delivery = chat.delivery(action, None, NOW_MS).unwrap();
     assert_eq!(chat.transcript().pending.unwrap()[0].state, "sending");
@@ -272,6 +273,7 @@ fn a_prompt_without_a_model_or_too_long_for_one_frame_is_refused() {
     let prompt = |model: Option<ModelInput>| ChatActionInput::Prompt {
         text: "hi".to_owned(),
         model,
+        server: None,
     };
     assert_eq!(
         empty
@@ -292,6 +294,7 @@ fn a_prompt_without_a_model_or_too_long_for_one_frame_is_refused() {
     let long = ChatActionInput::Prompt {
         text: "x".repeat(20_000),
         model: Some(managed),
+        server: None,
     };
     let mut delivery = empty.delivery(long, None, NOW_MS).unwrap();
     let (_, last, _) = drive(&mut delivery, &mut hub, NOW_MS);
@@ -438,8 +441,19 @@ fn optional_input_fields_accept_an_explicit_absent_value() {
         serde_json::from_value(json!({ "kind": "prompt", "text": "hi", "model": null })).unwrap();
     assert!(matches!(
         prompt,
-        ChatActionInput::Prompt { model: None, .. }
+        ChatActionInput::Prompt {
+            model: None,
+            server: None,
+            ..
+        }
     ));
+    let bound: ChatActionInput = serde_json::from_value(
+        json!({ "kind": "prompt", "text": "hi", "server": "ab".repeat(16) }),
+    )
+    .unwrap();
+    assert!(
+        matches!(bound, ChatActionInput::Prompt { server: Some(s), .. } if s == "ab".repeat(16))
+    );
     let stop: ChatActionInput =
         serde_json::from_value(json!({ "kind": "stop", "run": null })).unwrap();
     assert!(matches!(stop, ChatActionInput::Stop { run: None }));

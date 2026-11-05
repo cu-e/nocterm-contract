@@ -20,6 +20,7 @@ use nocterm_cloud_device::{
     seat::WakeSeat,
     ssh::{BindServers, SshAnswer},
 };
+use nocterm_hub_model::cloud::ssh::SshServerId;
 use wasm_bindgen::prelude::*;
 
 use super::{
@@ -603,12 +604,19 @@ pub(crate) fn frame_of(frame: StreamFrame) -> Frame {
 
 fn action_of(action: ChatActionInput) -> CloudResult<ChatAction> {
     Ok(match action {
-        ChatActionInput::Prompt { text, model } => ChatAction::Prompt {
+        ChatActionInput::Prompt {
+            text,
+            model,
+            server,
+        } => ChatAction::Prompt {
             text,
             model: model.map(|model| ModelChoice {
                 provider: model.provider,
                 model: model.model,
             }),
+            server: server
+                .map(|server| hex_id(&server, "server id").map(SshServerId::from_bytes))
+                .transpose()?,
         },
         ChatActionInput::Stop { run } => ChatAction::Stop {
             run: run.map(|run| hex_id(&run, "run")).transpose()?,

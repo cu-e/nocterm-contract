@@ -7,7 +7,7 @@ use nocterm_hub_model::cloud::{
     ssh::{
         BindingWindow, DEFAULT_BINDING_WINDOW_MS, DEFAULT_CERTIFICATE_VALIDITY_MS,
         SignedSshBinding, SshAccess, SshAccessUpdate, SshBinding, SshCertificateRequest,
-        SshServerId, SshTarget,
+        SshServerId, SshServerReach, SshServerStatus, SshTarget,
     },
 };
 use nocterm_hub_model::{DeviceId, cloud::CloudTextId};
@@ -127,13 +127,34 @@ pub(crate) fn reported(
     grant: GrantReference,
     access: SshAccess,
 ) -> CloudEvent<'static> {
+    reported_reach(revision, grant, access, &[], &[])
+}
+/// An access state that reports `admitted` and `unreachable` servers.
+pub(crate) fn reported_reach(
+    revision: u64,
+    grant: GrantReference,
+    access: SshAccess,
+    admitted: &[&str],
+    unreachable: &[&str],
+) -> CloudEvent<'static> {
+    let status = |reach| {
+        move |profile: &&str| SshServerStatus {
+            server: server(profile),
+            reach,
+        }
+    };
+    let servers = admitted
+        .iter()
+        .map(status(SshServerReach::Admitted))
+        .chain(unreachable.iter().map(status(SshServerReach::Unreachable)))
+        .collect();
     CloudEvent {
         control_revision: revision,
         timestamp_ms: u64::try_from(NOW).unwrap() - 400,
         payload: CloudEventPayload::SshAccessState(Box::new(SshAccessUpdate {
             grant,
             access,
-            servers: Vec::new(),
+            servers,
         })),
     }
 }

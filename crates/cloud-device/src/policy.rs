@@ -6,7 +6,7 @@ use nocterm_hub_model::cloud::{
     CloudTextId, MAX_COMMAND_LIFETIME_MS,
     payload::{
         CloudCommandPayload, GrantPayload, GrantReference, GrantWindow, InferenceLimits,
-        ModelSelection, PromptPart, PromptPayload,
+        ModelSelection, PromptPart, PromptPayload, TargetAccess,
     },
 };
 
@@ -25,11 +25,13 @@ pub const DEFAULT_OUTPUT_TOKENS: u64 = 4096;
 pub const DEFAULT_SPEND_MICROS: u64 = 5_000_000;
 pub const DEFAULT_LIFETIME_MS: i64 = 10 * 60 * 1000;
 
-/// The bounds a prompt and its inference grant carry. No target and no session: the runner runs
-/// prompts at its configured default destination.
+/// The bounds a prompt and its inference grant carry, and where the prompt runs: the runner's
+/// configured default destination, or a bound server named by its session access
+/// ([`PromptPolicy::with_target`], contract ADR 0011). A prompt never names an existing session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptPolicy {
     model: ModelSelection,
+    target: Option<TargetAccess>,
     calls: u32,
     turns: u32,
     io_bytes: u64,
@@ -85,6 +87,7 @@ impl PromptPolicy {
         }
         Ok(Self {
             model,
+            target: None,
             calls: turns,
             turns,
             io_bytes,
@@ -95,6 +98,17 @@ impl PromptPolicy {
     }
     pub fn model(&self) -> &ModelSelection {
         &self.model
+    }
+    /// This policy for prompts that run against the session target `access` (a bound server's
+    /// [`crate::transcript::SessionTarget::access`]).
+    #[must_use]
+    pub fn with_target(mut self, access: TargetAccess) -> Self {
+        self.target = Some(access);
+        self
+    }
+    /// The session target prompts of this policy name; `None` for the runner's default.
+    pub fn target(&self) -> Option<&TargetAccess> {
+        self.target.as_ref()
     }
     /// How long a command of this policy may wait for admission.
     pub fn lifetime_ms(&self) -> i64 {
@@ -113,7 +127,7 @@ impl PromptPolicy {
         Ok(CloudCommandPayload::SubmitPrompt(Box::new(PromptPayload {
             content: vec![PromptPart::Text(text)],
             model: self.model.clone(),
-            target: None,
+            target: self.target.clone(),
             existing_session: None,
             inference: self.limits(deadline),
         })))

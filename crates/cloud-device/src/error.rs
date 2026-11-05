@@ -164,4 +164,6 @@ pub enum SshRefusal {
     NoTrustedServer,
     #[error("the chat has no SSH binding")]
     NotBound,
+    #[error("the server is not a bound server this chat's runner admitted")]
+    NotSelectable,
 }

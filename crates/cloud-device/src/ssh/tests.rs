@@ -376,3 +376,41 @@ fn a_request_signed_by_another_runner_key_never_reaches_an_answer() {
         Err(CloudDeviceError::Ssh(SshRefusal::UnknownRequest))
     ));
 }
+
+#[test]
+fn a_prompt_naming_a_bound_server_carries_its_session_access_and_others_are_refused() {
+    let (mut hub, key) = ssh_hub(&trusted());
+    let signed = binding(&hub.world, &ca(), GRANT, &["db", "cache"]);
+    let access = signed.binding().target_access(&server("db")).unwrap();
+    events(
+        &mut hub,
+        &key,
+        &[requested(1, request(signed, 1, SUBJECT, &["db"]))],
+    );
+    let (mut chat, _) = open(&mut hub);
+    assert_eq!(chat.session_targets(NOW)[0].access, access);
+    let prompt = |server| crate::open::ChatAction::Prompt {
+        text: "deploy".to_owned(),
+        model: Some(crate::open::ModelChoice {
+            provider: crate::policy::MANAGED_PROVIDER.to_owned(),
+            model: "m".to_owned(),
+        }),
+        server,
+    };
+    assert!(matches!(
+        chat.deliver(&prompt(Some(server("cache"))), None, NOW),
+        Err(CloudDeviceError::Ssh(SshRefusal::NotSelectable))
+    ));
+    let mut delivery = chat
+        .deliver(&prompt(Some(server("db"))), None, NOW)
+        .unwrap();
+    let (_, ended) = hub.run(&mut delivery, NOW);
+    assert!(matches!(ended, Ended::Done));
+    let (target, session) = published(&hub, |payload| match payload {
+        CloudCommandPayload::SubmitPrompt(prompt) => {
+            (prompt.target.clone(), prompt.existing_session.clone())
+        }
+        _ => panic!("a prompt"),
+    });
+    assert_eq!((target, session), (Some(access), None));
+}
