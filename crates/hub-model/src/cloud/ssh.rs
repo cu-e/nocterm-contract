@@ -59,6 +59,24 @@ pub const MAX_SIGNED_BINDING_BYTES: usize = MAX_BINDING_BYTES + 4 + 64;
 /// The largest certificate request.
 pub const MAX_REQUEST_BYTES: usize = MAX_SIGNED_BINDING_BYTES + 1024;
 
+/// Whether `entry` is a source address a runner may state: an IPv4 or IPv6 address, optionally
+/// with a `/prefix` of at most 32 or 128 bits, in at most [`MAX_SOURCE_ADDRESS_BYTES`]. Host
+/// names are not addresses. Runners and nodes check their configured egress with it; a decoder
+/// of a request keeps applying only the character rule of [`SshCertificateRequest::validate`].
+pub fn is_source_address(entry: &str) -> bool {
+    let (address, prefix) = entry.split_once('/').unwrap_or((entry, ""));
+    let prefix_ok = |maximum: u8| {
+        prefix.is_empty()
+            || (!prefix.starts_with('+') && prefix.parse::<u8>().is_ok_and(|bits| bits <= maximum))
+    };
+    entry.len() <= MAX_SOURCE_ADDRESS_BYTES
+        && match address.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(_)) => prefix_ok(32),
+            Ok(std::net::IpAddr::V6(_)) => prefix_ok(128),
+            Err(_) => false,
+        }
+}
+
 /// One server of the account's `agent_ssh_trust` registry: the first 16 bytes of SHA-256 of the
 /// connection profile id the server was trusted through. Its registry object is
 /// `srv-<32 hex>` ([`SshServerId::object_id`]); its CA principal is derived from it and the CA
