@@ -71,7 +71,7 @@ pub enum ChatUpdate {
 mod action;
 pub use action::{
     ChatAction, MAX_PROMPT_IMAGE_BYTES, MAX_PROMPT_IMAGE_TOTAL_BYTES, MAX_PROMPT_IMAGES,
-    ModelChoice, PromptImage,
+    MAX_PROMPT_TEXT_BYTES, ModelChoice, PromptImage,
 };
 
 /// The `OpenChat` flow.
@@ -382,6 +382,7 @@ impl Reading {
             transcript.control_revision(),
             now_ms,
         )?;
+        command.require_publication(self.session.capabilities())?;
         self.reader.transcript_mut().track(PendingCommand {
             command_id: command.command_id(),
             kind,

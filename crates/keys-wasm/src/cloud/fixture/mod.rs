@@ -419,6 +419,9 @@ pub(super) fn replay(records: &[Value], after: u64) -> Vec<StreamFrame> {
 }
 
 fn capability_proof(nonce: [u8; 16]) -> (Vec<u8>, Vec<u8>) {
+    capability_proof_with_features(nonce, 0)
+}
+fn capability_proof_with_features(nonce: [u8; 16], extra: u64) -> (Vec<u8>, Vec<u8>) {
     let authority = DeviceKey::from_seed(&AUTHORITY_SEED);
     let claim = CapabilitiesClaim::new(
         CloudTextId::new(RAW_HUB).unwrap(),
@@ -428,7 +431,8 @@ fn capability_proof(nonce: [u8; 16]) -> (Vec<u8>, Vec<u8>) {
                 | CLOUD_FEATURE_FRESH_HEAD
                 | CLOUD_FEATURE_UNARY_PUBLISH
                 | CLOUD_FEATURE_CHAT_KEY_MATERIAL
-                | CLOUD_FEATURE_CHAT_DIRECTORY,
+                | CLOUD_FEATURE_CHAT_DIRECTORY
+                | extra,
             ..CapabilityLimits::v1()
         },
         nonce,
@@ -682,6 +686,7 @@ fn generate() -> Value {
         "collections": collections,
         "objects": objects,
         "capabilities": recorder.capabilities,
+        "fragmentedCapabilities": fragmented_capabilities(&recorder.capabilities),
         "probeReplies": recorder.replies,
         "chat": {
             "chatId": chat_id,
@@ -699,6 +704,36 @@ fn generate() -> Value {
         "own": own,
         "ssh": ssh,
     })
+}
+
+fn fragmented_capabilities(original: &Map<String, Value>) -> Map<String, Value> {
+    original
+        .keys()
+        .map(|nonce| {
+            let (claim, signature) = capability_proof_with_features(
+                hex::decode(nonce).unwrap().try_into().unwrap(),
+                nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRAGMENTED_PUBLISH,
+            );
+            (
+                nonce.clone(),
+                json!({"claim": hex::encode(claim), "signature": hex::encode(signature)}),
+            )
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "adds the additive signed fragmented-publication capability proofs"]
+fn write_fragmented_capability_fixture() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/cloud-device-v1/web-session.json"
+    );
+    let mut session = replay::recorded();
+    session["fragmentedCapabilities"] = Value::Object(fragmented_capabilities(
+        session["capabilities"].as_object().unwrap(),
+    ));
+    std::fs::write(path, serde_json::to_string_pretty(&session).unwrap() + "\n").unwrap();
 }
 
 #[test]

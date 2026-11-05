@@ -127,6 +127,10 @@ impl CloudHarness {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_UNARY_PUBLISH;
     }
+    pub fn enable_fragmented_publish(&self) {
+        lock(&self.state).additional_capabilities |=
+            nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRAGMENTED_PUBLISH;
+    }
     pub fn enable_head_probes(&self) {
         lock(&self.state).additional_capabilities |=
             nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRESH_HEAD;
@@ -214,6 +218,14 @@ type Hints = Pin<Box<dyn Stream<Item = Result<v1::CloudHint, Status>> + Send>>;
 
 #[tonic::async_trait]
 impl CloudService for CloudPeer {
+    async fn publish_fragment(
+        &self,
+        _request: Request<v1::CloudPublishFragment>,
+    ) -> Reply<v1::CloudPublishProgress> {
+        Err(Status::unimplemented(
+            "fragment persistence is tested by the hub backend",
+        ))
+    }
     async fn probe_head(
         &self,
         request: Request<v1::CloudHeadProbe>,
@@ -348,6 +360,9 @@ impl CloudService for CloudPeer {
         &self,
         request: Request<Streaming<v1::CloudPublishFrame>>,
     ) -> Reply<v1::CloudDeliveryReceipt> {
+        if let Some(proof) = DeviceProof::of("Publish", &request) {
+            lock(&self.0.state).proofs.push(proof);
+        }
         let mut stream = request.into_inner();
         let Some(Some(Frame::Header(header))) = stream.next().await.transpose()?.map(|f| f.frame)
         else {

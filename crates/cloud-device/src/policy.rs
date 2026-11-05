@@ -3,7 +3,10 @@
 //! was accepted, for half the inference lifetime so it stays inside the prompt's window).
 use crate::{
     CloudDeviceError,
-    open::{MAX_PROMPT_IMAGE_BYTES, MAX_PROMPT_IMAGE_TOTAL_BYTES, MAX_PROMPT_IMAGES, PromptImage},
+    open::{
+        MAX_PROMPT_IMAGE_BYTES, MAX_PROMPT_IMAGE_TOTAL_BYTES, MAX_PROMPT_IMAGES,
+        MAX_PROMPT_TEXT_BYTES, PromptImage,
+    },
 };
 use nocterm_hub_model::cloud::{
     CloudTextId, MAX_COMMAND_LIFETIME_MS,
@@ -133,7 +136,8 @@ impl PromptPolicy {
         images: &'a [PromptImage],
         issued_at_ms: i64,
     ) -> Result<CloudCommandPayload<'a>, CloudDeviceError> {
-        if images.len() > MAX_PROMPT_IMAGES
+        if text.len() > MAX_PROMPT_TEXT_BYTES
+            || images.len() > MAX_PROMPT_IMAGES
             || images
                 .iter()
                 .any(|image| image.bytes.is_empty() || image.bytes.len() > MAX_PROMPT_IMAGE_BYTES)

@@ -35,6 +35,8 @@ pub enum CloudDeviceError {
     ObjectVersion(u64),
     #[error("the hub does not offer the Cloud feature this operation needs")]
     Unsupported,
+    #[error("update the Cloud hub to send prompts and images larger than one relay frame")]
+    LargePublicationUnsupported,
     #[error("the signature does not verify under the device key named in the signed bytes")]
     Signature(#[source] SignatureError),
     #[error("the signed-in session ends before the operation's deadline")]

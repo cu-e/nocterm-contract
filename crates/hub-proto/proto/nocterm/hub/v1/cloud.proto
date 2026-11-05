@@ -21,6 +21,9 @@ service CloudService {
   // (<=16KiB), for clients without request streaming. Identical to Publish with one data frame
   // and the finished marker, with the same idempotency by publication_id.
   rpc PublishOne(CloudPublishOne) returns (CloudDeliveryReceipt);
+  // Capability bit 512, device only: a publication in sequential bounded unary fragments.
+  // The immutable header and authenticated publisher are repeated on every request.
+  rpc PublishFragment(CloudPublishFragment) returns (CloudPublishProgress);
   rpc Replay(CloudReplayRequest) returns (stream CloudReplayFrame);
   rpc Acknowledge(CloudAcknowledge) returns (CloudAcknowledged);
   rpc Watch(CloudWatchRequest) returns (stream CloudHint);
@@ -102,6 +105,19 @@ message CloudPublishFinished {} // Followed only by request EOF; otherwise refus
 message CloudPublishOne {
   CloudPublication header = 1;
   bytes data = 2; // Exactly header.total_bytes, nonempty, <=16KiB; digest must match.
+}
+message CloudPublishFragment {
+  CloudPublication header = 1;
+  uint32 offset = 2;
+  // Nonempty <=16KiB. Empty only for finish=true at offset=header.total_bytes.
+  bytes data = 3;
+  bool finish = 4; // Requires complete length and digest; returns a durable receipt or fails.
+}
+message CloudPublishProgress {
+  // At least the submitted end, at most total; no receipt implies staged bytes only.
+  uint32 next_offset = 1;
+  // A completed identical publication may return its original receipt on any fragment.
+  CloudDeliveryReceipt receipt = 2;
 }
 message CloudDeliveryReceipt {
   bytes publication_id = 1;

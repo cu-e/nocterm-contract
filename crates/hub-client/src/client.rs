@@ -215,6 +215,11 @@ impl HubClient {
     pub async fn publish_one(&self, publication: &Publication) -> Result<Input, CloudCallError> {
         Calls::of(self).await?.publish_one(publication).await
     }
+    /// Publishes exactly the captured ciphertext, streaming negotiated-size frames when the
+    /// logical publication exceeds one frame. Lost answers retain the original retry identity.
+    pub async fn publish(&self, publication: &Publication) -> Result<Input, CloudCallError> {
+        Calls::of(self).await?.publish(publication).await
+    }
 
     /// `CloudService.Replay` (`Effect::Replay`): the frames to hand to `Flow::frame`.
     pub async fn replay(

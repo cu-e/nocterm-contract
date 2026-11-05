@@ -429,6 +429,8 @@ pub(crate) fn wire_effect(effect: Effect) -> WireEffect {
                 ciphertext_sha256: publication.ciphertext_sha256().to_vec(),
             },
             data: publication.ciphertext().to_vec(),
+            max_frame_bytes: (publication.total_bytes() > publication.max_frame_bytes())
+                .then_some(publication.max_frame_bytes()),
         },
         Effect::StartInstance {
             agent_id,

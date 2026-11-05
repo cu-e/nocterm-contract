@@ -27,15 +27,15 @@ use crate::{
     trust::HubCapabilities,
 };
 use nocterm_hub_model::cloud::{
-    RunCoordinate,
-    relay::{MAX_RELAY_BINDING_BYTES, MAX_RELAY_FRAME_BYTES, RelayBinding},
+    MAX_ENVELOPE_BYTES, RunCoordinate,
+    relay::{MAX_RELAY_BINDING_BYTES, RelayBinding},
 };
 
 const LABEL: &[u8] = b"nocterm/cloud-device-command/v1";
-/// The largest plaintext of a stored command: one relay frame of ciphertext, its binding, a
-/// prompt text of at most one frame and the fixed fields.
+/// A logical command ciphertext, its binding, bounded pending prompt text and fixed fields.
+/// Format 1 framing is unchanged; transport frames do not bound the stored logical ciphertext.
 pub const MAX_STORED_COMMAND_PLAINTEXT_BYTES: usize =
-    2 * MAX_RELAY_FRAME_BYTES + MAX_RELAY_BINDING_BYTES + 512;
+    MAX_ENVELOPE_BYTES + crate::open::MAX_PROMPT_TEXT_BYTES + MAX_RELAY_BINDING_BYTES + 512;
 
 /// A sealed, signed command and its pending row as the client keeps them (a private file,
 /// IndexedDB). Opaque bytes; the client files it under the chat and
@@ -88,6 +88,9 @@ pub(crate) fn store(
     pending: &PendingCommand,
 ) -> Result<StoredCommand, CloudDeviceError> {
     let publication = sealed.publication();
+    if pending.text.len() > crate::open::MAX_PROMPT_TEXT_BYTES {
+        return Err(CloudDeviceError::Capacity);
+    }
     let mut out = Writer(LABEL.to_vec());
     out.bytes(&pending.command_id);
     out.bytes(&publication.publication_id());
@@ -139,13 +142,15 @@ pub(crate) fn open(
     let publication_id = input.array().map_err(refused)?;
     let length = input.len(MAX_RELAY_BINDING_BYTES).map_err(refused)?;
     let binding = RelayBinding::from_canonical_bytes(input.take(length).map_err(refused)?)?;
-    let length = input.len(MAX_RELAY_FRAME_BYTES).map_err(refused)?;
+    let length = input.len(MAX_ENVELOPE_BYTES).map_err(refused)?;
     let ciphertext = input.take(length).map_err(refused)?.to_vec();
     let semantic_digest = input.array().map_err(refused)?;
     let expected_control_revision = input.u64().map_err(refused)?;
     let accept_before_ms = input.i64().map_err(refused)?;
     let kind = kind_of(input.u8().map_err(refused)?)?;
-    let length = input.len(MAX_RELAY_FRAME_BYTES).map_err(refused)?;
+    let length = input
+        .len(crate::open::MAX_PROMPT_TEXT_BYTES)
+        .map_err(refused)?;
     let text = std::str::from_utf8(input.take(length).map_err(refused)?)
         .map_err(|_| CloudDeviceError::StoredCommand)?
         .to_owned();

@@ -91,6 +91,22 @@ impl HubCapabilities {
     pub fn unary_publish(&self) -> bool {
         self.limits.features & CLOUD_FEATURE_UNARY_PUBLISH != 0
     }
+    pub fn fragmented_publish(&self) -> bool {
+        self.limits.features
+            & nocterm_hub_model::cloud::capabilities::CLOUD_FEATURE_FRAGMENTED_PUBLISH
+            != 0
+    }
+    pub(crate) fn require_publication(&self, bytes: usize) -> Result<(), CloudDeviceError> {
+        self.require_commands()?;
+        let bytes = u32::try_from(bytes).map_err(|_| CloudDeviceError::Capacity)?;
+        if bytes == 0 || bytes > self.limits.max_envelope_bytes {
+            return Err(CloudDeviceError::Capacity);
+        }
+        if bytes > self.limits.max_frame_bytes && !self.fragmented_publish() {
+            return Err(CloudDeviceError::LargePublicationUnsupported);
+        }
+        Ok(())
+    }
     /// Chat key grants, which creating a chat needs.
     pub fn chat_key_material(&self) -> bool {
         self.limits.features & CLOUD_FEATURE_CHAT_KEY_MATERIAL != 0

@@ -91,6 +91,11 @@ impl Replayer {
             published: Vec::new(),
         }
     }
+    pub(in crate::cloud) fn with_fragmented_publish() -> Self {
+        let mut hub = Self::new();
+        hub.session["capabilities"] = hub.session["fragmentedCapabilities"].clone();
+        hub
+    }
     /// With the account's `agent_ssh_trust` collection, and the later text record and the
     /// chat's SSH records in the stream (what a new open reads to announce the runner's
     /// certificate request).

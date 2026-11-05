@@ -725,13 +725,19 @@ client typed effects (`flow::Effect`: sign, Store reads and writes, capability p
 probe, replay, watch, publish, start a seat, list seats, runner status) and take the answers,
 so the client keeps only the network, storage and the device key. A `Sign` effect carries a
 `flow::SignRequest` that only the core makes; `HubClient::sign_cloud` signs nothing else. The
-Cloud effects map one to one to `HubClient::{capabilities, probe_head, publish_one, replay,
+Cloud effects map one to one to `HubClient::{capabilities, probe_head, publish, replay,
 watch, runner_status}`, which send exactly the core's bytes under the client's own signer and
 token refresh and answer with the core's `Input`/`Frame` values or a `CloudCallError` and its
 `EffectFailure`; no client signs request proofs itself
 ([ADR 0010](docs/adr/0010-device-transport-and-resumable-commands.md)). A seat is woken only
 through the pool of the agent's enrolled seat (`seat::hosting_seat`; `ListInstances`, then
 `StartInstance { pool_id }`), so a chat never provisions one.
+Logical publications larger than a negotiated relay frame require optional capability
+512. Native publication streams bounded frames; browsers use `PublishFragment` with
+the same immutable header, offset and ciphertext digest. Frame and protobuf limits
+remain 16 KiB and 32 KiB. Exact command-size admission precedes pending state, and
+stored-command format 1 retains the same encrypted body across restart
+([ADR 0014](docs/adr/0014-bounded-fragments-for-logical-device-publications.md)).
 `reader::ChatReader` resumes from a sealed device checkpoint (version 1; the key is
 `nocterm_keys::cloud::CheckpointKey`, derived from the account key, purpose 21) and reports
 `Opening` (no round finished yet), `Current`, `Unconfirmed` (the runner did not answer: a

@@ -302,6 +302,9 @@ impl Calls {
         mut self,
         publication: &Publication,
     ) -> Result<Input, CloudCallError> {
+        if publication.total_bytes() > publication.max_frame_bytes() {
+            return Err(CloudCallError::Protocol);
+        }
         let binding = publication.binding().map_err(CloudCallError::Publication)?;
         let receipt = self
             .0
@@ -318,14 +321,36 @@ impl Calls {
             .await
             .map_err(|status| CloudCallError::status(status, true))?
             .into_inner();
-        if receipt.publication_id.len() != 16 || receipt.ciphertext_sha256.len() != 32 {
-            return Err(CloudCallError::Protocol);
+        publication_receipt(publication, receipt)
+    }
+    pub(crate) async fn publish(
+        mut self,
+        publication: &Publication,
+    ) -> Result<Input, CloudCallError> {
+        if publication.total_bytes() <= publication.max_frame_bytes() {
+            return self.publish_one(publication).await;
         }
-        Ok(Input::Receipt {
-            publication_id: receipt.publication_id,
-            cursor: receipt.cursor,
-            ciphertext_sha256: receipt.ciphertext_sha256,
-        })
+        let frames = PublicationFrames {
+            header: Some(v1::CloudPublication {
+                publication_id: publication.publication_id().to_vec(),
+                binding: publication.binding().map_err(CloudCallError::Publication)?,
+                total_bytes: publication.total_bytes(),
+                ciphertext_sha256: publication.ciphertext_sha256().to_vec(),
+                retry_until_ms: 0,
+            }),
+            publication: publication.clone(),
+            frame_bytes: usize::try_from(publication.max_frame_bytes())
+                .map_err(|_| CloudCallError::Protocol)?,
+            offset: 0,
+            finished: false,
+        };
+        let receipt = self
+            .0
+            .publish(tokio_stream::iter(frames))
+            .await
+            .map_err(|status| CloudCallError::status(status, true))?
+            .into_inner();
+        publication_receipt(publication, receipt)
     }
     pub(crate) async fn replay(
         mut self,
@@ -385,6 +410,56 @@ impl Calls {
             signed_status: status.signed_status,
         })
     }
+}
+
+/// The RPC consumer pulls one bounded frame at a time. The captured ciphertext is shared;
+/// neither the full body nor an eager collection of fragments is copied for streaming.
+struct PublicationFrames {
+    publication: Publication,
+    header: Option<v1::CloudPublication>,
+    offset: usize,
+    frame_bytes: usize,
+    finished: bool,
+}
+impl Iterator for PublicationFrames {
+    type Item = v1::CloudPublishFrame;
+    fn next(&mut self) -> Option<Self::Item> {
+        use v1::cloud_publish_frame::Frame;
+        let frame = if let Some(header) = self.header.take() {
+            Frame::Header(header)
+        } else if self.offset < self.publication.ciphertext().len() {
+            let end = self
+                .offset
+                .saturating_add(self.frame_bytes)
+                .min(self.publication.ciphertext().len());
+            let data = self.publication.ciphertext()[self.offset..end].to_vec();
+            self.offset = end;
+            Frame::Data(data)
+        } else if !self.finished {
+            self.finished = true;
+            Frame::Finished(v1::CloudPublishFinished {})
+        } else {
+            return None;
+        };
+        Some(v1::CloudPublishFrame { frame: Some(frame) })
+    }
+}
+fn publication_receipt(
+    publication: &Publication,
+    receipt: v1::CloudDeliveryReceipt,
+) -> Result<Input, CloudCallError> {
+    if !publication.is_receipt(
+        &receipt.publication_id,
+        receipt.cursor,
+        &receipt.ciphertext_sha256,
+    ) {
+        return Err(CloudCallError::Protocol);
+    }
+    Ok(Input::Receipt {
+        publication_id: receipt.publication_id,
+        cursor: receipt.cursor,
+        ciphertext_sha256: receipt.ciphertext_sha256,
+    })
 }
 
 #[cfg(test)]

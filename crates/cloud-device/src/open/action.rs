@@ -6,6 +6,8 @@ use std::{fmt, sync::Arc};
 pub const MAX_PROMPT_IMAGES: usize = 8;
 pub const MAX_PROMPT_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_PROMPT_IMAGE_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+/// Prompt text remains bounded independently of inline images and logical publications.
+pub const MAX_PROMPT_TEXT_BYTES: usize = 16 * 1024;
 
 /// Immutable inline bytes. Debug reports only their length.
 #[derive(Clone, PartialEq, Eq)]

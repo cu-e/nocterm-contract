@@ -142,7 +142,10 @@ fn accepted<T>(
     account: &WebAccount,
     read: impl FnOnce(&CloudCommandPayload<'_>) -> T,
 ) -> (AcceptedCommand, T) {
-    let WireEffect::Publish { publication, data } = effect else {
+    let WireEffect::Publish {
+        publication, data, ..
+    } = effect
+    else {
         panic!("a publication");
     };
     let binding = RelayBinding::from_canonical_bytes(&publication.binding).unwrap();

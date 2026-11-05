@@ -25,6 +25,9 @@ pub const CLOUD_FEATURE_UNARY_PUBLISH: u64 = 128;
 /// relay kind 5 `Summary`, the hub keeping the latest summary per chat. A runner publishes
 /// summaries only to a hub that offers this bit; a device without it lists the catalog only.
 pub const CLOUD_FEATURE_CHAT_DIRECTORY: u64 = 256;
+/// Optional device-only bounded unary fragments for logical publications larger than a frame.
+/// Frames and the service wire limit remain unchanged; retries preserve one publication id.
+pub const CLOUD_FEATURE_FRAGMENTED_PUBLISH: u64 = 512;
 pub const CLOUD_REQUIRED_FEATURES: u64 = 1 | 2 | 4; // E2EE commands, replay, scoped runners.
 pub const MAX_CAPABILITY_CLAIM_BYTES: usize = 512;
 const MAX_WINDOW_MS: i64 = 60_000;

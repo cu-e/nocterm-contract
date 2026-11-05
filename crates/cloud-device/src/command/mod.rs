@@ -4,7 +4,7 @@
 //!    signs [`UnsignedCommand::signing_bytes`] with the device's Ed25519 key.
 //! 2. [`UnsignedCommand::seal`] verifies that signature under the device key the header names,
 //!    seals the command from the account key pair to the pinned runner and returns the
-//!    [`Publication`] to send with `CloudService.PublishOne`.
+//!    [`Publication`] to send in bounded relay frames.
 //!
 //! Keep the returned publication and resend exactly its bytes on retry: the publication id makes
 //! the hub's delivery idempotent and the expected chat revision stops a second admission. Across
@@ -26,6 +26,7 @@ use nocterm_hub_model::cloud::{
 };
 use nocterm_keys::{AccountKeyPair, PublicKey, cloud::seal_command, random_bytes};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub mod delivery;
@@ -288,15 +289,27 @@ impl UnsignedCommand {
     pub fn expected_control_revision(&self) -> u64 {
         self.header.context().expected_chat_revision
     }
+    pub(crate) fn require_publication(
+        &self,
+        capabilities: &HubCapabilities,
+    ) -> Result<(), CloudDeviceError> {
+        use nocterm_hub_model::cloud::{MAX_ENVELOPE_BYTES, MAX_PLAINTEXT_BYTES};
+        let bytes = self
+            .header
+            .plaintext_len()?
+            .checked_add(MAX_ENVELOPE_BYTES - MAX_PLAINTEXT_BYTES)
+            .ok_or(CloudDeviceError::Capacity)?;
+        capabilities.require_publication(bytes)
+    }
     /// Verifies the device signature and seals the command to the pinned runner. The ciphertext
-    /// must fit one relay frame, which `PublishOne` requires.
+    /// fits the logical envelope limit; transports split it into bounded frames when needed.
     pub fn seal(
         self,
         account: &AccountKeyPair,
         signature: &[u8],
         capabilities: &HubCapabilities,
     ) -> Result<SealedCommand, CloudDeviceError> {
-        capabilities.require_commands()?;
+        self.require_publication(capabilities)?;
         let signature: [u8; 64] = signature.try_into().map_err(|_| {
             CloudDeviceError::Signature(nocterm_keys::SignatureError::MalformedSignature)
         })?;
@@ -326,7 +339,7 @@ impl UnsignedCommand {
     }
 }
 
-/// A sealed command ready for `PublishOne`, with what a receipt probe later names.
+/// A sealed command ready for bounded publication, with what a receipt probe later names.
 #[derive(Clone, Debug)]
 pub struct SealedCommand {
     publication: Publication,
@@ -351,11 +364,12 @@ impl SealedCommand {
     }
 }
 
-/// One relay publication: `CloudPublishOne { header, data }` as plain parts.
+/// One logical relay publication. Its immutable ciphertext may span bounded transport frames.
 #[derive(Clone, Debug)]
 pub struct Publication {
     metadata: PublicationMetadata,
-    ciphertext: Vec<u8>,
+    ciphertext: Arc<[u8]>,
+    frame_bytes: u32,
 }
 impl Publication {
     pub(crate) fn new(
@@ -372,14 +386,13 @@ impl Publication {
         capabilities: &HubCapabilities,
     ) -> Result<Self, CloudDeviceError> {
         let total = u32::try_from(ciphertext.len()).map_err(|_| CloudDeviceError::Capacity)?;
-        if total > capabilities.limits().max_frame_bytes {
-            return Err(CloudDeviceError::Capacity);
-        }
+        capabilities.require_publication(ciphertext.len())?;
         let metadata =
             PublicationMetadata::new(id, binding, total, Sha256::digest(&ciphertext).into())?;
         Ok(Self {
             metadata,
-            ciphertext,
+            ciphertext: ciphertext.into(),
+            frame_bytes: capabilities.limits().max_frame_bytes,
         })
     }
     /// `CloudPublication.publication_id`.
@@ -393,6 +406,10 @@ impl Publication {
     /// `CloudPublication.total_bytes`.
     pub fn total_bytes(&self) -> u32 {
         self.metadata.total_bytes()
+    }
+    /// The signed negotiated transport frame bound, distinct from the logical envelope bound.
+    pub fn max_frame_bytes(&self) -> u32 {
+        self.frame_bytes
     }
     /// `CloudPublication.ciphertext_sha256`.
     pub fn ciphertext_sha256(&self) -> [u8; 32] {

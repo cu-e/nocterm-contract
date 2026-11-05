@@ -9,6 +9,8 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use nocterm_cloud_device::{
     command::{CommandAction, UnsignedCommand},
     flow::{EffectFailure, Frame, Input, ProbeRequest, StreamKind, StreamSelector},
+    open::PromptImage,
+    policy::PromptPolicy,
     probe::{ProbeTarget, UnsignedHeadProbe},
     records::{ChatSelector, HubTrustRecord, RunnerPins, TrustedRunner},
     trust::{HubCapabilities, TrustedHub},
@@ -17,6 +19,7 @@ use nocterm_hub_client::{CloudCallError, HubClient, cloud::CloudRunner, now_ms};
 use nocterm_hub_model::cloud::{
     CloudTextId, RunCoordinate, RunnerCoordinate,
     head::{CatalogHeadPage, HeadValue, HeadWitness},
+    payload::{CloudCommandPayload, ImageMime, PromptPart},
     runner_auth::RunnerProofSubject,
 };
 use nocterm_hub_proto::v1;
@@ -42,6 +45,106 @@ struct Device {
     pair: AccountKeyPair,
     hub: TrustedHub,
     capabilities: HubCapabilities,
+}
+
+#[tokio::test]
+async fn a_large_signed_image_uses_negotiated_frames_and_retries_its_original_publication()
+-> TestResult {
+    let hub = FakeHub::start_cloud().await;
+    let peer = hub.cloud().ok_or("fixture")?;
+    peer.enable_fragmented_publish();
+    peer.set_max_frame_bytes(4096);
+    let device = device(&hub).await?;
+    let runner = RunnerEncryptionKey::generate()?;
+    let selector = ChatSelector::new(
+        device.hub.scope().clone(),
+        RUNNER,
+        [5; 16],
+        1,
+        RunnerPins {
+            encryption: runner.public_key().to_bytes(),
+            signing: [0x51; 32],
+            proof: [0x71; 32],
+        },
+    )?;
+    let bytes = include_bytes!("../../cloud-device/tests/fixtures/prompt-large.png");
+    assert!(bytes.len() > 128 * 1024);
+    let images = [PromptImage {
+        mime: ImageMime::Png,
+        bytes: bytes.as_slice().into(),
+    }];
+    let policy = PromptPolicy::managed("second-model")?;
+    let command = UnsignedCommand::prepare(
+        &selector,
+        device.pair.public_key().to_bytes(),
+        &device.client.cloud_device()?,
+        CommandAction::PromptWithImages {
+            policy: &policy,
+            text: "",
+            images: &images,
+        },
+        0,
+        now_ms(),
+    )?;
+    let signature = device.client.sign_cloud(&command.sign_request()?)?;
+    let sealed = command.seal(&device.pair, &signature, &device.capabilities)?;
+    let publication = sealed.publication();
+    for _ in 0..2 {
+        let Input::Receipt {
+            publication_id,
+            cursor,
+            ciphertext_sha256,
+        } = device.client.publish(publication).await?
+        else {
+            return Err("receipt".into());
+        };
+        assert!(publication.is_receipt(&publication_id, cursor, &ciphertext_sha256));
+    }
+    let frames = peer.frame_sizes();
+    assert!(frames.len() > 64);
+    assert!(frames.iter().all(|size| *size <= 4096));
+    assert_eq!(
+        frames.iter().sum::<usize>(),
+        2 * publication.ciphertext().len()
+    );
+    let stored = peer.publications();
+    assert_eq!(
+        stored.len(),
+        1,
+        "same publication id never admits a second record"
+    );
+    assert_eq!(stored[0].1, publication.ciphertext());
+    let opened = open_command(
+        &runner,
+        &device.pair.public_key(),
+        stored[0].0.binding().command_route().ok_or("command")?,
+        &stored[0].1,
+    )?;
+    let command = opened.command()?;
+    let CloudCommandPayload::SubmitPrompt(prompt) = CloudCommandPayload::from_command(&command)?
+    else {
+        return Err("prompt".into());
+    };
+    assert_eq!(prompt.model.model.as_str(), "second-model");
+    assert_eq!(
+        prompt.content,
+        vec![PromptPart::Image {
+            mime: ImageMime::Png,
+            bytes
+        }]
+    );
+    assert!(
+        peer.proofs()
+            .iter()
+            .any(|proof| proof.method == "Publish" && proven(&device.client, proof))
+    );
+    peer.wrong_receipt();
+    assert!(matches!(
+        device.client.publish(publication).await,
+        Err(CloudCallError::Protocol)
+    ));
+    assert_eq!(peer.publications().len(), 1);
+    Ok(())
 }
 async fn device(hub: &FakeHub) -> Result<Device, Box<dyn std::error::Error>> {
     let harness = hub.cloud().ok_or("fixture")?;

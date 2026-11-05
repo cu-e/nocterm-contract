@@ -255,7 +255,7 @@ fn a_prompt_whose_deadline_outlives_the_session_is_refused() {
 }
 
 #[test]
-fn a_hub_without_unary_publish_or_an_oversized_command_is_refused() {
+fn a_hub_without_unary_publish_or_excessive_prompt_text_is_refused() {
     let world = World::new();
     let (claim, signature) =
         capability_proof(&world.authority, CLOUD_FEATURE_FRESH_HEAD, NONCE, NOW);
@@ -270,16 +270,18 @@ fn a_hub_without_unary_publish_or_an_oversized_command_is_refused() {
         Err(CloudDeviceError::Unsupported)
     ));
     let long = "x".repeat(20 * 1024);
-    let command = prepare(
-        &world,
-        CommandAction::Prompt {
-            policy: &policy(),
-            text: &long,
-        },
-    );
-    let signature = world.device_key.sign(&command.signing_bytes().unwrap());
     assert!(matches!(
-        command.seal(&world.account_pair, &signature, &world.capabilities),
+        UnsignedCommand::prepare(
+            &world.selector,
+            world.account_public(),
+            &world.device,
+            CommandAction::Prompt {
+                policy: &policy(),
+                text: &long
+            },
+            7,
+            NOW,
+        ),
         Err(CloudDeviceError::Capacity)
     ));
 }

@@ -223,18 +223,24 @@ impl CommandHeader {
         Ok(result)
     }
 
+    /// Exact signed plaintext size: framed header and payload plus the device signature.
+    pub fn plaintext_len(&self) -> Result<usize, CommandError> {
+        self.canonical_bytes()?
+            .len()
+            .checked_add(
+                usize::try_from(self.payload_length)
+                    .map_err(|_| CommandError::PlaintextTooLarge)?,
+            )
+            .and_then(|n| n.checked_add(72))
+            .ok_or(CommandError::PlaintextTooLarge)
+    }
     fn check_sizes(&self) -> Result<(), CommandError> {
         let header_len = self.canonical_bytes()?.len();
         if header_len > MAX_HEADER_BYTES {
             return Err(CommandError::HeaderTooLarge);
         }
         // Each framing length and the signature count toward the single plaintext bound.
-        let payload_len =
-            usize::try_from(self.payload_length).map_err(|_| CommandError::PlaintextTooLarge)?;
-        let plaintext_len = header_len
-            .checked_add(payload_len)
-            .and_then(|n| n.checked_add(72))
-            .ok_or(CommandError::PlaintextTooLarge)?;
+        let plaintext_len = self.plaintext_len()?;
         if plaintext_len > MAX_PLAINTEXT_BYTES {
             return Err(CommandError::PlaintextTooLarge);
         }

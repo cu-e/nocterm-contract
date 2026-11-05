@@ -177,13 +177,20 @@ pub enum WireEffect {
         selector: WireSelector,
         after_cursor: u64,
     },
-    /// `CloudService.PublishOne { header: publication, data }`; answer `receipt`. Send exactly
-    /// these bytes.
+    /// Send exactly these ciphertext bytes and answer `receipt`. Without `maxFrameBytes`, use
+    /// `PublishOne`. With it, sequential `PublishFragment` requests retain the same header.
     Publish {
         publication: WirePublication,
         #[serde(with = "serde_bytes")]
         #[tsify(type = "Uint8Array")]
         data: Vec<u8>,
+        #[serde(
+            rename = "maxFrameBytes",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[tsify(optional)]
+        max_frame_bytes: Option<u32>,
     },
     /// `AgentService.StartInstance { agentId, poolId, chatId }`; answer `instance`. `poolId` is
     /// the pool of the agent's enrolled seat (the core found it with `listInstances`): send it

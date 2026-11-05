@@ -17,7 +17,7 @@ use super::types::{ChatActionInput, EffectInput, FlowOutput, FlowStep, ModelInpu
 use super::{CloudDevice, WebChat};
 
 /// Connected, listed and the chat opened, as recorded.
-fn opened(hub: &mut Replayer) -> (CloudDevice, WebChat, Vec<FlowOutput>, Vec<u32>) {
+pub(super) fn opened(hub: &mut Replayer) -> (CloudDevice, WebChat, Vec<FlowOutput>, Vec<u32>) {
     let (device, _) = connected(hub);
     drive(&mut device.listing().unwrap(), hub, NOW_MS);
     let mut chat = device.opened(&hub.chat_id(), None).unwrap();
@@ -158,8 +158,11 @@ fn a_sleeping_seat_shows_the_stored_history_unconfirmed() {
 }
 
 /// The command the pinned runner opens from a publish effect.
-fn opened_command(effect: &WireEffect) -> (CommandKind, u64, Vec<u8>) {
-    let WireEffect::Publish { publication, data } = effect else {
+pub(super) fn opened_command(effect: &WireEffect) -> (CommandKind, u64, Vec<u8>) {
+    let WireEffect::Publish {
+        publication, data, ..
+    } = effect
+    else {
         panic!("a publication");
     };
     let binding = RelayBinding::from_canonical_bytes(&publication.binding).unwrap();
@@ -299,14 +302,9 @@ fn a_prompt_without_a_model_or_too_long_for_one_frame_is_refused() {
         server: None,
         images: Vec::new(),
     };
-    let mut delivery = empty.delivery(long, None, NOW_MS).unwrap();
-    let (_, last, _) = drive(&mut delivery, &mut hub, NOW_MS);
-    let FlowStep::Failed { error } = last else {
-        panic!("refused");
-    };
-    assert!(
-        matches!(error.code.as_str(), "capacity" | "refused"),
-        "{error:?}"
+    assert_eq!(
+        empty.delivery(long, None, NOW_MS).unwrap_err().code(),
+        "capacity"
     );
 }
 

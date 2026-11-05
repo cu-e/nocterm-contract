@@ -76,6 +76,7 @@ pub(crate) fn device_code(error: &CloudDeviceError) -> &'static str {
         E::Deleted => "deleted",
         E::ObjectVersion(_) => "object_version",
         E::Unsupported => "unsupported",
+        E::LargePublicationUnsupported => "large_publication_unsupported",
         E::Signature(_) => "signature",
         E::SessionTooShort => "session_too_short",
         E::Time => "time",
@@ -150,5 +151,7 @@ pub(crate) fn hex_id<const N: usize>(text: &str, what: &'static str) -> CloudRes
 
 #[cfg(test)]
 mod fixture;
+#[cfg(test)]
+mod fragment_tests;
 #[cfg(test)]
 mod tests;
