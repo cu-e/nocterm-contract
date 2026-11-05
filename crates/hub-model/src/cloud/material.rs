@@ -78,6 +78,13 @@ impl ChatCoordinate {
 }
 
 /// Closed storage purposes. These numbers are part of authenticated data.
+///
+/// The slot layout (`nocterm/cloud-journal-slot/v1`) is unchanged by a new class: a class only
+/// adds a purpose byte that older journals never wrote. Classes 1 to 9 exist since the first
+/// slot format; [`JournalClass::SshAccess`] (10) since journal class set 2
+/// ([`JOURNAL_CLASS_SET`], contract ADR 0011). A native journal that starts writing a class of a
+/// newer set bumps its own format version, and a row sealed under another class never opens
+/// under this one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum JournalClass {
@@ -90,7 +97,45 @@ pub enum JournalClass {
     BackgroundCommand = 7,
     Effect = 8,
     RunHead = 9,
+    /// A chat's SSH access row: its binding, open certificate request, active certificate and
+    /// the sealed seed of its per-chat subject key (contract ADR 0009, 0011). One row per chat;
+    /// its slot id is [`SSH_ACCESS_SLOT`].
+    SshAccess = 10,
 }
+impl JournalClass {
+    /// The class of a stored purpose byte; `None` for a byte no class set defines.
+    pub fn from_tag(tag: u8) -> Option<Self> {
+        Some(match tag {
+            1 => Self::Header,
+            2 => Self::Record,
+            3 => Self::CommandReceipt,
+            4 => Self::Checkpoint,
+            5 => Self::Snapshot,
+            6 => Self::Outbox,
+            7 => Self::BackgroundCommand,
+            8 => Self::Effect,
+            9 => Self::RunHead,
+            10 => Self::SshAccess,
+            _ => return None,
+        })
+    }
+    /// The first class set that defines this class: 1 for classes 1 to 9, 2 for `SshAccess`.
+    pub fn since_set(self) -> u8 {
+        match self {
+            Self::SshAccess => 2,
+            _ => 1,
+        }
+    }
+}
+
+/// The newest journal class set this contract defines (contract ADR 0011): set 1 is classes 1
+/// to 9, set 2 adds [`JournalClass::SshAccess`].
+pub const JOURNAL_CLASS_SET: u8 = 2;
+
+/// The slot id of a chat's one [`JournalClass::SshAccess`] row. The class already separates it
+/// from every other slot; the id is fixed (the one native journals used under `Effect` before
+/// class set 2) so a migration only changes the class.
+pub const SSH_ACCESS_SLOT: [u8; 16] = *b"nocterm-ssh-row1";
 
 /// One encrypted slot in the native journal. Matching it does not prove durability.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,4 +191,26 @@ pub enum MaterialError {
     ZeroEpoch,
     #[error("Cloud material coordinates could not be encoded")]
     Encoding(#[from] CommandError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_journal_class_reads_back_from_its_tag_and_unknown_tags_are_refused() {
+        for tag in 1..=10u8 {
+            let class = JournalClass::from_tag(tag).map(|class| class as u8);
+            assert_eq!(class, Some(tag));
+        }
+        assert_eq!(JournalClass::from_tag(0), None);
+        assert_eq!(JournalClass::from_tag(11), None);
+    }
+
+    #[test]
+    fn the_ssh_access_class_belongs_to_the_newest_class_set_and_the_rest_to_the_first() {
+        assert_eq!(JournalClass::SshAccess.since_set(), JOURNAL_CLASS_SET);
+        assert_eq!(JournalClass::RunHead.since_set(), 1);
+        assert_eq!(JournalClass::SshAccess as u8, 10);
+    }
 }
