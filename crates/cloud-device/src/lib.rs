@@ -1,6 +1,6 @@
 //! The sans-I/O Cloud device core: everything an account device decides about Cloud chats,
 //! shared by the web panel (through `nocterm-keys-wasm`) and the native client (ADR 0006, 0007,
-//! 0008, 0009, 0010).
+//! 0008, 0009, 0010, 0011).
 //!
 //! Purpose: one implementation of the device side of Cloud chats. Clients execute the typed
 //! effects a flow hands out (sign, Store reads and writes, capability proof, head probe,
@@ -18,7 +18,8 @@
 //!   (seat, compare-created records, grant
 //!   publication, claim wait), [`provider::ProviderLease`] (own-runner provider lease), and
 //!   [`ssh::BindServers`] and [`ssh::SshAnswer`] (a chat bound to CA-trusted servers and the
-//!   runner's per-chat certificates, ADR 0009);
+//!   runner's per-chat certificates, ADR 0009), including prompts that run on a bound server
+//!   ([`transcript::ChatSsh::session_targets`], ADR 0011);
 //! - the private account record layouts kept in personal Store collections: hub trust
 //!   (`cloud-hub-trust`), the trusted runner registry (`cloud-runner-registry`), wrapped chat
 //!   keys (`cloud-chat-material`), stored chat key grants (`cloud-chat-grant`), own-agent
@@ -68,6 +69,8 @@
 //!   contains the time, and its subject key is the binding's first; it certifies only requested
 //!   servers still trusted under that CA as bound, for at most 24 hours and never past the
 //!   binding, with the runner's `source-address` and `permit-pty` only;
+//! - a prompt names a bound server only with the session access derived from the CA-signed
+//!   binding the runner admitted, inside its window; it never names an existing session;
 //! - the transcript is display data: no row grants or admits anything.
 
 pub mod command;

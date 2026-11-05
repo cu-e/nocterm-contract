@@ -12,7 +12,9 @@
 //! as a browser device ([`cloud`]: one `CloudDevice` with the flows `connect`, `listChats`,
 //! `openChat`, `deliver`, `createChat` and `lease` of `nocterm-cloud-device`, structured values
 //! with generated TypeScript declarations, no JSON text; `listChats` lists from the runners'
-//! chat directories and hands out sealed directory checkpoints the page stores per runner).
+//! chat directories and hands out sealed directory checkpoints the page stores per runner; an
+//! open chat also runs the SSH binding flows `bindServers`, `unbindServers` and `answerSsh` and
+//! lists the bound servers a prompt may name, `sessionTargets`).
 //! All cryptography is
 //! `nocterm-keys`; this crate only converts text and bytes at the JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.

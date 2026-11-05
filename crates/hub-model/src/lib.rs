@@ -13,11 +13,13 @@
 //! and bounded nonce-bound read-only catalog/head/receipt witnesses, and runner-signed
 //! chat summaries with their directory routing (`cloud::summary`, ADR 0008), and per-chat SSH
 //! bindings signed by the account CA with the runner's certificate requests and access states
-//! (`cloud::ssh`, ADR 0009). Native
+//! (`cloud::ssh`, ADR 0009), the session access of a bound server and the servers a summary lists
+//! (ADR 0011). Native
 //! per-chat head contexts remain independent of content-key generations.
 //! Also owns the vocabulary of managed agents (`agents`): scopes, instance roles, listings,
 //! resource requests, typed refusal reasons, the pool key bundle, the host attestation of a
-//! runner setup document and the shared length limits; and the Cloud receipt-reclaim contract
+//! runner setup document, the shared length limits and the SSH section of a managed boot document
+//! (`agents::boot_ssh`: egress, target host keys and session settings, ADR 0011); and the Cloud receipt-reclaim contract
 //! (`cloud::reclaim`): retry horizons and retired-stream tombstone hashes.
 //! Does not own: transport, storage, private cryptographic keys, authorization decisions
 //! (`nocterm-access`) or the client-side `HubRef`.

@@ -6,13 +6,13 @@ Clients and hubs depend on this repository, pinned to a commit, so both sides re
 
 | Crate | Purpose |
 | --- | --- |
-| `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages; Cloud canonical formats, including runner chat summaries (`cloud::summary`) and per-chat SSH bindings, certificate requests and access states (`cloud::ssh`) |
+| `nocterm-hub-model` | identifiers, permissions and the signed proof-of-possession messages; Cloud canonical formats, including runner chat summaries (`cloud::summary`) and per-chat SSH bindings, certificate requests, access states and bound servers as session targets (`cloud::ssh`), and the SSH section of a managed boot document (`agents::boot_ssh`) |
 | `nocterm-hub-proto` | protobuf schema (`proto/`) compiled to prost messages, plus its descriptor set |
 | `nocterm-hub-grpc` | tonic client and server stubs generated from the descriptor set |
 | `nocterm-hub-client` | hub client: certificate probe and pinning, signed requests, password and OIDC sign-in, the account keyset, relayed streams, token rotation, resumable terminals, device signing of Cloud device values (`sign_cloud`) and the device core's Cloud calls under the client's own signer (`capabilities`, `probe_head`, `publish_one`, `replay`, `watch`, `runner_status`), runner chat directories (`CloudSelector::Directory`, `CloudRunner::publish_summary`) |
-| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes and resume them after a restart, wake only an agent's enrolled seat, create chats, lease an own runner's provider key, bind a chat to the account's CA-trusted servers and answer the runner's certificate requests), a resumable reader with sealed checkpoints and the freshness levels Opening, Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md), [ADR 0009](docs/adr/0009-per-chat-ssh-binding-and-certificates.md), [ADR 0010](docs/adr/0010-device-transport-and-resumable-commands.md)) |
+| `nocterm-cloud-device` | the sans-I/O Cloud device core every client runs: device flows over typed effects (discover the trusted hub, list chats from the runners' directories of signed summaries confirmed by fresh catalog witnesses, open a chat with incremental verified replay and Watch, deliver commands with identical-bytes retries and receipt probes and resume them after a restart, wake only an agent's enrolled seat, create chats, lease an own runner's provider key, bind a chat to the account's CA-trusted servers, answer the runner's certificate requests and run prompts on bound servers), a resumable reader with sealed checkpoints and the freshness levels Opening, Current, Unconfirmed and Withheld, the shared transcript with deltas, the verified runner chat directory with sealed directory checkpoints, and the account's private Cloud records ([ADR 0006](docs/adr/0006-cloud-chats-on-a-browser-device.md), [ADR 0007](docs/adr/0007-device-flows-resumable-reader-and-freshness.md), [ADR 0008](docs/adr/0008-runner-chat-directory.md), [ADR 0009](docs/adr/0009-per-chat-ssh-binding-and-certificates.md), [ADR 0010](docs/adr/0010-device-transport-and-resumable-commands.md), [ADR 0011](docs/adr/0011-bound-servers-as-session-targets.md)) |
 | `nocterm-keys` | device keys (Ed25519), login and unlock key derivation, the key hierarchy, recovery keys, sealed grants, Cloud boxes (commands, records, head probes, chat summaries), the account SSH CA (`agents::ssh_ca`: CA document, per-server principals and `authorized_keys` lines, chat bindings, OpenSSH user certificates) |
-| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `WebCollectionKey.openSshTrust` for the `agent_ssh_trust` servers and the CA's fingerprint, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`, and on an open chat `bindServers`, `unbindServers`, `answerSsh`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
+| `nocterm-keys-wasm` | wasm-bindgen bindings for the web panel: create an account's first keyset (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an account (login or vault password), derive the login value (`loginAuth`), seal an agent definition to a pool key (format 1 `sealDefinition`, format 2 with tool policy, limits and prices `sealDefinitionV2`), pool fingerprint and pin check (`checkPoolKeys`), runner attestation check, the account's saved server profiles (`openCollection`, `openGrantedCollection` under the pinned granter key, `WebCollectionKey.openObject` for kind `profile` only, `WebCollectionKey.openSshTrust` for the `agent_ssh_trust` servers and the CA's fingerprint, `accountKeyFingerprint`), and Cloud chats as a browser device: one `CloudDevice` that runs the device flows (`connect`, `listChats`, `openChat`, `deliver`, `createChat`, `lease`, and on an open chat `bindServers`, `unbindServers`, `answerSsh`, `sessionTargets`) with structured values and generated TypeScript types; the page executes effects and keeps sealed checkpoints, keys stay in wasm |
 | `nocterm-link` | pure state machines of the terminal Link: output rings, resume points, exactly-once input |
 
 The protobuf schema is compiled with [protox](https://crates.io/crates/protox), so no system
@@ -172,7 +172,10 @@ from `Debug`; the plaintext owner zeroizes on drop.
 values, separately binding their storage class, slot ID, journal position,
 transaction revision and writer epoch. It is not a network event format.
 Classes are closed: header1, record2, command-receipt3, checkpoint4, snapshot5,
-outbox6, background-command7, effect8, run-head9. The entire native sealed slot is capped
+outbox6, background-command7, effect8, run-head9 (class set 1), and ssh-access10 (class set 2,
+`JOURNAL_CLASS_SET`, a chat's SSH row under slot `SSH_ACCESS_SLOT`,
+[ADR 0011](docs/adr/0011-bound-servers-as-session-targets.md)); a journal that writes a newer
+set's class bumps its own format version. The entire native sealed slot is capped
 at 32 MiB + 64 KiB; the entire signed network plaintext is capped at 32 MiB.
 
 These APIs supply neither replay suppression, durable commit, grant enforcement,
@@ -345,11 +348,11 @@ Tonic/HTTP2/TLS/runtime/allocator baseline.
 Capability bit 256 (`CLOUD_FEATURE_CHAT_DIRECTORY`) adds a per-runner directory stream
 (`CloudSelector.directory = 5`, relay kind 5 `Summary`) of chat summaries
 ([ADR 0008](docs/adr/0008-runner-chat-directory.md)). `cloud::summary::ChatSummary` (format 1,
-signed body at most 2048 bytes) carries a chat's head, control revision, times, title, host,
+signed body at most 6144 bytes) carries a chat's head, control revision, times, title, host,
 last model, state, pending approvals, bound servers and runner features under a
 `SummaryContext` (chat coordinate and a per-chat revision). The runner signs it
 (`RunnerSigningKey::attest_summary`) and seals it to the account key
-(`nocterm_keys::cloud::seal_summary`, purpose 22, at most 2190 bytes, one relay frame) and
+(`nocterm_keys::cloud::seal_summary`, purpose 22, at most 6286 bytes, one relay frame) and
 publishes it under `SummaryContext::publication_id` (`CloudRunner::publish_summary`). The hub
 keeps the highest revision per chat and purges the rest, so directory replays have cursor holes
 and no gaps. A device opens summaries with `open_summary` under its runner pins and lists chats
@@ -374,6 +377,17 @@ an OpenSSH user certificate for the bound servers still trusted, at most 24 hour
 other server. `RevokeGrant(GrantClass::SshBinding)` ends a binding. No hub can mint a
 certificate. Vectors are in `fixtures/cloud-ssh-v1/` (OpenSSH certificates checked with
 `ssh-keygen -L`).
+
+A bound server is a session target ([ADR 0011](docs/adr/0011-bound-servers-as-session-targets.md)):
+`SshBinding::target_access(server)` derives its `TargetAccess` from the signed server entry
+(host key; labelled route and workspace fingerprints; the login user; the CA key and a credential
+revision of grant id, epoch and CA), a device sends it as `SubmitPrompt.target`
+(`ChatSsh::session_targets`, `ChatAction::Prompt { server }`), and the runner selects the bound
+server with `SshBinding::target_of_access`. A managed runner's boot v3 SSH section
+(`hub_model::agents::boot_ssh`: egress, per-target `host_public_key` and `session` settings,
+`check_boot_ssh`, `BootSshTarget::admits`) lets it sign in to its targets; vectors are in
+`fixtures/boot-ssh-v3/`. Summaries list bound servers by server id with
+`summary::bound_servers`.
 
 ### Memory-only provider grants
 
