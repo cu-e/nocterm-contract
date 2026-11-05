@@ -175,6 +175,9 @@ message SealedDefinition {
   bytes digest = 3;
   // Account that sealed it; filled by the hub.
   string sealed_by_account_id = 4;
+  // Original context version of this envelope. Listing-only edits may be newer.
+  // Filled by the hub; ignored in PutAgent. Zero means the hub does not report it.
+  uint64 sealed_version = 5;
 }
 
 message AgentDetail {
@@ -505,7 +508,9 @@ message AgentsCapacity {
   // host answers `probe_provider`. 4 (`AGENTS_PROTOCOL_STATED_ACCOUNT_KEY`): the host reads
   // `account_public_key` of `ProvisionInstance` and `ProbeProvider` under the rules of ADR 0005;
   // a hub sends the key only to such hosts. Levels only grow; a hub treats a level above the one it
-  // knows as the highest it knows.
+  // knows as the highest it knows. 5 (`AGENTS_PROTOCOL_DEFINITION_PATCH`): the host opens
+  // format 3 model edits with their exact authenticated complete base and flat manifest; a hub
+  // provisions or probes a format 3 envelope only on such hosts.
   uint32 agents_protocol = 8;
 }
 

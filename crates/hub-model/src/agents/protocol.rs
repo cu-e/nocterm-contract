@@ -27,9 +27,13 @@ pub const AGENTS_PROTOCOL_PROVIDER_PROBE: u32 = 3;
 /// this level or above; a host below ignores the field and requires a pin.
 pub const AGENTS_PROTOCOL_STATED_ACCOUNT_KEY: u32 = 4;
 
+/// The host opens format 3 model edits, retaining the authenticated base settings.
+/// A hub sends a format 3 envelope only to a host at this level or above.
+pub const AGENTS_PROTOCOL_DEFINITION_PATCH: u32 = 5;
+
 /// The highest level this contract defines. A host states the level it implements, which is
 /// this one only when it implements every level up to it.
-pub const AGENTS_PROTOCOL_CURRENT: u32 = AGENTS_PROTOCOL_STATED_ACCOUNT_KEY;
+pub const AGENTS_PROTOCOL_CURRENT: u32 = AGENTS_PROTOCOL_DEFINITION_PATCH;
 
 /// Whether a host at `level` reports the leases it runs, so that their absence from
 /// `running_leases` means they stopped.
@@ -40,6 +44,21 @@ pub fn reports_running_leases(level: u32) -> bool {
 /// Whether a host at `level` opens definition envelopes of format version 2.
 pub fn opens_definition_v2(level: u32) -> bool {
     level >= AGENTS_PROTOCOL_DEFINITION_V2
+}
+
+/// Whether a host at `level` opens definition model edits (format 3).
+pub fn opens_definition_patch(level: u32) -> bool {
+    level >= AGENTS_PROTOCOL_DEFINITION_PATCH
+}
+
+/// Whether a host at `level` reads a sealed definition's format. Unknown formats are refused.
+pub fn opens_definition_format(level: u32, format: u8) -> bool {
+    match format {
+        1 => true,
+        2 => opens_definition_v2(level),
+        3 => opens_definition_patch(level),
+        _ => false,
+    }
 }
 
 /// Whether a host at `level` answers provider probes.
@@ -80,6 +99,15 @@ mod tests {
         assert!(reads_stated_account_key(AGENTS_PROTOCOL_STATED_ACCOUNT_KEY));
         assert!(reads_stated_account_key(AGENTS_PROTOCOL_CURRENT + 1));
         assert!(answers_provider_probes(AGENTS_PROTOCOL_STATED_ACCOUNT_KEY));
-        assert_eq!(AGENTS_PROTOCOL_CURRENT, AGENTS_PROTOCOL_STATED_ACCOUNT_KEY);
+        assert_eq!(AGENTS_PROTOCOL_CURRENT, AGENTS_PROTOCOL_DEFINITION_PATCH);
+        assert!(!opens_definition_patch(AGENTS_PROTOCOL_STATED_ACCOUNT_KEY));
+        assert!(opens_definition_patch(AGENTS_PROTOCOL_DEFINITION_PATCH));
+        assert!(opens_definition_patch(AGENTS_PROTOCOL_CURRENT + 1));
+        assert!(!opens_definition_format(
+            AGENTS_PROTOCOL_STATED_ACCOUNT_KEY,
+            3
+        ));
+        assert!(opens_definition_format(AGENTS_PROTOCOL_CURRENT, 3));
+        assert!(!opens_definition_format(AGENTS_PROTOCOL_CURRENT + 1, 99));
     }
 }

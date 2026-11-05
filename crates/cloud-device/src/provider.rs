@@ -10,8 +10,8 @@
 //! 3. `IssueGrant(Provider)` carries the capsule under one grant id for the flow's life, with the
 //!    lease expiry as its epoch, so each renewal replaces the previous capsule. It is published
 //!    with `PublishOne`; an unknown outcome is retried with the same bytes.
-//! 4. After the receipt the flow reports [`Lease`] (with the provider and model the key belongs
-//!    to, which an own-runner prompt names) and waits until half the term has passed.
+//! 4. After the receipt the flow reports [`Lease`] (with the provider, default model and every
+//!    model the signed grant allows) and waits until half the term has passed.
 use crate::{
     CloudDeviceError, DeviceIdentity,
     command::{CommandAction, SealedCommand, UnsignedCommand},
@@ -43,8 +43,10 @@ pub struct Lease {
     pub grant: [u8; 16],
     /// The provider id of the leased key (`ModelSelection::own` of a prompt names it).
     pub provider: String,
-    /// The one model the lease allows.
+    /// The default model of the lease.
     pub model: String,
+    /// Every model the signed lease allows, in default order.
+    pub models: Vec<String>,
     pub expires_at_ms: i64,
     /// When the flow renews it.
     pub renew_at_ms: i64,
@@ -140,6 +142,7 @@ enum Renewal {
 struct Terms {
     provider: String,
     model: String,
+    models: Vec<String>,
     expires_at_ms: i64,
 }
 type LeaseIo = Io<Purpose, Lease>;
@@ -214,10 +217,15 @@ impl Leasing {
             expires_at_ms,
         )?;
         let capsule = seal_provider_lease(keys.pair(), boot, &context, record.expose(), now_ms)?;
-        let models = [CloudTextId::new(record.model())?];
+        let models = record
+            .models()
+            .iter()
+            .map(CloudTextId::new)
+            .collect::<Result<Vec<_>, _>>()?;
         let terms = Terms {
             provider: record.provider().to_owned(),
             model: record.model().to_owned(),
+            models: record.models().to_vec(),
             expires_at_ms,
         };
         drop(record);
@@ -291,6 +299,7 @@ impl Leasing {
                     grant: self.grant,
                     provider: terms.provider.clone(),
                     model: terms.model.clone(),
+                    models: terms.models.clone(),
                     expires_at_ms,
                     renew_at_ms,
                 };

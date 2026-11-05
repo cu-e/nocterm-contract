@@ -215,13 +215,16 @@ pub enum FlowOutput {
         instance: WireInstance,
     },
     /// `lease`: the hub delivered the provider lease; the flow renews it at `renewAtMs`. A
-    /// prompt to this own-runner chat names `{provider, model}` (the leased key's, the one model
-    /// the lease allows).
+    /// prompt to this own-runner chat names its leased provider and one of `models`; `model`
+    /// remains the default for callers that knew a single model.
     #[serde(rename_all = "camelCase")]
     Lease {
         grant: String,
         provider: String,
         model: String,
+        #[serde(default)]
+        #[tsify(optional)]
+        models: Vec<String>,
         expires_at_ms: f64,
         renew_at_ms: f64,
     },
@@ -609,6 +612,23 @@ pub struct ModelInput {
     pub model: String,
 }
 
+/// One inline prompt image. Raw bytes cross the WASM boundary as a Uint8Array.
+#[derive(Clone, Serialize, Deserialize, Tsify)]
+pub struct PromptImageInput {
+    pub mime: String,
+    #[serde(with = "serde_bytes")]
+    #[tsify(type = "Uint8Array")]
+    pub bytes: Vec<u8>,
+}
+impl std::fmt::Debug for PromptImageInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptImageInput")
+            .field("mime", &self.mime)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
 /// What the person asks of an open chat. Ids are lowercase hex.
 #[derive(Clone, Debug, Serialize, Deserialize, Tsify)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -624,6 +644,9 @@ pub enum ChatActionInput {
         #[serde(default)]
         #[tsify(optional)]
         server: Option<String>,
+        #[serde(default)]
+        #[tsify(optional)]
+        images: Vec<PromptImageInput>,
     },
     /// Without a run, the active run.
     Stop {

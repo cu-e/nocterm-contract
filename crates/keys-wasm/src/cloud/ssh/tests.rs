@@ -29,10 +29,7 @@ const KIND: &str = nocterm_cloud_device::records::SSH_TRUST_KIND;
 
 fn opened() -> (WebCollectionKey, CollectionKey) {
     let key = CollectionKey::generate().unwrap();
-    let opened = WebCollectionKey {
-        collection_id: "trust".to_owned(),
-        key: key.clone(),
-    };
+    let opened = WebCollectionKey::owned("trust".to_owned(), key.clone());
     (opened, key)
 }
 

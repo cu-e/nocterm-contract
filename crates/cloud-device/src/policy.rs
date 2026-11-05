@@ -1,7 +1,10 @@
 //! What a prompt from this device may spend, and the inference grant that allows it (ADR 0129
 //! of the native client: the grant carries exactly the prompt's bounds, issued after the prompt
 //! was accepted, for half the inference lifetime so it stays inside the prompt's window).
-use crate::CloudDeviceError;
+use crate::{
+    CloudDeviceError,
+    open::{MAX_PROMPT_IMAGE_BYTES, MAX_PROMPT_IMAGE_TOTAL_BYTES, MAX_PROMPT_IMAGES, PromptImage},
+};
 use nocterm_hub_model::cloud::{
     CloudTextId, MAX_COMMAND_LIFETIME_MS,
     payload::{
@@ -121,11 +124,38 @@ impl PromptPolicy {
         text: &'a str,
         issued_at_ms: i64,
     ) -> Result<CloudCommandPayload<'a>, CloudDeviceError> {
+        self.prompt_with_images(text, &[], issued_at_ms)
+    }
+    /// The same policy with bounded inline images, in the existing signed prompt layout.
+    pub fn prompt_with_images<'a>(
+        &self,
+        text: &'a str,
+        images: &'a [PromptImage],
+        issued_at_ms: i64,
+    ) -> Result<CloudCommandPayload<'a>, CloudDeviceError> {
+        if images.len() > MAX_PROMPT_IMAGES
+            || images
+                .iter()
+                .any(|image| image.bytes.is_empty() || image.bytes.len() > MAX_PROMPT_IMAGE_BYTES)
+            || images.iter().map(|image| image.bytes.len()).sum::<usize>()
+                > MAX_PROMPT_IMAGE_TOTAL_BYTES
+        {
+            return Err(CloudDeviceError::Capacity);
+        }
+        if text.is_empty() && images.is_empty() {
+            return Err(CloudDeviceError::Policy);
+        }
         let deadline = issued_at_ms
             .checked_add(self.lifetime_ms)
             .ok_or(CloudDeviceError::Time)?;
         Ok(CloudCommandPayload::SubmitPrompt(Box::new(PromptPayload {
-            content: vec![PromptPart::Text(text)],
+            content: std::iter::once(PromptPart::Text(text))
+                .filter(|_| !text.is_empty())
+                .chain(images.iter().map(|image| PromptPart::Image {
+                    mime: image.mime,
+                    bytes: &image.bytes,
+                }))
+                .collect(),
             model: self.model.clone(),
             target: self.target.clone(),
             existing_session: None,

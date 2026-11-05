@@ -18,6 +18,7 @@
 mod device;
 mod flow;
 mod listing;
+mod prompt_images;
 mod ssh;
 pub mod types;
 pub mod view;

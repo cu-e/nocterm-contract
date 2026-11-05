@@ -36,7 +36,7 @@ impl DefinitionContext {
         ]
     }
 
-    fn with_sender<R>(&self, sender: &PublicKey, f: impl FnOnce(&[&str]) -> R) -> R {
+    pub(super) fn with_sender<R>(&self, sender: &PublicKey, f: impl FnOnce(&[&str]) -> R) -> R {
         let [agent, scope, pool, version] = self.parts();
         let fingerprint = sender.fingerprint();
         f(&[&agent, &scope, &pool, &version, &fingerprint])
@@ -49,6 +49,9 @@ pub enum SealDefinitionError {
     /// The definition is invalid or too large.
     #[error(transparent)]
     Definition(#[from] DefinitionError),
+    /// A prior model edit could not authenticate in its exact original context.
+    #[error("the model edit base cannot be authenticated")]
+    Base(#[source] OpenError),
     /// The box could not be made.
     #[error(transparent)]
     Seal(#[from] SealError),
@@ -72,6 +75,8 @@ pub enum AgentDefinition {
     V1(AgentDefinitionV1),
     /// Format version [`DEFINITION_FORMAT_VERSION_V2`].
     V2(AgentDefinitionV2),
+    /// A format 3 model patch, opened and merged with its authenticated base.
+    V3(AgentDefinitionV2),
 }
 
 impl AgentDefinition {
@@ -80,6 +85,7 @@ impl AgentDefinition {
         match self {
             Self::V1(_) => DEFINITION_FORMAT_VERSION,
             Self::V2(_) => DEFINITION_FORMAT_VERSION_V2,
+            Self::V3(_) => super::definition_patch::DEFINITION_FORMAT_VERSION_PATCH,
         }
     }
 
@@ -88,7 +94,7 @@ impl AgentDefinition {
     pub fn into_v2(self) -> AgentDefinitionV2 {
         match self {
             Self::V1(v1) => v1.into(),
-            Self::V2(v2) => v2,
+            Self::V2(v2) | Self::V3(v2) => v2,
         }
     }
 }
@@ -167,6 +173,11 @@ pub fn open_definition_any(
     context: &DefinitionContext,
     sealed: &[u8],
 ) -> Result<AgentDefinition, OpenDefinitionError> {
+    if sealed_definition_version(sealed)
+        == Some(super::definition_patch::DEFINITION_FORMAT_VERSION_PATCH)
+    {
+        return super::definition_patch::open(pool_encryption, owner, context, sealed);
+    }
     match sealed_definition_version(sealed) {
         Some(DEFINITION_FORMAT_VERSION) => Ok(AgentDefinition::V1(open_definition(
             pool_encryption,
@@ -210,8 +221,11 @@ pub const DEFINITION_FORMAT_VERSION: u8 = FORMAT_VERSION;
 pub const DEFINITION_FORMAT_VERSION_V2: u8 = 2;
 
 /// Every format version [`open_definition_any`] reads, oldest first.
-pub const DEFINITION_FORMAT_VERSIONS: [u8; 2] =
-    [DEFINITION_FORMAT_VERSION, DEFINITION_FORMAT_VERSION_V2];
+pub const DEFINITION_FORMAT_VERSIONS: [u8; 3] = [
+    DEFINITION_FORMAT_VERSION,
+    DEFINITION_FORMAT_VERSION_V2,
+    super::definition_patch::DEFINITION_FORMAT_VERSION_PATCH,
+];
 
 #[cfg(test)]
 mod tests {

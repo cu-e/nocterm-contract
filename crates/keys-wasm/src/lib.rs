@@ -3,7 +3,8 @@
 //! Owns: the browser-facing surface that lets the web panel create the first keyset of an
 //! account (`createKeysetWithLoginPassword`, `createKeysetWithVaultPassword`), unlock an
 //! account from its password (login or vault), derive the login value for the hub, seal an
-//! agent definition (format 1 `sealDefinition`, format 2 `sealDefinitionV2`) to a pool's
+//! agent definition (format 1 `sealDefinition`, format 2 `sealDefinitionV2`, model edits
+//! `sealDefinitionPatch`) to a pool's
 //! encryption key, compare a pool's key fingerprint, check offered pool keys against a pin
 //! (`checkPoolKeys`), verify a host's runner attestation, and read the account's saved server
 //! profiles: open a collection key (`openCollection`, or `openGrantedCollection` under the
@@ -46,8 +47,10 @@ use nocterm_keys::{
 };
 use wasm_bindgen::prelude::*;
 
+mod agent_patch;
 pub mod cloud;
 mod collection;
+mod provider_models;
 
 pub use collection::{WebCollectionKey, account_key_fingerprint};
 

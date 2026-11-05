@@ -190,6 +190,7 @@ fn a_prompt_retries_identical_bytes_and_carries_the_latest_runs_model() {
         text: "and the disks?".to_owned(),
         model: None,
         server: None,
+        images: Vec::new(),
     };
     let mut delivery = chat.delivery(action, None, NOW_MS).unwrap();
     assert_eq!(chat.transcript().pending.unwrap()[0].state, "sending");
@@ -274,6 +275,7 @@ fn a_prompt_without_a_model_or_too_long_for_one_frame_is_refused() {
         text: "hi".to_owned(),
         model,
         server: None,
+        images: Vec::new(),
     };
     assert_eq!(
         empty
@@ -295,6 +297,7 @@ fn a_prompt_without_a_model_or_too_long_for_one_frame_is_refused() {
         text: "x".repeat(20_000),
         model: Some(managed),
         server: None,
+        images: Vec::new(),
     };
     let mut delivery = empty.delivery(long, None, NOW_MS).unwrap();
     let (_, last, _) = drive(&mut delivery, &mut hub, NOW_MS);
@@ -654,4 +657,46 @@ fn ssh_commands_need_a_verified_request_a_binding_or_the_accounts_ca() {
         "{last:?}"
     );
     assert!(hub.published.is_empty());
+}
+
+#[test]
+fn an_image_only_wasm_action_delivers_its_image_in_the_signed_command() {
+    use super::types::PromptImageInput;
+    use nocterm_hub_model::cloud::payload::{ImageMime, PromptPart};
+    let mut hub = Replayer::new();
+    let (_, mut chat, ..) = opened(&mut hub);
+    let mut delivery = chat
+        .delivery(
+            ChatActionInput::Prompt {
+                text: String::new(),
+                model: None,
+                server: None,
+                images: vec![PromptImageInput {
+                    mime: "image/png".into(),
+                    bytes: b"image bytes".to_vec(),
+                }],
+            },
+            None,
+            NOW_MS,
+        )
+        .unwrap();
+    let (outputs, last, _) = drive(&mut delivery, &mut hub, NOW_MS);
+    assert!(matches!(last, FlowStep::Done));
+    assert!(
+        matches!(outputs.as_slice(), [FlowOutput::Delivery { state, .. }] if state == "delivered")
+    );
+    let (kind, _, payload) = opened_command(&hub.published[0]);
+    let CloudCommandPayload::SubmitPrompt(prompt) =
+        CloudCommandPayload::from_canonical_bytes(kind, &payload).unwrap()
+    else {
+        panic!("prompt expected")
+    };
+    assert_eq!(
+        prompt.content,
+        vec![PromptPart::Image {
+            mime: ImageMime::Png,
+            bytes: b"image bytes"
+        }]
+    );
+    assert_eq!(prompt.model.model.as_str(), "gpt-5-mini");
 }

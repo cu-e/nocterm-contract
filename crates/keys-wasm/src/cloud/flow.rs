@@ -126,6 +126,7 @@ impl WebFlow {
                     grant: hex::encode(lease.grant),
                     provider: lease.provider,
                     model: lease.model,
+                    models: lease.models,
                     expires_at_ms: ms(lease.expires_at_ms),
                     renew_at_ms: ms(lease.renew_at_ms),
                 })
@@ -608,16 +609,30 @@ fn action_of(action: ChatActionInput) -> CloudResult<ChatAction> {
             text,
             model,
             server,
-        } => ChatAction::Prompt {
-            text,
-            model: model.map(|model| ModelChoice {
+            images,
+        } => {
+            let model = model.map(|model| ModelChoice {
                 provider: model.provider,
                 model: model.model,
-            }),
-            server: server
+            });
+            let server = server
                 .map(|server| hex_id(&server, "server id").map(SshServerId::from_bytes))
-                .transpose()?,
-        },
+                .transpose()?;
+            if images.is_empty() {
+                ChatAction::Prompt {
+                    text,
+                    model,
+                    server,
+                }
+            } else {
+                ChatAction::PromptWithImages {
+                    text,
+                    model,
+                    server,
+                    images: super::prompt_images::images(images)?,
+                }
+            }
+        }
         ChatActionInput::Stop { run } => ChatAction::Stop {
             run: run.map(|run| hex_id(&run, "run")).transpose()?,
         },

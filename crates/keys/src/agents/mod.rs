@@ -1,4 +1,4 @@
-//! Managed-agent formats: the sealed definition of an agent (versions 1 and 2), the credential
+//! Managed-agent formats: the sealed definition of an agent (versions 1, 2 and model patches), the credential
 //! broker's virtual tokens and sealed secrets, the account SSH CA with its `agent_ssh_trust`
 //! document, per-server principals, chat bindings and OpenSSH certificates ([`ssh_ca`]), the
 //! SSH CA grant and `authorized_keys` lines, and the pure rules of the `agent_ssh_trust`
@@ -12,6 +12,7 @@ mod boxed;
 mod broker;
 mod canon;
 mod definition;
+mod definition_patch;
 mod definition_v2;
 mod sealing;
 pub mod ssh_ca;
@@ -29,6 +30,9 @@ pub use broker::{
 pub use definition::{
     AgentDefinitionV1, DefinitionError, MAX_DEFINITION_BYTES, MAX_DEFINITION_ENTRIES,
     ProviderBlock, SshTarget,
+};
+pub use definition_patch::{
+    AgentModelPatch, DEFINITION_FORMAT_VERSION_PATCH, DefinitionBase, seal_definition_patch,
 };
 pub use definition_v2::{
     AgentDefinitionV2, AgentLimits, ModelPrice, ToolApproval, ToolPolicy, ToolSelection,

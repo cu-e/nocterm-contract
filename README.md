@@ -229,6 +229,15 @@ Definition format 2 (`AgentDefinitionV2`, `seal_definition_v2`, `sealDefinitionV
 policy, per-run and per-chat limits and the owner's model prices to the version 1 fields; a
 host reads either with `open_definition_any`, chosen by `sealed_definition_version`, and states
 `AGENTS_PROTOCOL_DEFINITION_V2` so the hub sends it format 2 envelopes.
+
+Model edits (`seal_definition_patch`, browser `sealDefinitionPatch`) use format 3 and retain
+that pool's original authenticated envelope. A host at `AGENTS_PROTOCOL_DEFINITION_PATCH`
+(level 5) resolves it without exposing or resetting provider keys, instructions or policies;
+only the model list changes and prices for removed models are discarded. Edits retain one authenticated complete base and the latest model set within 128 KiB,
+so repeated edits have constant size and do not require re-entering hidden settings. Use the response's
+`SealedDefinition.sealed_version` for the base context, not the latest listing version.
+See [ADR 0012](docs/adr/0012-sealed-agent-model-edits.md).
+
 `ListAgentVersions` (`AgentClient::list_agent_versions`) pages through an agent's past public
 listings, never its envelopes. `ProbeProvider` (`AgentClient::probe_provider`) has a host of
 the pool (`AGENTS_PROTOCOL_PROVIDER_PROBE`, frames `NodeDown.probe_provider` and
@@ -729,6 +738,10 @@ through the pool of the agent's enrolled seat (`seat::hosting_seat`; `ListInstan
 verified prefix) or `Withheld` (the hub's replay ends below what the runner witnessed). A
 transcript's tool call carries its title (`ToolCall::title`, from the contract's tool labels)
 and a typed outcome (`ToolOutcome`), so no client rebuilds a tool's display. `provider::ProviderLease` reports each lease with
-the provider and the one model of the leased key, which a prompt to the own-runner chat names
-(`ModelSelection::own`). Recorded sessions for the panel's tests are in
+the provider, default model and every model the signed lease allows; an own-runner prompt
+names one of those models (`ModelSelection::own`). `ProviderKeyRecord` reads the original
+single-model format 1 and ordered multi-model format 2, retaining byte-identical format 1
+when writing one model. The browser collection-key handle can read or replace only that
+model list while keeping the provider and credential inside WASM
+([ADR 0013](docs/adr/0013-own-provider-records-list-every-leased-model.md)). Recorded sessions for the panel's tests are in
 `fixtures/cloud-device-v1/web-session.json`.

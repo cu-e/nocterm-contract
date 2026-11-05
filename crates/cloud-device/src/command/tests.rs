@@ -20,10 +20,10 @@ const RUN: RunCoordinate = RunCoordinate {
     expected_epoch: 2,
 };
 
-fn policy() -> PromptPolicy {
+pub(super) fn policy() -> PromptPolicy {
     PromptPolicy::managed("model-a").unwrap()
 }
-fn prepare(world: &World, action: CommandAction<'_>) -> UnsignedCommand {
+pub(super) fn prepare(world: &World, action: CommandAction<'_>) -> UnsignedCommand {
     UnsignedCommand::prepare(
         &world.selector,
         world.account_public(),
@@ -35,14 +35,14 @@ fn prepare(world: &World, action: CommandAction<'_>) -> UnsignedCommand {
     .unwrap()
 }
 /// Signs like the browser: plain Ed25519 over the given bytes with the device key.
-fn sign_and_seal(world: &World, command: UnsignedCommand) -> SealedCommand {
+pub(super) fn sign_and_seal(world: &World, command: UnsignedCommand) -> SealedCommand {
     let signature = world.device_key.sign(&command.signing_bytes().unwrap());
     command
         .seal(&world.account_pair, &signature, &world.capabilities)
         .unwrap()
 }
 /// The runner's side: open the publication from the account pin at the expected route.
-fn open<R>(
+pub(super) fn open<R>(
     world: &World,
     sealed: &SealedCommand,
     check: impl FnOnce(&SignedCommand<'_>) -> R,

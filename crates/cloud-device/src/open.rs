@@ -34,7 +34,6 @@ use crate::{
 };
 use nocterm_hub_model::cloud::{
     RunCoordinate, events::CloudRunStatus, head::HeadValue, payload::ApprovalChoice,
-    ssh::SshServerId,
 };
 use nocterm_keys::CollectionKey;
 use std::sync::Arc;
@@ -69,37 +68,11 @@ pub enum ChatUpdate {
     Refused(CloudDeviceError),
 }
 
-/// A model a prompt names.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelChoice {
-    pub provider: String,
-    pub model: String,
-}
-
-/// What the person asks of an open chat.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ChatAction {
-    /// A prompt; without a model, the latest run's. With a `server`, it runs against that bound
-    /// server ([`crate::transcript::ChatSsh::session_targets`]); without one, at the runner's
-    /// default destination.
-    Prompt {
-        text: String,
-        model: Option<ModelChoice>,
-        server: Option<SshServerId>,
-    },
-    /// Stop a run; without one, the active run.
-    Stop {
-        run: Option<[u8; 16]>,
-    },
-    /// The model grant of a run this device prompted, with that run's model.
-    Allow {
-        run: [u8; 16],
-    },
-    Answer {
-        intent: [u8; 16],
-        approve: bool,
-    },
-}
+mod action;
+pub use action::{
+    ChatAction, MAX_PROMPT_IMAGE_BYTES, MAX_PROMPT_IMAGE_TOTAL_BYTES, MAX_PROMPT_IMAGES,
+    ModelChoice, PromptImage,
+};
 
 /// The `OpenChat` flow.
 #[derive(Debug)]
@@ -335,6 +308,12 @@ impl Reading {
                 text,
                 model,
                 server,
+            }
+            | ChatAction::PromptWithImages {
+                text,
+                model,
+                server,
+                ..
             } => {
                 policy = match server {
                     Some(server) => prompt_policy(transcript, model.as_ref())?
@@ -342,9 +321,10 @@ impl Reading {
                     None => prompt_policy(transcript, model.as_ref())?,
                 };
                 (
-                    CommandAction::Prompt {
+                    CommandAction::PromptWithImages {
                         policy: &policy,
                         text,
+                        images: action.images(),
                     },
                     PendingKind::Prompt,
                     text.clone(),

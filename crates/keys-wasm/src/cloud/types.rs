@@ -384,6 +384,7 @@ pub use super::ssh::{
     WireSshTrust,
 };
 pub use super::view::{
-    ChatActionInput, FlowOutput, ModelInput, NewChatHost, RunnerInfo, WireApproval, WireDelta,
-    WireFreshness, WirePending, WireRow, WireRun, WireSession, WireTool, WireUsage,
+    ChatActionInput, FlowOutput, ModelInput, NewChatHost, PromptImageInput, RunnerInfo,
+    WireApproval, WireDelta, WireFreshness, WirePending, WireRow, WireRun, WireSession, WireTool,
+    WireUsage,
 };

@@ -22,6 +22,7 @@ const READABLE_KINDS: &[&str] = &["profile"];
 pub struct WebCollectionKey {
     pub(crate) collection_id: String,
     pub(crate) key: CollectionKey,
+    own: bool,
 }
 
 #[wasm_bindgen]
@@ -69,10 +70,7 @@ impl WebAccount {
         wrapped_key: &[u8],
     ) -> Result<WebCollectionKey, WebError> {
         let key = CollectionKey::open(&self.account, collection_id, wrapped_key)?;
-        Ok(WebCollectionKey {
-            collection_id: collection_id.to_owned(),
-            key,
-        })
+        Ok(WebCollectionKey::owned(collection_id.to_owned(), key))
     }
 
     fn granted_collection(
@@ -101,6 +99,7 @@ impl WebAccount {
         Ok(WebCollectionKey {
             collection_id: collection_id.to_owned(),
             key,
+            own: false,
         })
     }
 }
@@ -123,6 +122,16 @@ impl WebCollectionKey {
 }
 
 impl WebCollectionKey {
+    pub(crate) fn owned(collection_id: String, key: CollectionKey) -> Self {
+        Self {
+            collection_id,
+            key,
+            own: true,
+        }
+    }
+    pub(crate) fn is_own(&self) -> bool {
+        self.own
+    }
     fn object(&self, object_id: &str, kind: &str, ciphertext: &[u8]) -> Result<Vec<u8>, WebError> {
         if !READABLE_KINDS.contains(&kind) {
             return Err(WebError::SealedKind(kind.to_owned()));

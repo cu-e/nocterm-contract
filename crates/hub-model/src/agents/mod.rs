@@ -33,10 +33,10 @@ pub use listing::{AgentAccess, AgentListing, Availability, InstanceState, Listin
 pub use pin::{PoolKeyChanged, PoolTrust, check_pool_keys};
 pub use probe::{PROVIDER_PROBE_TIMEOUT_MS, ProbeError, ProbeFailure, ProbeOutcome, ProviderProbe};
 pub use protocol::{
-    AGENTS_PROTOCOL_CURRENT, AGENTS_PROTOCOL_DEFINITION_V2, AGENTS_PROTOCOL_LEGACY,
-    AGENTS_PROTOCOL_PROVIDER_PROBE, AGENTS_PROTOCOL_RUNNING_LEASES,
-    AGENTS_PROTOCOL_STATED_ACCOUNT_KEY, answers_provider_probes, opens_definition_v2,
-    reads_stated_account_key, reports_running_leases,
+    AGENTS_PROTOCOL_CURRENT, AGENTS_PROTOCOL_DEFINITION_PATCH, AGENTS_PROTOCOL_DEFINITION_V2,
+    AGENTS_PROTOCOL_LEGACY, AGENTS_PROTOCOL_PROVIDER_PROBE, AGENTS_PROTOCOL_RUNNING_LEASES,
+    AGENTS_PROTOCOL_STATED_ACCOUNT_KEY, answers_provider_probes, opens_definition_format,
+    opens_definition_patch, opens_definition_v2, reads_stated_account_key, reports_running_leases,
 };
 pub use provider::{MANAGED_TOOL_NAMES, ProviderKind, UnknownProviderKind, is_managed_tool};
 pub use provision::{ProvisionCodeError, ProvisionFailure};

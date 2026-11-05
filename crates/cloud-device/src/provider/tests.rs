@@ -24,9 +24,12 @@ const SECRET: &[u8] = b"sk-test-secret";
 
 /// A hub with the agent's key and a runner whose current boot `boot` attests.
 fn leasing_hub(boot: &RunnerBootKey) -> FakeHub {
+    leasing_hub_models(boot, vec!["gpt-own".to_owned()])
+}
+fn leasing_hub_models(boot: &RunnerBootKey, models: Vec<String>) -> FakeHub {
     let mut hub = FakeHub::new(World::new());
     let key = hub.collection(COLLECTION, PROVIDER_KEYS_KIND);
-    let record = ProviderKeyRecord::new("openai", "gpt-own", SECRET).unwrap();
+    let record = ProviderKeyRecord::new_models("openai", models, SECRET).unwrap();
     let object = provider_key_object("agent-1");
     let sealed = key
         .seal_object(
@@ -224,4 +227,52 @@ impl RunnerSigningKeyless {
             .canonical_bytes()
             .unwrap()
     }
+}
+
+#[test]
+fn every_model_in_an_own_record_is_inside_the_signed_provider_lease() {
+    let boot = RunnerBootKey::generate().unwrap();
+    let mut hub = leasing_hub_models(&boot, vec!["gpt-own".into(), "second-model".into()]);
+    let mut flow = lease(&hub);
+    let (leases, _) = hub.run(&mut flow, NOW);
+    assert_eq!(leases[0].model, "gpt-own");
+    assert_eq!(leases[0].models, ["gpt-own", "second-model"]);
+    let publication = hub.published.last().unwrap();
+    let binding = RelayBinding::from_canonical_bytes(&publication.binding().unwrap()).unwrap();
+    let opened = open_command(
+        &hub.world.runner_key,
+        &PublicKey::from_bytes(&hub.world.account_public()).unwrap(),
+        binding.command_route().unwrap(),
+        publication.ciphertext(),
+    )
+    .unwrap();
+    let command = opened.command().unwrap();
+    let CloudCommandPayload::IssueGrant(grant) =
+        CloudCommandPayload::from_command(&command).unwrap()
+    else {
+        panic!("grant expected")
+    };
+    let GrantPayload::Provider {
+        allowed_models,
+        context,
+        capsule,
+        ..
+    } = *grant
+    else {
+        panic!("provider expected")
+    };
+    assert_eq!(
+        allowed_models
+            .iter()
+            .map(CloudTextId::as_str)
+            .collect::<Vec<_>>(),
+        ["gpt-own", "second-model"]
+    );
+    let account = PublicKey::from_bytes(&hub.world.account_public()).unwrap();
+    assert_eq!(
+        boot.open_provider_lease(&account, &context, capsule, NOW)
+            .unwrap()
+            .secret(),
+        SECRET
+    );
 }

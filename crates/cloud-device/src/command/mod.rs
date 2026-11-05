@@ -44,6 +44,12 @@ pub enum CommandAction<'a> {
         policy: &'a PromptPolicy,
         text: &'a str,
     },
+    /// A prompt with bounded inline images, using the existing wire payload.
+    PromptWithImages {
+        policy: &'a PromptPolicy,
+        text: &'a str,
+        images: &'a [crate::open::PromptImage],
+    },
     /// Stop a run.
     Stop { run: RunCoordinate },
     /// The inference grant for a run whose prompt this device sent (Allow).
@@ -90,6 +96,16 @@ impl<'a> CommandAction<'a> {
                 None,
                 policy.lifetime_ms(),
                 policy.prompt(text, now_ms)?,
+            ),
+            Self::PromptWithImages {
+                policy,
+                text,
+                images,
+            } => (
+                CommandKind::SubmitPrompt,
+                None,
+                policy.lifetime_ms(),
+                policy.prompt_with_images(text, images, now_ms)?,
             ),
             Self::Stop { run } => (
                 CommandKind::Stop,
@@ -428,5 +444,7 @@ fn require_deadline(
     Ok(())
 }
 
+#[cfg(test)]
+mod image_tests;
 #[cfg(test)]
 mod tests;
