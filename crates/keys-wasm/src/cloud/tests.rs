@@ -361,6 +361,7 @@ fn listed_rows_cross_with_their_summary_status_and_directory_checkpoints() {
         state: ChatState::WaitingApproval,
         pending_approvals: 1,
         servers: vec![BoundServer {
+            server: nocterm_hub_model::cloud::ssh::SshServerId::from_bytes([7; 16]),
             host: CloudTextId::new("db").unwrap(),
             port: 22,
             user: CloudTextId::new("deploy").unwrap(),
@@ -397,6 +398,7 @@ fn listed_rows_cross_with_their_summary_status_and_directory_checkpoints() {
     assert_eq!(chat["summary"]["agentId"], "agent-1");
     assert_eq!(chat["summary"]["state"], "waitingApproval");
     assert_eq!(chat["summary"]["servers"][0]["state"], "needsCaUpdate");
+    assert_eq!(chat["summary"]["servers"][0]["serverId"], "07".repeat(16));
     let output = super::listing::listed(ChatListUpdate::Directory {
         runner: [2; 16],
         checkpoint: VerifiedDirectory::from_bytes(vec![9, 9]),

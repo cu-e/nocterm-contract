@@ -302,6 +302,7 @@ fn summary(
     valid_before_ms: i64,
 ) -> Value {
     let bound = |server: &Server, state, valid_before_ms| BoundServer {
+        server: server.id(),
         host: CloudTextId::new(server.host).unwrap(),
         port: server.port,
         user: CloudTextId::new(server.user).unwrap(),

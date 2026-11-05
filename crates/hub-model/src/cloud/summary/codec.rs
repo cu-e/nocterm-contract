@@ -7,6 +7,7 @@ use super::{
 use crate::cloud::{
     CommandError, MAX_HEADER_BYTES,
     codec::{BoundedWriter, Reader},
+    ssh::SshServerId,
 };
 
 struct Out(BoundedWriter);
@@ -60,6 +61,7 @@ pub(super) fn write(
     out.raw(&summary.pending_approvals.to_be_bytes())?;
     out.raw(&[u8::try_from(summary.servers.len()).map_err(|_| SummaryError::Value)?])?;
     for server in &summary.servers {
+        out.raw(server.server.as_bytes())?;
         out.field(server.host.as_str().as_bytes())?;
         out.raw(&server.port.to_be_bytes())?;
         out.field(server.user.as_str().as_bytes())?;
@@ -135,6 +137,7 @@ pub(super) fn read(bytes: &[u8]) -> Result<(SummaryContext, ChatSummary), Summar
     }
     let mut servers = Vec::with_capacity(count);
     for _ in 0..count {
+        let server = SshServerId::from_bytes(reader.array()?);
         let host = reader.text()?;
         let port = u16::from_be_bytes(reader.array()?);
         let user = reader.text()?;
@@ -146,6 +149,7 @@ pub(super) fn read(bytes: &[u8]) -> Result<(SummaryContext, ChatSummary), Summar
             None
         };
         servers.push(BoundServer {
+            server,
             host,
             port,
             user,

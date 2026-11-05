@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, reason = "test fixtures fail loudly")]
 use super::*;
+use crate::cloud::ssh::SshServerId;
 use crate::cloud::{
     CloudNamespace, RunnerCoordinate,
     relay::{PublicationMetadata, RelayBinding, RelayFormatError, RelayKind},
@@ -54,6 +55,7 @@ fn full() -> ChatSummary {
         pending_approvals: 2,
         servers: vec![
             BoundServer {
+                server: SshServerId::of_profile("profile-db"),
                 host: id("db.example.org"),
                 port: 22,
                 user: id("deploy"),
@@ -61,6 +63,7 @@ fn full() -> ChatSummary {
                 valid_before_ms: Some(200_000),
             },
             BoundServer {
+                server: SshServerId::of_profile("profile-cache"),
                 host: id("10.0.0.5"),
                 port: 2222,
                 user: id("root"),
@@ -189,7 +192,14 @@ fn values_outside_the_bounds_are_refused() {
             });
         },
         |s| s.servers[0].port = 0,
-        |s| s.servers = vec![s.servers[0].clone(); MAX_BOUND_SERVERS + 1],
+        |s| {
+            s.servers = (0..=MAX_BOUND_SERVERS)
+                .map(|n| BoundServer {
+                    server: SshServerId::from_bytes([u8::try_from(n).unwrap(); 16]),
+                    ..s.servers[0].clone()
+                })
+                .collect();
+        },
     ];
     for change in cases {
         let mut summary = full();
@@ -199,16 +209,11 @@ fn values_outside_the_bounds_are_refused() {
             Err(SummaryError::Value)
         ));
     }
-    let mut large = full();
-    large.servers = (0..MAX_BOUND_SERVERS)
-        .map(|n| BoundServer {
-            host: id(&format!("{n:0>120}")),
-            ..full().servers[0].clone()
-        })
-        .collect();
+    let mut twice = full();
+    twice.servers[1].server = twice.servers[0].server;
     assert!(matches!(
-        large.signing_bytes(&context(7)),
-        Err(SummaryError::Bounds)
+        twice.signing_bytes(&context(7)),
+        Err(SummaryError::Value)
     ));
     assert!(matches!(
         SummaryContext::new(context(7).chat().clone(), 0),
@@ -250,5 +255,46 @@ fn a_summary_routes_to_its_runner_directory_with_a_stable_publication_id() -> Te
         PublicationMetadata::new([1; 16], binding, size + 1, [0; 32]),
         Err(RelayFormatError::Capacity)
     ));
+    Ok(())
+}
+
+#[test]
+fn sixteen_servers_with_the_longest_names_fit_beside_the_longest_texts() -> TestResult {
+    let long = |c: char| id(&c.to_string().repeat(crate::cloud::MAX_ID_BYTES));
+    let chat = ChatCoordinate::new(
+        CloudNamespace {
+            hub_instance_id: long('h'),
+            account_id: long('a'),
+        },
+        RunnerCoordinate {
+            id: [2; 16],
+            key_epoch: u64::MAX,
+        },
+        [0x81; 16],
+        u64::MAX,
+    )?;
+    let mut summary = full();
+    summary.title = "t".repeat(MAX_TITLE_BYTES);
+    summary.host = SummaryHost::Managed {
+        agent_id: long('g'),
+    };
+    summary.model = Some(SummaryModel {
+        provider: long('p'),
+        model: long('m'),
+    });
+    summary.servers = (0..MAX_BOUND_SERVERS)
+        .map(|n| BoundServer {
+            server: SshServerId::from_bytes([u8::try_from(n).unwrap(); 16]),
+            host: long('s'),
+            port: u16::MAX,
+            user: long('u'),
+            state: ServerState::Active,
+            valid_before_ms: Some(i64::MAX),
+        })
+        .collect();
+    let context = SummaryContext::new(chat, u64::MAX)?;
+    let bytes = summary.signing_bytes(&context)?;
+    assert!(bytes.len() <= MAX_SUMMARY_BYTES, "{}", bytes.len());
+    assert_eq!(ChatSummary::from_signing_bytes(&bytes)?.1, summary);
     Ok(())
 }

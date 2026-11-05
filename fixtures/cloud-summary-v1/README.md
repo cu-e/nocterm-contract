@@ -6,7 +6,8 @@ inputs; production sealing uses operating-system randomness for ephemeral keys a
 
 The 10 files cover a `SummaryContext` (revision 7 of chat `81…` at key epoch 4, runner `02…`
 at key epoch 3, namespace `hub`/`acc-1`), its publication id and relay binding (kind 5); a full
-summary (head, model, managed host, waiting approval, two bound servers, both feature bits) and
+summary (head, model, managed host, waiting approval, two bound servers with the server ids of
+profiles `profile-db` and `profile-cache` (contract ADR 0011), both feature bits) and
 a minimal one (no records, own runner, idle), each as signing bytes and as signed framing under
 the runner signing key `0x51…`; and three purpose 22 boxes from runner encryption key `0x41…` to
 account key `0x31…`: the full summary, an older revision (6) sealed under revision 7's routing,

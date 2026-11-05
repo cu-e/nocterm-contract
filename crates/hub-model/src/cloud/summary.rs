@@ -12,16 +12,26 @@
 //! Signed bytes (strict, big-endian, u32-length fields, 0/1 option flags, closed tags, exact
 //! EOF): field(`nocterm/cloud-chat-summary/v1`) ‖ field(context) ‖ head ‖ control revision u64
 //! ‖ created at i64 ‖ last activity i64 ‖ field(title) ‖ host ‖ model ‖ state u8 ‖ pending
-//! approvals u16 ‖ u8 server count ‖ servers ‖ features u32. The whole signed body is at most
+//! approvals u16 ‖ u8 server count ‖ servers (server id 16 ‖ field(host) ‖ port u16 ‖ field(user)
+//! ‖ state u8 ‖ 0/1 ‖ valid before i64) ‖ features u32. The whole signed body is at most
 //! [`MAX_SUMMARY_BYTES`]; the signed framing is field(body) ‖ Ed25519 signature (64).
+//!
+//! A runner that takes SSH bindings sets [`SUMMARY_FEATURE_SSH_BINDING`] and lists the servers
+//! of the chat's current binding with [`bound_servers`] (contract ADR 0011). Until ADR 0011 no
+//! runner set that bit or listed a server, so the server entry gained its id under format 1.
 mod codec;
+mod servers;
+pub use servers::bound_servers;
 
-use super::{ChatCoordinate, CloudTextId, CommandError, MAX_HEADER_BYTES, MaterialError};
+use super::{
+    ChatCoordinate, CloudTextId, CommandError, MAX_HEADER_BYTES, MaterialError, ssh::SshServerId,
+};
 use crate::pop::{self, SignatureError};
 use sha2::{Digest, Sha256};
 
-/// The largest canonical signed summary body, context included.
-pub const MAX_SUMMARY_BYTES: usize = 2048;
+/// The largest canonical signed summary body, context included: sixteen servers with the longest
+/// host and user names fit beside the longest title, agent and model (contract ADR 0011).
+pub const MAX_SUMMARY_BYTES: usize = 6144;
 /// The largest signed framing: field(body) ‖ signature.
 pub const MAX_SIGNED_SUMMARY_BYTES: usize = MAX_SUMMARY_BYTES + 4 + 64;
 /// The largest sealed summary (version, purpose, ephemeral key, nonce, tag): one relay frame.
@@ -30,7 +40,9 @@ pub const MAX_SEALED_SUMMARY_BYTES: usize = MAX_SIGNED_SUMMARY_BYTES + 2 + 32 + 
 pub const MAX_TITLE_BYTES: usize = 120;
 /// Servers a summary lists.
 pub const MAX_BOUND_SERVERS: usize = 16;
-/// Runner feature: the runner binds chats to servers with per-chat SSH certificates.
+/// Runner feature: the runner binds chats to servers with per-chat SSH certificates. It sets the
+/// bit whether or not a chat is bound, and whether or not it states an egress (a binding is then
+/// refused, and the summary lists the servers as unreachable).
 pub const SUMMARY_FEATURE_SSH_BINDING: u32 = 1;
 /// Runner feature: the runner takes own-provider leases (`ProviderLease`).
 pub const SUMMARY_FEATURE_PROVIDER_LEASE: u32 = 2;
@@ -178,6 +190,9 @@ impl ServerState {
 /// One server the chat is bound to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BoundServer {
+    /// The account's registry id of the server, so a device joins it with its trust record
+    /// (and shows "needs CA update" from the record's line form).
+    pub server: SshServerId,
     pub host: CloudTextId,
     pub port: u16,
     pub user: CloudTextId,
@@ -219,6 +234,14 @@ impl ChatSummary {
                 .any(|server| server.port == 0 || server.valid_before_ms.is_some_and(|at| at <= 0))
         {
             return Err(SummaryError::Value);
+        }
+        for (index, server) in self.servers.iter().enumerate() {
+            if self.servers[..index]
+                .iter()
+                .any(|known| known.server == server.server)
+            {
+                return Err(SummaryError::Value);
+            }
         }
         Ok(())
     }

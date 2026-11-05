@@ -46,7 +46,9 @@ def summary(revision, full):
         out += b"\x01" + text("managed") + text("claude-x")
         out += b"\x03" + pack(">H", 2)
         out += b"\x02"
+        out += sha256(b"profile-db").digest()[:16]
         out += text("db.example.org") + pack(">H", 22) + text("deploy") + b"\x01" + b"\x01" + pack(">q", 200_000)
+        out += sha256(b"profile-cache").digest()[:16]
         out += text("10.0.0.5") + pack(">H", 2222) + text("root") + b"\x02" + b"\x00"
         out += pack(">I", 3)
     else:

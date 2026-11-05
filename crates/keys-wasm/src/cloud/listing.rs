@@ -85,10 +85,12 @@ pub struct WireSummary {
     pub features: u32,
 }
 
-/// A server the chat is bound to.
+/// A server the chat is bound to; `serverId` (32 hex) is its `agent_ssh_trust` registry id
+/// (`srv-<serverId>`), so the page joins it with its trust record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct WireServer {
+    pub server_id: String,
     pub host: String,
     pub port: u16,
     pub user: String,
@@ -123,6 +125,7 @@ fn state(state: ChatState) -> &'static str {
 }
 fn server(server: &BoundServer) -> WireServer {
     WireServer {
+        server_id: hex::encode(server.server.as_bytes()),
         host: server.host.as_str().to_owned(),
         port: server.port,
         user: server.user.as_str().to_owned(),
