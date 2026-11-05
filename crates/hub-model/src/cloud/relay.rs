@@ -31,4 +31,6 @@ pub enum RelayFormatError {
     Record(#[from] super::RecordError),
     #[error("Cloud key material routing is invalid")]
     Material(#[from] super::MaterialError),
+    #[error("Cloud chat summary routing is invalid")]
+    Summary(#[from] super::summary::SummaryError),
 }

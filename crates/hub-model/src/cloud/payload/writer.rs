@@ -9,6 +9,7 @@ use super::{
     },
 };
 use crate::cloud::provider::MAX_PROVIDER_LEASE_BYTES;
+use crate::cloud::ssh::MAX_CERTIFICATE_BYTES;
 use crate::cloud::{MAX_PLAINTEXT_BYTES, codec::BoundedWriter};
 pub(in crate::cloud) struct PayloadWriter {
     output: BoundedWriter,
@@ -282,6 +283,23 @@ impl PayloadWriter {
                 }
                 self.field(capsule)
             }
+            GrantPayload::SshBinding { binding } => {
+                self.tag(4)?;
+                self.field(&binding.canonical_bytes()?)
+            }
+            GrantPayload::SshCertificate {
+                grant,
+                request,
+                certificate,
+            } => {
+                if certificate.is_empty() || certificate.len() > MAX_CERTIFICATE_BYTES {
+                    return Err(PayloadError::Bounds);
+                }
+                self.tag(5)?;
+                self.grant(*grant)?;
+                self.raw(request)?;
+                self.field(certificate)
+            }
         }
     }
     pub(in crate::cloud) fn scoped_grant(
@@ -292,6 +310,7 @@ impl PayloadWriter {
             GrantClass::Inference => 1,
             GrantClass::Tools => 2,
             GrantClass::Provider => 3,
+            GrantClass::SshBinding => 4,
         })?;
         self.grant(value.grant)
     }

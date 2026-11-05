@@ -91,20 +91,7 @@ impl EventWriter {
         self.raw(&value.expected_control_revision.to_be_bytes())
     }
     fn display(&mut self, value: &ToolPresentation<'_>) -> Result<(), EventPayloadError> {
-        if !matches!(
-            value.tool,
-            "list_terminals"
-                | "open_terminal"
-                | "read_terminal"
-                | "send_input"
-                | "run_command"
-                | "exec_command"
-                | "read_command"
-                | "cancel_command"
-                | "transfer_files"
-                | "read_transfer"
-                | "cancel_transfer"
-        ) {
+        if crate::cloud::tool_arguments::tool_label(value.tool).is_none() {
             return Err(EventPayloadError::Value);
         }
         self.text(value.tool, 128)?;
@@ -316,6 +303,10 @@ impl EventWriter {
             CloudEventPayload::SessionState(value) => Ok(
                 crate::cloud::payload::session_codec::write_state(&mut self.output, value)?,
             ),
+            CloudEventPayload::SshCertificateRequested(value) => {
+                self.field(&value.canonical_bytes()?)
+            }
+            CloudEventPayload::SshAccessState(value) => self.field(&value.canonical_bytes()?),
         }
     }
     pub(super) fn snapshot(

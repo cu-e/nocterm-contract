@@ -1,7 +1,7 @@
 use super::{
     MAX_RELAY_FRAME_BYTES, MAX_RELAY_KEY_MATERIAL_BYTES, RelayBinding, RelayFormatError, RelayKind,
 };
-use crate::cloud::MAX_ENVELOPE_BYTES;
+use crate::cloud::{MAX_ENVELOPE_BYTES, summary::MAX_SEALED_SUMMARY_BYTES};
 use sha2::{Digest, Sha256};
 
 /// Transport identity is independent of the binding's signed semantic command/event ID.
@@ -24,6 +24,7 @@ impl PublicationMetadata {
             || total > MAX_ENVELOPE_BYTES
             || (binding.kind() == RelayKind::ChatKeyGrant
                 && total_bytes > MAX_RELAY_KEY_MATERIAL_BYTES)
+            || (binding.kind() == RelayKind::Summary && total > MAX_SEALED_SUMMARY_BYTES)
         {
             return Err(RelayFormatError::Capacity);
         }

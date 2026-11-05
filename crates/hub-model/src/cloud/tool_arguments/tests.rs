@@ -398,3 +398,18 @@ fn decoder_refuses_a_tag_after_the_last_known_tool_as_unsupported() -> TestResul
     );
     Ok(())
 }
+
+#[test]
+fn every_tool_has_a_label_and_names_outside_the_catalog_have_none() {
+    for (_, arguments, _, _) in fixtures() {
+        let name = arguments.name();
+        assert!(
+            tool_label(name).is_some_and(|label| !label.is_empty()),
+            "{name}"
+        );
+    }
+    assert_eq!(tool_label("run_command"), Some("Run command"));
+    assert_eq!(tool_label("open_terminal"), Some("Connect"));
+    assert_eq!(tool_label("rm_rf"), None);
+    assert_eq!(TOOLS.len(), 11);
+}

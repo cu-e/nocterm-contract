@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "ssh_targets": [
+    {
+      "host": "db.example.org",
+      "user": "deploy",
+      "port": 22,
+      "host_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpa db host key",
+      "session": {
+        "terminal": "xterm-256color",
+        "columns": 120,
+        "rows": 40,
+        "connect_timeout_ms": 15000,
+        "program": "/bin/bash",
+        "args": [
+          "-l"
+        ],
+        "cwd": "/srv/app"
+      }
+    },
+    {
+      "host": "10.0.0.5",
+      "user": "root",
+      "port": 2222
+    }
+  ],
+  "ssh_egress": [
+    "203.0.113.7",
+    "2001:db8::/64"
+  ]
+}

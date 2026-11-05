@@ -21,12 +21,17 @@ mod route;
 pub mod runner_auth;
 pub mod runner_request;
 mod signed;
+pub mod ssh;
+pub mod summary;
 pub mod tool_arguments;
 
 pub use header::{
     CommandContext, CommandHeader, CommandIssuer, CommandKeys, CommandKind, RunCoordinate,
 };
-pub use material::{ChatCoordinate, JournalClass, JournalCoordinate, MaterialError};
+pub use material::{
+    ChatCoordinate, JOURNAL_CLASS_SET, JournalClass, JournalCoordinate, MaterialError,
+    SSH_ACCESS_SLOT,
+};
 pub use record::{
     RecordContext, RecordError, RecordHeader, RecordKind, RecordPosition, SignedRecord,
 };

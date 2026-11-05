@@ -52,6 +52,12 @@ pub enum ClientError {
     Oidc(#[from] OidcError),
     #[error("terminal link failed")]
     Link(#[from] LinkError),
+    /// A Cloud device value names another device key than this client's.
+    #[error("the Cloud value names another device key than this device's")]
+    CloudSigner,
+    /// The signed-in device cannot be named in Cloud head queries and commands.
+    #[error("the signed-in device cannot be named for Cloud")]
+    CloudDevice(#[source] nocterm_cloud_device::CloudDeviceError),
 }
 
 /// Why a browser sign-in (OIDC loopback with PKCE) failed.

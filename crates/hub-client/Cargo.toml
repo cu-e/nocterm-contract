@@ -9,6 +9,7 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+nocterm-cloud-device.workspace = true
 nocterm-hub-grpc.workspace = true
 nocterm-hub-model.workspace = true
 nocterm-hub-proto.workspace = true

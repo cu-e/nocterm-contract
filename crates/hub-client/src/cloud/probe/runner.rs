@@ -31,7 +31,7 @@ impl RunnerHeadProbes {
         })
     }
     pub async fn next(&self, wait: Duration) -> Result<Option<IncomingHeadProbe>, CloudError> {
-        if wait > Duration::from_millis(10_000) {
+        if wait > Duration::from_secs(10) {
             return Err(CloudError::Protocol);
         }
         self.access.check_source()?;
@@ -43,7 +43,7 @@ impl RunnerHeadProbes {
         let response = match self.residency.as_ref() {
             Some(owner) => {
                 timeout(
-                    Duration::from_millis(10_000),
+                    Duration::from_secs(10),
                     self.access
                         .service_with_residency(owner.clone())?
                         .next_head_probe(request),
@@ -52,7 +52,7 @@ impl RunnerHeadProbes {
             }
             None => {
                 timeout(
-                    Duration::from_millis(10_000),
+                    Duration::from_secs(10),
                     self.access.service()?.next_head_probe(request),
                 )
                 .await

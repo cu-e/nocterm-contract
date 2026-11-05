@@ -137,12 +137,14 @@ impl Credentials {
     }
 
     /// Bounded Cloud attribution before any account/device clone, using the same
-    /// lock for source, metadata bounds and the captured actual session values.
-    pub(crate) fn capture_cloud(&self, generation: u64) -> Result<CredentialCapture, Status> {
-        self.capture_cloud_inner(Some(generation))
-    }
+    /// lock for metadata bounds and the captured actual session values.
     pub(crate) fn capture_current_cloud(&self) -> Result<CredentialCapture, Status> {
-        self.capture_cloud_inner(None)
+        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        let session = current
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("not signed in"))?;
+        self.cloud_metadata(session)?;
+        Ok(self.capture_session(session))
     }
     pub(crate) fn require_current_cloud_metadata(&self) -> Result<(), Status> {
         let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
@@ -165,20 +167,6 @@ impl Credentials {
         }
         Some((session.account_id.clone(), session.device_id.clone()))
     }
-    fn capture_cloud_inner(&self, generation: Option<u64>) -> Result<CredentialCapture, Status> {
-        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        if generation.is_some_and(|expected| self.generation.load(Ordering::Acquire) != expected) {
-            return Err(Status::unauthenticated(
-                "the original account sign-in was replaced",
-            ));
-        }
-        let session = current
-            .as_ref()
-            .ok_or_else(|| Status::unauthenticated("not signed in"))?;
-        self.cloud_metadata(session)?;
-        Ok(self.capture_session(session))
-    }
-
     fn capture_session(&self, session: &Session) -> CredentialCapture {
         CredentialCapture {
             generation: self.generation.load(Ordering::Acquire),

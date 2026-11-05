@@ -12,6 +12,7 @@ use crate::cloud::{
     MAX_PLAINTEXT_BYTES, RunCoordinate,
     codec::Reader,
     provider::{MAX_PROVIDER_LEASE_BYTES, ProviderLeaseContext},
+    ssh::{MAX_CERTIFICATE_BYTES, MAX_SIGNED_BINDING_BYTES, SignedSshBinding},
 };
 pub(in crate::cloud) struct PayloadReader<'a> {
     reader: Reader<'a>,
@@ -226,6 +227,16 @@ impl<'a> PayloadReader<'a> {
                     capsule: self.field(MAX_PROVIDER_LEASE_BYTES)?,
                 }
             }
+            4 => GrantPayload::SshBinding {
+                binding: SignedSshBinding::from_canonical_bytes(
+                    self.field(MAX_SIGNED_BINDING_BYTES)?,
+                )?,
+            },
+            5 => GrantPayload::SshCertificate {
+                grant: self.grant()?,
+                request: self.array()?,
+                certificate: self.field(MAX_CERTIFICATE_BYTES)?,
+            },
             _ => return Err(PayloadError::Value),
         })
     }
@@ -234,6 +245,7 @@ impl<'a> PayloadReader<'a> {
             1 => GrantClass::Inference,
             2 => GrantClass::Tools,
             3 => GrantClass::Provider,
+            4 => GrantClass::SshBinding,
             _ => return Err(PayloadError::Value),
         };
         Ok(ScopedGrantReference {

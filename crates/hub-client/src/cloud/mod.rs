@@ -1,12 +1,9 @@
 //! Captured account Cloud access. SDK/protobuf types remain inside the hub adapter.
-mod command;
-mod material;
 mod probe;
-pub use material::PreparedChatKeyGrant;
+pub(crate) use probe::require_head_query;
 pub use probe::{
-    CompletedHeadProbe, DeviceHeadProbes, IncomingHeadProbe, PreparedHeadProbe, ResidentHeadQuery,
-    ResidentHeadWitness, RunnerHeadProbes, head_decoded_metadata_bytes, head_query_work_bytes,
-    head_reply_work_bytes,
+    IncomingHeadProbe, ResidentHeadQuery, RunnerHeadProbes, head_decoded_metadata_bytes,
+    head_query_work_bytes, head_reply_work_bytes,
 };
 mod reclaim;
 mod replay;
@@ -15,8 +12,7 @@ mod runner;
 mod runner_credentials;
 mod transport;
 mod watch;
-pub use command::{CloudCommandInvocation, PreparedCloudCommand};
-pub use runner::CloudRunner;
+pub use runner::{CloudRunner, SUMMARY_RETRY_MS};
 pub use runner_credentials::RunnerSession;
 pub use watch::CloudWatch;
 mod status;
@@ -62,18 +58,18 @@ pub fn acknowledgement_work_bytes() -> usize {
 }
 
 use crate::{
-    ClientError, Keyset,
+    ClientError,
     signer::{CredentialCapture, Credentials},
 };
 use nocterm_hub_grpc::{cloud_service_client::CloudServiceClient, metadata, method_path};
 use nocterm_hub_model::cloud::{
-    CloudNamespace, CloudRoute, CloudTextId, CommandContext, CommandError,
+    CloudNamespace, CloudTextId, CommandError,
     capabilities::{CapabilitiesClaim, CapabilityError, CapabilityLimits, SignedCapabilities},
     hub_namespace_id,
     relay::{MAX_RELAY_WIRE_BYTES, PublicationMetadata, RelayFormatError},
 };
 use nocterm_hub_proto::v1;
-use nocterm_keys::{KeyError, PublicKey, cloud::CloudCommandError, random_bytes};
+use nocterm_keys::{KeyError, random_bytes};
 use sha2::{Digest, Sha256};
 use std::{fmt, sync::Arc};
 use tonic::{
@@ -281,31 +277,6 @@ struct CloudClientMetadata {
     limits: CapabilityLimits,
 }
 impl CloudClient {
-    /// Captured read-only probe access. Pin establishment and native head/outbox
-    /// storage remain with the consumer, never the hub capability advertisement.
-    pub fn head_probes(&self) -> Result<DeviceHeadProbes, CloudError> {
-        DeviceHeadProbes::new(self.clone(), None)
-    }
-    /// Pre-admit one operation's named head work before creating this port.
-    /// The same owner follows actual request/response bodies and decoded owners.
-    pub fn head_probes_with_residency(
-        &self,
-        residency: Arc<dyn Send + Sync>,
-    ) -> Result<DeviceHeadProbes, CloudError> {
-        // Validate before cloning the actual captured client metadata as well.
-        self.credentials.capture_cloud(self.generation)?;
-        DeviceHeadProbes::new(self.clone(), Some(residency))
-    }
-    /// Rebind exact original bytes loaded from an authenticated native outbox.
-    /// This does not authenticate that native record or the encrypted command.
-    pub fn stage_stored_command(
-        &self,
-        metadata: PublicationMetadata,
-        ciphertext: Vec<u8>,
-        semantic_digest: [u8; 32],
-    ) -> Result<PreparedCloudCommand, CloudError> {
-        PreparedCloudCommand::stage_stored(self, metadata, ciphertext, semantic_digest)
-    }
     pub fn namespace(&self) -> &CloudNamespace {
         &self.metadata.namespace
     }
@@ -328,58 +299,6 @@ impl CloudClient {
             self.generation,
         ))
     }
-    /// Seal only this chat key to the separately pinned R. No task is authorized.
-    pub fn prepare_chat_key_grant(
-        &self,
-        keyset: &Keyset,
-        pinned_runner: &PublicKey,
-        chat: nocterm_hub_model::cloud::ChatCoordinate,
-        key: &nocterm_keys::cloud::ChatKey,
-        publication_id: [u8; 16],
-    ) -> Result<PreparedChatKeyGrant, CloudError> {
-        PreparedChatKeyGrant::seal(self, keyset, pinned_runner, chat, key, publication_id)
-    }
-    /// Rebind an immutable envelope read from the authenticated account-owned
-    /// collection/outbox. This does not verify the encrypted key: only R can do so.
-    pub fn stage_chat_key_grant(
-        &self,
-        chat: nocterm_hub_model::cloud::ChatCoordinate,
-        publication_id: [u8; 16],
-        ciphertext: Vec<u8>,
-    ) -> Result<PreparedChatKeyGrant, CloudError> {
-        PreparedChatKeyGrant::stage(self, chat, publication_id, ciphertext)
-    }
-    pub async fn publish_chat_key_grant(
-        &self,
-        grant: &PreparedChatKeyGrant,
-    ) -> Result<v1::CloudDeliveryReceipt, CloudError> {
-        grant.publish(self).await
-    }
-    pub fn command_invocation(&self) -> Result<CloudCommandInvocation, CloudError> {
-        CloudCommandInvocation::capture(self)
-    }
-    pub fn prepare_command(
-        &self,
-        keyset: &Keyset,
-        pinned_runner: &PublicKey,
-        route: CloudRoute,
-        context: CommandContext,
-        payload: &[u8],
-    ) -> Result<PreparedCloudCommand, CloudError> {
-        self.command_invocation()?
-            .seal(keyset, pinned_runner, route, context, payload)
-    }
-    pub fn prepare_payload(
-        &self,
-        keyset: &Keyset,
-        pinned_runner: &PublicKey,
-        route: CloudRoute,
-        context: CommandContext,
-        payload: &nocterm_hub_model::cloud::payload::CloudCommandPayload<'_>,
-    ) -> Result<PreparedCloudCommand, CloudError> {
-        self.command_invocation()?
-            .seal_payload(keyset, pinned_runner, route, context, payload)
-    }
     pub async fn create_runner_grant(
         &self,
         runner: [u8; 16],
@@ -395,19 +314,6 @@ impl CloudClient {
             .into_inner();
         self.check_source()?;
         RunnerGrantTicket::new(response.ticket, response.expires_at_ms)
-    }
-    pub async fn publish_prepared(
-        &self,
-        command: &PreparedCloudCommand,
-    ) -> Result<v1::CloudDeliveryReceipt, CloudError> {
-        command.require_source(&self.credentials, self.generation)?;
-        let mut upload = self.begin_publication(command.metadata().clone())?;
-        let frame = usize::try_from(self.metadata.limits.max_frame_bytes)
-            .map_err(|_| CloudError::Protocol)?;
-        for bytes in command.ciphertext().chunks(frame) {
-            upload.write(bytes).await?;
-        }
-        upload.finish().await
     }
     /// Streams one lazy/spooled command. Semantic decoding and durable outbox ownership
     /// belong to the caller; no complete logical payload is queued here.
@@ -774,16 +680,10 @@ pub enum CloudError {
     Reclaim(#[from] nocterm_hub_model::cloud::reclaim::ReclaimError),
     #[error("the Cloud command format was refused")]
     Command(#[from] CommandError),
-    #[error("the Cloud key material was refused")]
-    Material(#[from] nocterm_keys::cloud::CloudMaterialError),
-    #[error("the Cloud command encryption failed")]
-    Encryption(#[from] CloudCommandError),
     #[error("the Cloud request needs randomness")]
     Key(#[from] KeyError),
     #[error("the runner proof was refused")]
     RunnerProof(#[from] nocterm_hub_model::cloud::runner_auth::RunnerProofError),
-    #[error("the Cloud command semantic payload was refused")]
-    Payload(#[from] nocterm_hub_model::cloud::payload::PayloadError),
     #[error("the read-only head probe or witness was refused")]
     Head(#[from] nocterm_hub_model::cloud::head::HeadProbeError),
     #[error("the purpose-specific head encryption or authentication failed")]

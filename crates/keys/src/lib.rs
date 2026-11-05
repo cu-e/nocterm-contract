@@ -13,11 +13,16 @@
 //! Also owns per-chat key wraps/grants, runner-signed encrypted events/snapshots,
 //! and purpose-separated encryption of native journal slots. Read-only head probes
 //! have separate signed purposes and account-key replies, independent of ChatKey.
+//! Chat summaries are runner-signed and sealed to the account key (purpose 22), so a device
+//! lists chats without a chat key or replay.
 //! Native head cells use a distinct runner-derived key and finite purpose18 blob.
 //! Provider credentials use a separate non-restorable boot recipient with finite
 //! stable-runner attestation; opening returns a zeroizing secret owner.
 //! Also owns the managed-agent formats ([`agents`]): definitions sealed to a pool key, broker
-//! virtual tokens and broker-sealed secrets, SSH CA grants and the `agent_ssh_trust` rules.
+//! virtual tokens and broker-sealed secrets, SSH CA grants and the `agent_ssh_trust` rules, and
+//! the account SSH CA ([`agents::ssh_ca`]): its `agent_ssh_trust` CA document, per-server
+//! principals and `authorized_keys` lines, CA-signed chat bindings and the OpenSSH user
+//! certificates it issues (at most 24 hours, `source-address` mandatory, `permit-pty` only).
 //! Does not own: storage of keys on the device, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants:
@@ -35,6 +40,8 @@
 //!   client pinned: the hub can swap a key only before the first pin;
 //! - the recovery key is 128 random bits shown once and used only through HKDF;
 //! - secrets are zeroized on drop and never printed by `Debug`;
+//! - the SSH CA signs only chat bindings that name it and certificates that pass
+//!   [`agents::ssh_ca::CertificateSpec::validate`]; a hub never holds its seed;
 //! - a Cloud command binds its exact expected account/runner keys and route; its opaque
 //!   payload still requires semantic validation and durable admission before effects.
 //!

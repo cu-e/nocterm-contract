@@ -156,10 +156,10 @@ fn bounded_cloud_signing_preserves_canonical_proof_and_refuses_large_metadata_be
 }
 
 #[test]
-fn bounded_head_capture_fences_generation_and_refuses_oversized_attribution() -> TestResult {
+fn bounded_cloud_capture_keeps_the_attribution_and_refuses_oversized_metadata() -> TestResult {
     let original = credentials();
     let first = original.capture().ok_or("capture")?;
-    let actual = original.capture_cloud(first.generation)?;
+    let actual = original.capture_current_cloud()?;
     assert_eq!(actual.account_id, first.account_id);
     assert_eq!(actual.device_id, first.device_id);
     assert_eq!(actual.signing_key, first.signing_key);
@@ -167,10 +167,7 @@ fn bounded_head_capture_fences_generation_and_refuses_oversized_attribution() ->
     assert_eq!(actual.refresh_expires_at_ms, first.refresh_expires_at_ms);
     assert!(original.rotate_session(first.generation, session("A", &"x".repeat(1025))));
     assert_eq!(
-        original
-            .capture_cloud(first.generation)
-            .err()
-            .map(|s| s.code()),
+        original.capture_current_cloud().err().map(|s| s.code()),
         Some(tonic::Code::ResourceExhausted)
     );
     assert!(original.capture().is_some());
@@ -183,26 +180,16 @@ fn bounded_head_capture_fences_generation_and_refuses_oversized_attribution() ->
             _ => hub = "h".repeat(129),
         }
         let candidate = Credentials::new(hub, DeviceKey::from_seed(&[7; 32]), Some(value));
-        let unguarded = candidate.capture().ok_or("capture")?;
         assert_eq!(
-            candidate
-                .capture_cloud(unguarded.generation)
-                .err()
-                .map(|s| s.code()),
+            candidate.capture_current_cloud().err().map(|s| s.code()),
             Some(tonic::Code::ResourceExhausted)
         );
     }
     original.set_session(None);
-    original.set_session(Some(session("A", "new-login")));
     assert_eq!(
-        original
-            .capture_cloud(first.generation)
-            .err()
-            .map(|s| s.code()),
+        original.capture_current_cloud().err().map(|s| s.code()),
         Some(tonic::Code::Unauthenticated)
     );
-    let fresh = original.capture().ok_or("capture")?;
-    assert!(original.capture_cloud(fresh.generation).is_ok());
     Ok(())
 }
 

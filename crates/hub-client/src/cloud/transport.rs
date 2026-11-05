@@ -5,7 +5,9 @@ use super::{
 use nocterm_hub_grpc::cloud_service_client::CloudServiceClient;
 use nocterm_hub_model::cloud::{
     CloudNamespace,
-    capabilities::{CLOUD_FEATURE_CHAT_KEY_MATERIAL, CapabilityLimits},
+    capabilities::{
+        CLOUD_FEATURE_CHAT_DIRECTORY, CLOUD_FEATURE_CHAT_KEY_MATERIAL, CapabilityLimits,
+    },
     relay::{MAX_RELAY_WIRE_BYTES, RelayBinding, RelayKind},
 };
 use std::sync::Arc;
@@ -118,6 +120,9 @@ impl RelayAccess {
     pub(super) fn supports_key_material(&self) -> bool {
         self.limits.features & CLOUD_FEATURE_CHAT_KEY_MATERIAL != 0
     }
+    pub(super) fn supports_chat_directory(&self) -> bool {
+        self.limits.features & CLOUD_FEATURE_CHAT_DIRECTORY != 0
+    }
     pub(super) fn can_publish(&self, binding: &RelayBinding) -> bool {
         if binding.namespace() != &self.namespace {
             return false;
@@ -129,7 +134,8 @@ impl RelayAccess {
             }
             RelaySigner::Runner(s) => {
                 binding.runner().id == s.subject().runner_id
-                    && matches!(binding.kind(), RelayKind::Event | RelayKind::Snapshot)
+                    && (matches!(binding.kind(), RelayKind::Event | RelayKind::Snapshot)
+                        || (binding.kind() == RelayKind::Summary && self.supports_chat_directory()))
             }
         }
     }
@@ -138,6 +144,9 @@ impl RelayAccess {
         selector: &super::CloudSelector,
     ) -> Result<(), CloudError> {
         let wire = selector.wire()?;
+        if selector.is_directory() && !self.supports_chat_directory() {
+            return Err(CloudError::Unsupported);
+        }
         if let RelaySigner::Runner(s) = &self.signer
             && wire.runner_id != s.subject().runner_id
         {

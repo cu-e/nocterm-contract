@@ -1,5 +1,7 @@
 //! Wire data only; none of these descriptive values establishes execution authority.
-use crate::cloud::{CloudTextId, RunCoordinate, provider::ProviderLeaseContext};
+use crate::cloud::{
+    CloudTextId, RunCoordinate, provider::ProviderLeaseContext, ssh::SignedSshBinding,
+};
 use core::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,6 +64,8 @@ pub enum GrantClass {
     Inference,
     Tools,
     Provider,
+    /// A chat's SSH binding ([`GrantPayload::SshBinding`]); revoking it ends its certificates.
+    SshBinding,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopedGrantReference {
@@ -141,6 +145,17 @@ pub enum GrantPayload<'a> {
         allowed_models: Vec<CloudTextId>,
         capsule: &'a [u8],
     },
+    /// The person binds the chat to CA-trusted servers (contract ADR 0009). Chat-scoped: the
+    /// command names no run. A binding with the same grant id and a higher epoch replaces it.
+    SshBinding { binding: SignedSshBinding },
+    /// An account device answers the runner's certificate request `request` of binding
+    /// `grant` with an OpenSSH user certificate blob (at most
+    /// [`crate::cloud::ssh::MAX_CERTIFICATE_BYTES`]). Chat-scoped.
+    SshCertificate {
+        grant: GrantReference,
+        request: [u8; 16],
+        certificate: &'a [u8],
+    },
 }
 impl fmt::Debug for GrantPayload<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -151,6 +166,15 @@ impl fmt::Debug for GrantPayload<'_> {
                 .debug_struct("ProviderGrant")
                 .field("grant", grant)
                 .field("capsule_bytes", &capsule.len())
+                .finish_non_exhaustive(),
+            Self::SshBinding { binding } => f
+                .debug_tuple("SshBindingGrant")
+                .field(&binding.binding().grant)
+                .finish(),
+            Self::SshCertificate { grant, request, .. } => f
+                .debug_struct("SshCertificateGrant")
+                .field("grant", grant)
+                .field("request", request)
                 .finish_non_exhaustive(),
         }
     }

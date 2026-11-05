@@ -1,9 +1,10 @@
 //! Purpose-specific authenticated head probes. Witnesses use the account's
 //! normal key pair and remain openable after a deleted chat key is retired.
-mod envelope;
-use super::RunnerEncryptionKey;
+use super::{
+    RunnerEncryptionKey,
+    account_box::{self as envelope, AccountBox as HeadBox, BoxError, KeyOwner},
+};
 use crate::{AccountKeyPair, KeyError, OpenError, PublicKey, SealError};
-use envelope::{HeadBox, KeyOwner};
 use nocterm_hub_model::cloud::head::{
     HeadProbeError, HeadProbeScope, HeadQuery, SignedHeadQuery, SignedHeadWitness,
 };
@@ -26,6 +27,7 @@ pub fn seal_head_query(
         &query_context(&request.scope, &request.probe_id)?,
         &query.canonical_bytes()?,
     )
+    .map_err(HeadCryptoError::from)
 }
 /// The complete expected scope is independently configured. A hub's offered
 /// encryption/signing keys and routing values are not these pins.
@@ -78,6 +80,7 @@ pub fn seal_head_witness(
         &query.canonical_bytes()?,
         &witness.canonical_bytes()?,
     )
+    .map_err(HeadCryptoError::from)
 }
 /// Only the original pending query supplies expected context/challenge. A valid
 /// witness to another nonce or earlier login must not establish a cold head.
@@ -120,6 +123,17 @@ pub enum HeadCryptoError {
     Seal(#[from] SealError),
     #[error("the head probe authentication failed")]
     Open(#[from] OpenError),
+}
+
+impl From<BoxError> for HeadCryptoError {
+    fn from(error: BoxError) -> Self {
+        match error {
+            BoxError::Bounds => Self::Bounds,
+            BoxError::Key(error) => Self::Key(error),
+            BoxError::Seal(error) => Self::Seal(error),
+            BoxError::Open(error) => Self::Open(error),
+        }
+    }
 }
 
 #[cfg(test)]

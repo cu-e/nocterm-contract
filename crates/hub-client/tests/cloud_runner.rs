@@ -15,6 +15,8 @@ use support::FakeHub;
 use zeroize::Zeroizing;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "cloud_runner/directory.rs"]
+mod directory;
 #[path = "cloud_runner/lifetimes.rs"]
 mod lifetimes;
 #[path = "cloud_runner/reclaim.rs"]
@@ -521,15 +523,10 @@ async fn verify_material_transfer(
     unlock: &nocterm_keys::UnlockKey,
     runner_key: &nocterm_keys::cloud::RunnerEncryptionKey,
     wrapped: &[u8],
-    grant: &nocterm_hub_client::cloud::PreparedChatKeyGrant,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    (chat, ciphertext): (&ChatCoordinate, &[u8]),
+) -> Result<(), Box<dyn std::error::Error>> {
     use nocterm_hub_model::cloud::{JournalClass, JournalCoordinate};
     use nocterm_keys::cloud::{ChatKey, RunnerEncryptionKey, open_chat_key_from_account};
-    let chat = grant
-        .metadata()
-        .binding()
-        .material_coordinate()
-        .ok_or("material coordinate")?;
     let next_keyset = next_client
         .open_keyset("acc-1", unlock)
         .await?
@@ -540,7 +537,7 @@ async fn verify_material_transfer(
         JournalCoordinate::new(chat.clone(), JournalClass::Header, [0; 16], 0, 0, 1)?;
     let journal_cipher =
         next_key.seal_journal(&journal_slot, b"only this chat's private journal")?;
-    let sealed = read_chat_key_grant(runner, chat, grant.ciphertext()).await?;
+    let sealed = read_chat_key_grant(runner, chat, ciphertext).await?;
     let opened = open_chat_key_from_account(runner_key, &keyset.public_key(), chat, &sealed)?;
     assert_eq!(
         opened
@@ -566,15 +563,25 @@ async fn verify_material_transfer(
     assert!(
         open_chat_key_from_account(runner_key, &keyset.public_key(), &foreign, &sealed).is_err()
     );
-    Ok(sealed)
+    Ok(())
+}
+/// A device's upload of exactly `ciphertext` under `metadata`.
+async fn upload(
+    cloud: &CloudClient,
+    metadata: PublicationMetadata,
+    ciphertext: &[u8],
+) -> Result<u64, CloudError> {
+    let mut upload = cloud.begin_publication(metadata)?;
+    upload.write(ciphertext).await?;
+    Ok(upload.finish().await?.cursor)
 }
 #[tokio::test]
-async fn chat_key_material_requires_capability_and_original_account_source_without_task_authority()
--> TestResult {
+async fn a_chat_key_grant_needs_the_capability_and_opens_only_for_its_runner_and_chat() -> TestResult
+{
     use nocterm_hub_model::cloud::relay::RelayKind;
     use nocterm_keys::{
         KdfParams, UnlockKdf, UnlockKey,
-        cloud::{ChatKey, RunnerEncryptionKey},
+        cloud::{ChatKey, RunnerEncryptionKey, seal_chat_key_to_runner},
     };
     let hub = FakeHub::start_cloud().await;
     let client = hub.signed_in_client().await;
@@ -588,66 +595,41 @@ async fn chat_key_material_requires_capability_and_original_account_source_witho
     let chat = record_context(&old_cloud, [4; 16], 1)?.chat().clone();
     let key = ChatKey::generate()?;
     let runner_key = RunnerEncryptionKey::generate()?;
-    assert!(matches!(
-        old_cloud.prepare_chat_key_grant(
-            &keyset,
-            &runner_key.public_key(),
-            chat.clone(),
-            &key,
-            [0x31; 16]
-        ),
-        Err(CloudError::Unsupported)
-    ));
+    let ciphertext =
+        seal_chat_key_to_runner(&key, keyset.key_pair(), &runner_key.public_key(), &chat)?;
+    assert_eq!(ciphertext.len(), 106);
+    let metadata = PublicationMetadata::new(
+        [0x31; 16],
+        RelayBinding::chat_key_grant(chat.clone()),
+        u32::try_from(ciphertext.len())?,
+        Sha256::digest(&ciphertext).into(),
+    )?;
+    assert_eq!(metadata.binding().kind(), RelayKind::ChatKeyGrant);
+    assert!(metadata.binding().command_route().is_none());
+    assert!(metadata.binding().record_context().is_none());
+    assert!(
+        upload(&old_cloud, metadata.clone(), &ciphertext)
+            .await
+            .is_err()
+    );
     let harness = hub.cloud().ok_or("fixture")?;
     assert!(harness.publications().is_empty());
     harness.enable_key_material();
     let (_, _, runner) = enrolled(&hub).await?;
     let cloud = client.cloud_offer().await?.accept(&harness.authority())?;
-    let grant = cloud.prepare_chat_key_grant(
-        &keyset,
-        &runner_key.public_key(),
-        chat.clone(),
-        &key,
-        [0x31; 16],
-    )?;
-    assert_eq!(grant.metadata().binding().kind(), RelayKind::ChatKeyGrant);
-    assert!(grant.metadata().binding().command_route().is_none());
-    assert!(grant.metadata().binding().record_context().is_none());
-    assert_eq!(grant.ciphertext().len(), 106);
-    assert!(runner.begin_publication(grant.metadata().clone()).is_err());
-    assert_eq!(cloud.publish_chat_key_grant(&grant).await?.cursor, 1);
-    // A separately signed-in SDK client cannot publish a prepared object from A.
+    assert!(runner.begin_publication(metadata.clone()).is_err());
+    assert_eq!(upload(&cloud, metadata, &ciphertext).await?, 1);
     let next_client = hub.signed_in_client().await;
-    let next = next_client
-        .cloud_offer()
-        .await?
-        .accept(&harness.authority())?;
-    assert!(matches!(
-        next.publish_chat_key_grant(&grant).await,
-        Err(CloudError::SourceChanged)
-    ));
     let wrapped = key.seal_for_account(keyset.account_key(), &chat)?;
-    let sealed = verify_material_transfer(
+    verify_material_transfer(
         &next_client,
         &runner,
         &keyset,
         &unlock,
         &runner_key,
         &wrapped,
-        &grant,
+        (&chat, &ciphertext),
     )
     .await?;
-    let restored = next.stage_chat_key_grant(chat.clone(), grant.metadata().id(), sealed)?;
-    assert_eq!(restored.metadata(), grant.metadata());
-    client.sign_out();
-    assert!(matches!(
-        cloud.publish_chat_key_grant(&grant).await,
-        Err(CloudError::SourceChanged)
-    ));
-    assert!(next.publish_chat_key_grant(&restored).await.is_ok());
-    assert!(
-        next.stage_chat_key_grant(chat, [1; 16], vec![0; 257])
-            .is_err()
-    );
     Ok(())
 }

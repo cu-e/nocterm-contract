@@ -37,6 +37,8 @@ pub(crate) enum Purpose {
     CloudNativeChatHead = 18,
     AgentDefinition = 19,
     BrokerSecret = 20,
+    CloudDeviceCheckpoint = 21,
+    CloudChatSummary = 22,
 }
 
 impl Purpose {
@@ -62,6 +64,8 @@ impl Purpose {
             Purpose::CloudNativeChatHead => b"cloud-native-chat-head",
             Purpose::AgentDefinition => b"agent-definition",
             Purpose::BrokerSecret => b"agent-broker-secret",
+            Purpose::CloudDeviceCheckpoint => b"cloud-device-checkpoint",
+            Purpose::CloudChatSummary => b"cloud-chat-summary",
         }
     }
 }

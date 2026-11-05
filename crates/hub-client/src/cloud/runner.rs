@@ -8,7 +8,7 @@ use nocterm_hub_grpc::cloud_service_client::CloudServiceClient;
 use nocterm_hub_model::cloud::{
     capabilities::{CapabilitiesClaim, CapabilityLimits, SignedCapabilities},
     hub_namespace_id,
-    relay::{MAX_RELAY_WIRE_BYTES, PublicationMetadata},
+    relay::{MAX_RELAY_WIRE_BYTES, PublicationMetadata, RelayBinding},
     runner_auth::{RunnerProofClaim, RunnerProofKind, RunnerProofSubject},
 };
 use nocterm_hub_proto::v1;
@@ -17,6 +17,9 @@ use sha2::{Digest, Sha256};
 use std::{fmt, sync::Arc};
 use tonic::transport::Channel;
 use zeroize::Zeroizing;
+
+/// How long a summary publication's receipt must be kept for retries (receipt reclaim).
+pub const SUMMARY_RETRY_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Clone)]
 pub struct CloudRunner {
@@ -153,6 +156,52 @@ impl CloudRunner {
         residency: Arc<dyn Send + Sync>,
     ) -> Result<CloudUpload, CloudError> {
         CloudUpload::start_with_residency(self.access(), metadata, Some(residency))
+    }
+    /// Whether this hub keeps runner chat directories (capability bit 256, ADR 0008).
+    pub fn supports_chat_directory(&self) -> bool {
+        self.access().supports_chat_directory()
+    }
+    /// Publishes one summary sealed with `nocterm_keys::cloud::seal_summary` to this runner's
+    /// directory, under the summary's deterministic publication id, so a retry of the same
+    /// revision gets the original receipt. With receipt reclaim (bit 64) the hub may forget
+    /// that receipt after [`SUMMARY_RETRY_MS`]; a later publication of the revision is then a
+    /// harmless duplicate the directory keeps once. Without bit 256 it is
+    /// [`CloudError::Unsupported`], and nothing is sent.
+    pub async fn publish_summary(
+        &self,
+        context: &nocterm_hub_model::cloud::summary::SummaryContext,
+        sealed: &[u8],
+    ) -> Result<v1::CloudDeliveryReceipt, CloudError> {
+        if !self.supports_chat_directory() {
+            return Err(CloudError::Unsupported);
+        }
+        if sealed.is_empty()
+            || sealed.len() > nocterm_hub_model::cloud::summary::MAX_SEALED_SUMMARY_BYTES
+            || context.chat().namespace() != &self.subject().namespace
+            || context.chat().runner().id != self.subject().runner_id
+        {
+            return Err(CloudError::Protocol);
+        }
+        let metadata = PublicationMetadata::new(
+            context
+                .publication_id()
+                .map_err(nocterm_hub_model::cloud::relay::RelayFormatError::from)?,
+            RelayBinding::summary(context.clone()),
+            u32::try_from(sealed.len()).map_err(|_| CloudError::Protocol)?,
+            Sha256::digest(sealed).into(),
+        )?;
+        let retry_until_ms = if self.supports_receipt_reclaim() {
+            crate::now_ms().saturating_add(SUMMARY_RETRY_MS)
+        } else {
+            0
+        };
+        let mut upload = self.begin_publication_with_retry_until(metadata, retry_until_ms)?;
+        let frame =
+            usize::try_from(self.limits.max_frame_bytes).map_err(|_| CloudError::Protocol)?;
+        for chunk in sealed.chunks(frame) {
+            upload.write(chunk).await?;
+        }
+        upload.finish().await
     }
     /// Whether this hub negotiated receipt reclaim (capability bit 64).
     pub fn supports_receipt_reclaim(&self) -> bool {

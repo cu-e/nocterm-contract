@@ -2,6 +2,7 @@ use super::{MAX_RELAY_BINDING_BYTES, RelayFormatError};
 use crate::cloud::{
     ChatCoordinate, CloudNamespace, CloudRoute, RecordContext, RunnerCoordinate,
     codec::{self, Reader},
+    summary::SummaryContext,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +13,9 @@ pub enum RelayKind {
     Snapshot = 3,
     /// Account-authenticated key material only; never a command or task grant.
     ChatKeyGrant = 4,
+    /// A runner-signed chat summary sealed to the account, in the runner's directory stream
+    /// (capability bit 256). The hub keeps the latest summary per chat.
+    Summary = 5,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +23,7 @@ enum BindingBody {
     Command(CloudRoute),
     Record(RecordContext),
     Material(ChatCoordinate),
+    Summary(SummaryContext),
 }
 
 /// Routing only. No title, model, target, plaintext digest or authorization facts.
@@ -58,6 +63,14 @@ impl RelayBinding {
             body: BindingBody::Material(chat),
         }
     }
+    /// Routes a sealed chat summary to the directory stream of the summary's runner. The
+    /// routing is descriptive: a device opens the summary under its pins and this context.
+    pub fn summary(context: SummaryContext) -> Self {
+        Self {
+            kind: RelayKind::Summary,
+            body: BindingBody::Summary(context),
+        }
+    }
     pub fn kind(&self) -> RelayKind {
         self.kind
     }
@@ -66,6 +79,7 @@ impl RelayBinding {
             BindingBody::Command(r) => &r.namespace,
             BindingBody::Record(r) => r.chat().namespace(),
             BindingBody::Material(c) => c.namespace(),
+            BindingBody::Summary(s) => s.chat().namespace(),
         }
     }
     pub fn runner(&self) -> RunnerCoordinate {
@@ -73,6 +87,7 @@ impl RelayBinding {
             BindingBody::Command(r) => r.runner,
             BindingBody::Record(r) => r.chat().runner(),
             BindingBody::Material(c) => c.runner(),
+            BindingBody::Summary(s) => s.chat().runner(),
         }
     }
     pub fn chat_id(&self) -> [u8; 16] {
@@ -80,13 +95,16 @@ impl RelayBinding {
             BindingBody::Command(r) => r.chat_id,
             BindingBody::Record(r) => r.chat().chat_id(),
             BindingBody::Material(c) => c.chat_id(),
+            BindingBody::Summary(s) => s.chat().chat_id(),
         }
     }
+    /// The command id, record id, or for key material and summaries the chat id (the subject
+    /// a directory keeps one summary of).
     pub fn object_id(&self) -> [u8; 16] {
         match &self.body {
             BindingBody::Command(r) => r.command_id,
             BindingBody::Record(r) => r.id(),
-            BindingBody::Material(c) => c.chat_id(),
+            BindingBody::Material(_) | BindingBody::Summary(_) => self.chat_id(),
         }
     }
     /// Exact key generation for material; no account/runner pin ownership implied.
@@ -99,13 +117,20 @@ impl RelayBinding {
     pub fn command_route(&self) -> Option<&CloudRoute> {
         match &self.body {
             BindingBody::Command(r) => Some(r),
-            BindingBody::Record(_) | BindingBody::Material(_) => None,
+            _ => None,
         }
     }
     pub fn record_context(&self) -> Option<&RecordContext> {
         match &self.body {
-            BindingBody::Command(_) | BindingBody::Material(_) => None,
             BindingBody::Record(r) => Some(r),
+            _ => None,
+        }
+    }
+    /// The chat and revision of a summary.
+    pub fn summary_context(&self) -> Option<&SummaryContext> {
+        match &self.body {
+            BindingBody::Summary(s) => Some(s),
+            _ => None,
         }
     }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, RelayFormatError> {
@@ -118,6 +143,7 @@ impl RelayBinding {
             BindingBody::Material(chat) => {
                 chat.canonical_bytes().map_err(RelayFormatError::Material)?
             }
+            BindingBody::Summary(context) => context.canonical_bytes()?,
         };
         codec::field(&mut bytes, &body)?;
         if bytes.len() > MAX_RELAY_BINDING_BYTES {
@@ -147,6 +173,7 @@ impl RelayBinding {
             [4] => Self::chat_key_grant(
                 ChatCoordinate::from_canonical_bytes(body).map_err(RelayFormatError::Material)?,
             ),
+            [5] => Self::summary(SummaryContext::from_canonical_bytes(body)?),
             _ => return Err(RelayFormatError::Malformed),
         };
         reader.finish()?;

@@ -1,13 +1,15 @@
 //! Vocabulary of managed agents: scopes, listings, resources, typed refusals, the pool key
 //! bundle, the host attestation of a runner setup document, the text of chat ids, the agents
 //! protocol level of a host, the host-to-runner chat access frames, provider probe results,
-//! provisioning failures and the shared names of provider kinds and managed tools.
+//! provisioning failures, the shared names of provider kinds and managed tools, and the SSH
+//! section of a managed runner's boot document ([`boot_ssh`], contract ADR 0011).
 //!
 //! Plain data and canonical bytes only: no I/O, no clocks, no randomness. Whatever a hub
 //! displays here is descriptive; the sealed definition (`nocterm-keys::agents`) is what a host
 //! executes.
 
 mod attestation;
+pub mod boot_ssh;
 mod chat_access_frame;
 mod chat_id;
 pub mod limits;

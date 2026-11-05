@@ -143,6 +143,7 @@ fn journal_rejects_moved_class_slot_sequence_revision_or_writer() -> TestResult 
         JournalClass::BackgroundCommand,
         JournalClass::Effect,
         JournalClass::RunHead,
+        JournalClass::SshAccess,
     ] {
         let changed = JournalCoordinate::new(chat()?, class, [6; 16], 7, 8, 9)?;
         assert!(key.open_journal(&changed, &encrypted).is_err());
@@ -166,6 +167,24 @@ fn journal_rejects_moved_class_slot_sequence_revision_or_writer() -> TestResult 
     for changed in moved_chats()? {
         assert!(key.open_journal(&slot(changed)?, &encrypted).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn an_ssh_access_row_opens_only_under_its_own_class_not_as_the_effect_slot_it_replaces()
+-> TestResult {
+    use nocterm_hub_model::cloud::SSH_ACCESS_SLOT;
+    let key = ChatKey::generate()?;
+    let row = JournalCoordinate::new(chat()?, JournalClass::SshAccess, SSH_ACCESS_SLOT, 3, 3, 1)?;
+    let sealed = key.seal_journal(&row, b"ssh access row")?;
+    assert_eq!(
+        key.open_journal(&row, &sealed)?.as_slice(),
+        b"ssh access row"
+    );
+    let legacy = JournalCoordinate::new(chat()?, JournalClass::Effect, SSH_ACCESS_SLOT, 3, 3, 1)?;
+    assert!(key.open_journal(&legacy, &sealed).is_err());
+    let old = key.seal_journal(&legacy, b"ssh access row")?;
+    assert!(key.open_journal(&row, &old).is_err());
     Ok(())
 }
 

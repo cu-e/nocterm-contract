@@ -115,6 +115,11 @@ pub enum CloudEventPayload<'a> {
     BackgroundLifecycle(Box<BackgroundLifecyclePayload<'a>>),
     AuthenticationRequested(Box<crate::cloud::payload::AuthenticationRequest<'a>>),
     SessionState(Box<crate::cloud::payload::SessionState>),
+    /// The runner asks account devices for a certificate inside a chat's SSH binding
+    /// (contract ADR 0009). Chat-scoped: the record names no run.
+    SshCertificateRequested(Box<crate::cloud::ssh::SshCertificateRequest>),
+    /// What the runner made of a chat's SSH binding. Chat-scoped.
+    SshAccessState(Box<crate::cloud::ssh::SshAccessUpdate>),
 }
 impl CloudEventPayload<'_> {
     pub(super) fn tag(&self) -> u8 {
@@ -132,6 +137,8 @@ impl CloudEventPayload<'_> {
             Self::BackgroundLifecycle(_) => 11,
             Self::AuthenticationRequested(_) => 12,
             Self::SessionState(_) => 13,
+            Self::SshCertificateRequested(_) => 14,
+            Self::SshAccessState(_) => 15,
         }
     }
 
@@ -152,6 +159,12 @@ impl CloudEventPayload<'_> {
             Self::AuthenticationRequested(request) => Some(request.binding.run),
             Self::SessionState(state) => Some(state.binding.run),
             Self::Deleted { .. } => return self.validate(),
+            Self::SshCertificateRequested(request)
+                if request.binding.binding().chat != *context.chat() =>
+            {
+                return Err(EventPayloadError::Context);
+            }
+            Self::SshCertificateRequested(_) | Self::SshAccessState(_) => None,
         };
         if run != context.run() {
             return Err(EventPayloadError::Context);
@@ -232,6 +245,8 @@ pub enum EventPayloadError {
     Payload(#[from] crate::cloud::payload::PayloadError),
     #[error("Cloud signed record is invalid")]
     Record(#[from] RecordError),
+    #[error("Cloud SSH binding event is invalid")]
+    Ssh(#[from] crate::cloud::ssh::SshFormatError),
 }
 
 impl core::fmt::Debug for CloudEventPayload<'_> {

@@ -17,6 +17,10 @@ service CloudService {
   rpc RunnerHeartbeat(CloudHeartbeat) returns (CloudHeartbeatReceipt);
   rpc RunnerStatus(CloudRunnerRef) returns (CloudRunnerStatus);
   rpc Publish(stream CloudPublishFrame) returns (CloudDeliveryReceipt);
+  // Capability bit 128, device only: one publication whose ciphertext fits one relay frame
+  // (<=16KiB), for clients without request streaming. Identical to Publish with one data frame
+  // and the finished marker, with the same idempotency by publication_id.
+  rpc PublishOne(CloudPublishOne) returns (CloudDeliveryReceipt);
   rpc Replay(CloudReplayRequest) returns (stream CloudReplayFrame);
   rpc Acknowledge(CloudAcknowledge) returns (CloudAcknowledged);
   rpc Watch(CloudWatchRequest) returns (stream CloudHint);
@@ -95,6 +99,10 @@ message CloudPublication {
   int64 retry_until_ms = 5;
 }
 message CloudPublishFinished {} // Followed only by request EOF; otherwise refuse.
+message CloudPublishOne {
+  CloudPublication header = 1;
+  bytes data = 2; // Exactly header.total_bytes, nonempty, <=16KiB; digest must match.
+}
 message CloudDeliveryReceipt {
   bytes publication_id = 1;
   uint64 cursor = 2;
@@ -108,12 +116,23 @@ message CloudSelector {
   oneof stream {
     CloudRunnerInbox inbox = 3; // Commands across this runner's chats.
     bytes chat_id = 4; // Exact16, delivered events/snapshots of one chat.
+    // Capability bit 256: this runner's chat directory (relay kind 5 Summary).
+    CloudRunnerDirectory directory = 5;
   }
 }
 // Command and capability-bit8 ChatKeyGrant routing share this cursor. Key
 // material is <=256 bytes and cannot authorize execution. A missing/invalid key
 // must refuse command admission; never synthesize a default key to advance it.
 message CloudRunnerInbox {}
+// Capability bit 256 (ADR 0008 of the contract). Only the exact runner of the selector
+// publishes here, only relay kind 5 Summary (<= MAX_SEALED_SUMMARY_BYTES, one relay frame);
+// account devices replay and watch it, never publish or acknowledge it. The hub keeps the
+// latest summary per (directory, binding chat id): it retains the highest summary revision of
+// a chat and marks every other summary of that chat purged, so storage is O(chats). Replay
+// therefore has cursor holes, never a gap frame; Watch hints follow new summaries. Purge and
+// ListStreams do not apply to directories; retiring the runner deletes its directory. A hub
+// without bit 256 refuses this selector as an unknown stream.
+message CloudRunnerDirectory {}
 message CloudReplayRequest {
   CloudSelector selector = 1;
   uint64 after_cursor = 2;
