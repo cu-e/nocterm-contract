@@ -18,6 +18,8 @@ wasm-bindgen.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
+# `nocterm-hub-model` makes identifiers with `Uuid::new_v4`, which needs a randomness source here.
+uuid = { workspace = true, features = ["js"] }
 
 
 [lints]
