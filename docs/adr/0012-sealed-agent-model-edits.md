@@ -1,6 +1,6 @@
 # 0012. Model edits retain the pool-sealed definition
 
-Status: accepted. Extends [0004](0004-agent-definition-v2-history-probe.md).
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

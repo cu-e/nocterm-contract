@@ -5,14 +5,13 @@
 mod support;
 
 use nocterm_hub_client::{MAX_FRAME, RelayError, RelayTarget};
-use nocterm_hub_proto::v1::ErrorCode;
+use nocterm_hub_proto::v2::ErrorCode;
 use support::{FakeHub, RelayEnd};
 
 fn target(host: &str) -> RelayTarget {
     RelayTarget {
         host: host.into(),
         port: 22,
-        node: None,
     }
 }
 
@@ -91,13 +90,12 @@ async fn a_hub_without_relays_is_reported_as_unsupported() {
 }
 
 #[tokio::test]
-async fn the_open_frame_names_the_target_and_the_node() {
+async fn the_open_frame_names_the_target() {
     let hub = FakeHub::start(true).await;
     let client = hub.signed_in_client().await;
     let target = RelayTarget {
         host: "db.internal".into(),
         port: 2222,
-        node: Some("node-7".into()),
     };
 
     let _conn = client.relay(&target).await.unwrap();
@@ -107,8 +105,7 @@ async fn the_open_frame_names_the_target_and_the_node() {
     assert_eq!(opens.len(), 2);
     assert_eq!(opens[0].host, "db.internal");
     assert_eq!(opens[0].port, 2222);
-    assert_eq!(opens[0].node, "node-7");
-    assert_eq!(opens[1].node, "");
+    assert_eq!(opens[1].host, "echo.test");
 }
 
 #[tokio::test]

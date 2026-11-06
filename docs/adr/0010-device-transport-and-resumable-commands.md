@@ -1,6 +1,6 @@
 # 0010. The device transport, resumable commands and the enrolled-seat rule
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 Extends [0007](0007-device-flows-resumable-reader-and-freshness.md) (device flows): adds the
 `Opening` freshness level, a stored form of a sealed command, and the rule for waking a seat.

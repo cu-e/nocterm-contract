@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package nocterm.hub.v2;
+
+import "nocterm/hub/v2/common.proto";
+
+// The SSH servers the caller's agents may sign in to. Requires an access token.
+//
+// Every account has one agent key (Ed25519). A server is connected to agents when its
+// `authorized_keys` holds the key's line: the desktop app writes it over its own session and
+// calls `AddServer`; the web panel lets a worker write it once with credentials the person
+// types (`ProbeServer`, then `ConnectServer`), which the hub never stores. Agents verify the
+// recorded host key on every connection.
+service ServerService {
+  // The account's agent key; created on first use.
+  rpc GetAgentKey(Empty) returns (AgentKey);
+  // Replaces the agent key. Every server needs its line written again (`KEY_ROTATED`).
+  rpc RotateAgentKey(Empty) returns (AgentKey);
+  rpc ListServers(Empty) returns (ServerList);
+  // Records a server whose `authorized_keys` the caller already updated; a worker checks it.
+  rpc AddServer(AddServerRequest) returns (Server);
+  // Reads a server's host key without credentials, for the person to compare.
+  rpc ProbeServer(ProbeServerRequest) returns (ServerProbe);
+  // Signs in to a probed server with the person's credential, writes the agent key's line and
+  // records the server. The credential is used once and never stored.
+  rpc ConnectServer(ConnectServerRequest) returns (Server);
+  // Renames a server or accepts its new host key.
+  rpc UpdateServer(UpdateServerRequest) returns (Server);
+  // Signs in with the agent key and updates the status.
+  rpc CheckServer(IdRequest) returns (Server);
+  // Agents stop using the server at once. With a credential, the line is also removed.
+  rpc RemoveServer(RemoveServerRequest) returns (RemoveServerResult);
+}
+
+message AgentKey {
+  // OpenSSH public key, `ssh-ed25519 AAAA… comment`.
+  string public_key = 1;
+  // The full `authorized_keys` line with its restrictions.
+  string authorized_line = 2;
+  // `SHA256:…`.
+  string fingerprint = 3;
+  int64 created_at_ms = 4;
+}
+
+enum ServerStatus {
+  SERVER_STATUS_UNSPECIFIED = 0;
+  // Not checked yet.
+  SERVER_STATUS_UNCHECKED = 1;
+  // The agent key signs in.
+  SERVER_STATUS_READY = 2;
+  // The server refuses the agent key.
+  SERVER_STATUS_NO_ACCESS = 3;
+  // The server presents another host key than the recorded one; agents do not connect.
+  SERVER_STATUS_HOST_KEY_CHANGED = 4;
+  // The server could not be reached.
+  SERVER_STATUS_UNREACHABLE = 5;
+  // The agent key was replaced after the line was written.
+  SERVER_STATUS_KEY_ROTATED = 6;
+}
+
+message Server {
+  string id = 1;
+  string name = 2;
+  string host = 3;
+  uint32 port = 4;
+  string user = 5;
+  // OpenSSH public host key, `ssh-ed25519 AAAA…`.
+  string host_key = 6;
+  string host_key_fingerprint = 7;
+  ServerStatus status = 8;
+  string status_message = 9;
+  int64 checked_at_ms = 10;
+  int64 created_at_ms = 11;
+}
+
+message ServerList {
+  repeated Server servers = 1;
+}
+
+message AddServerRequest {
+  string name = 1;
+  string host = 2;
+  uint32 port = 3;
+  string user = 4;
+  string host_key = 5;
+}
+
+message ProbeServerRequest {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message ServerProbe {
+  string probe_id = 1;
+  string host_key = 2;
+  string host_key_fingerprint = 3;
+  int64 expires_at_ms = 4;
+}
+
+// A secret the person types to let the hub write or remove the agent key's line once.
+message SshCredential {
+  oneof secret {
+    string password = 1;
+    // OpenSSH private key text.
+    string private_key = 2;
+  }
+  // Passphrase of an encrypted private key.
+  string passphrase = 3;
+}
+
+message ConnectServerRequest {
+  string probe_id = 1;
+  string name = 2;
+  string user = 3;
+  SshCredential credential = 4;
+}
+
+message UpdateServerRequest {
+  string id = 1;
+  // Empty keeps the name.
+  string name = 2;
+  // A new host key the person accepted; empty keeps the recorded one.
+  string host_key = 3;
+}
+
+message RemoveServerRequest {
+  string id = 1;
+  // Optional: also remove the agent key's line with this credential.
+  SshCredential credential = 2;
+}
+
+message RemoveServerResult {
+  bool line_removed = 1;
+  // Why the line stayed, readable by a person.
+  string message = 2;
+}

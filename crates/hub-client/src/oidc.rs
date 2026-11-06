@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use nocterm_hub_proto::v1::{self, complete_login_request};
+use nocterm_hub_proto::v2::{self, complete_login_request};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -161,12 +161,12 @@ impl HubClient {
         let state = random_text::<16>()?;
         let start = self
             .auth()
-            .start_oidc_login(v1::StartOidcLoginRequest {
+            .start_oidc_login(v2::StartOidcLoginRequest {
                 provider_id: provider.to_owned(),
                 redirect_uri: redirect_uri.clone(),
                 code_challenge: challenge,
                 state: state.clone(),
-                redirect_kind: v1::OidcRedirectKind::Loopback as i32,
+                redirect_kind: v2::OidcRedirectKind::Loopback as i32,
             })
             .await?
             .into_inner();
@@ -174,7 +174,7 @@ impl HubClient {
         let code = tokio::time::timeout(LOGIN_TIMEOUT, wait_for_code(&listener, &state))
             .await
             .map_err(|_| OidcError::TimedOut)??;
-        let grant = v1::OidcCodeGrant {
+        let grant = v2::OidcCodeGrant {
             code,
             code_verifier: verifier,
             redirect_uri,

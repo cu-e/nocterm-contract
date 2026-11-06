@@ -1,6 +1,6 @@
 # 0001. Managed agents: sealed definitions, broker tokens and SSH CA grants
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

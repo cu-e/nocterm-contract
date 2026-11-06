@@ -3,10 +3,7 @@
 //! (`nocterm-keys-wasm`) build it with the same function, so a keyset made in a browser opens
 //! on a desktop and the reverse.
 
-use crate::{
-    AccountKey, AccountKeyPair, KeyError, PublicKey, RecoveryKey, SealError, UnlockKdf, UnlockKey,
-    UnlockSource,
-};
+use crate::{AccountKey, KeyError, RecoveryKey, SealError, UnlockKdf, UnlockKey, UnlockSource};
 
 /// The sealed and public values of a keyset, as the hub stores them. Nothing here opens
 /// without the unlock key or the recovery key.
@@ -18,10 +15,6 @@ pub struct KeysetMaterial {
     pub salt: Vec<u8>,
     /// The account key sealed by the unlock key.
     pub wrapped_account_key: Vec<u8>,
-    /// The account's X25519 public key, published for grants.
-    pub public_key: PublicKey,
-    /// The matching private key, sealed by the account key.
-    pub sealed_private_key: Vec<u8>,
     /// The account key sealed by the recovery key.
     pub recovery_wrapped_account_key: Vec<u8>,
     /// Which password the unlock key comes from (the keyset's `unlock_kind`).
@@ -53,8 +46,6 @@ pub enum KeysetMaterialError {
 pub struct CreatedKeyset {
     /// The key that wraps the account's collection keys.
     pub account_key: AccountKey,
-    /// The account's X25519 pair.
-    pub pair: AccountKeyPair,
     /// Shown to the user once and stored nowhere.
     pub recovery: RecoveryKey,
     /// What the hub stores.
@@ -66,7 +57,6 @@ pub struct CreatedKeyset {
 pub fn seal_keyset(
     account_id: &str,
     account_key: &AccountKey,
-    pair: &AccountKeyPair,
     unlock: &UnlockKey,
     kdf: &UnlockKdf,
     recovery: &RecoveryKey,
@@ -81,14 +71,12 @@ pub fn seal_keyset(
         kdf: kdf.description(),
         salt: kdf.salt().to_vec(),
         wrapped_account_key: account_key.seal(unlock, account_id)?,
-        public_key: pair.public_key(),
-        sealed_private_key: pair.seal(account_key, account_id)?,
         recovery_wrapped_account_key: recovery.wrap(account_key, account_id)?,
         unlock_source: unlock.source(),
     })
 }
 
-/// A first keyset of `account_id`: a fresh account key, key pair and recovery key, sealed
+/// A first keyset of `account_id`: a fresh account key and recovery key, sealed
 /// under `unlock` (derived as `kdf` describes).
 pub fn create_keyset(
     account_id: &str,
@@ -96,12 +84,10 @@ pub fn create_keyset(
     kdf: &UnlockKdf,
 ) -> Result<CreatedKeyset, KeysetMaterialError> {
     let account_key = AccountKey::generate()?;
-    let pair = AccountKeyPair::generate()?;
     let recovery = RecoveryKey::generate()?;
-    let material = seal_keyset(account_id, &account_key, &pair, unlock, kdf, &recovery)?;
+    let material = seal_keyset(account_id, &account_key, unlock, kdf, &recovery)?;
     Ok(CreatedKeyset {
         account_key,
-        pair,
         recovery,
         material,
     })
@@ -110,7 +96,7 @@ pub fn create_keyset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LoginSecrets;
+    use crate::{CollectionKey, LoginSecrets};
 
     #[test]
     fn a_created_keyset_opens_with_the_password_and_with_the_recovery_key() {
@@ -120,29 +106,18 @@ mod tests {
         let material = &created.material;
         assert_eq!(material.unlock_source, UnlockSource::LoginPassword);
         assert_eq!(material.kdf, secrets.kdf().description());
-        assert_eq!(material.public_key, created.pair.public_key());
 
         let account =
             AccountKey::open(secrets.unlock(), account_id, &material.wrapped_account_key).unwrap();
-        let pair = AccountKeyPair::open(
-            &account,
-            account_id,
-            &material.sealed_private_key,
-            &material.public_key,
-        )
-        .unwrap();
-        assert_eq!(pair.public_key(), material.public_key);
         let recovered = created
             .recovery
             .unwrap(account_id, &material.recovery_wrapped_account_key)
             .unwrap();
-        AccountKeyPair::open(
-            &recovered,
-            account_id,
-            &material.sealed_private_key,
-            &material.public_key,
-        )
-        .unwrap();
+        let wrapped = CollectionKey::generate()
+            .unwrap()
+            .seal_for(&account, "col-1")
+            .unwrap();
+        CollectionKey::open(&recovered, "col-1", &wrapped).unwrap();
         assert!(
             AccountKey::open(secrets.unlock(), "acc-2", &material.wrapped_account_key).is_err()
         );

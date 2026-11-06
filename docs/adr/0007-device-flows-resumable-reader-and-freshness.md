@@ -1,6 +1,6 @@
 # 0007. Device flows, a resumable reader and freshness levels
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 Extends [0006](0006-cloud-chats-on-a-browser-device.md). Supersedes its "Freshness stays
 mandatory" decision and its "the order and the waiting are the caller's" sentence on chat

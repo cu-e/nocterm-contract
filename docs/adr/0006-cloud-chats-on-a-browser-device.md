@@ -1,6 +1,6 @@
 # 0006. Cloud chats on a browser device
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

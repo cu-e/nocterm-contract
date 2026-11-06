@@ -1,6 +1,6 @@
 # 0013. Own provider records list every model a lease permits
 
-Status: accepted. Extends the own-provider key record and lease of
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 [0006](0006-cloud-chats-on-a-browser-device.md).
 
 ## Context

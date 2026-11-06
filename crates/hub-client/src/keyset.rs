@@ -1,15 +1,15 @@
-//! The account keyset on the hub: creating it, opening it with the unlock key or the recovery
-//! key, and granting collection keys to other members.
+//! The account keyset on the hub: creating it and opening it with the unlock key or the recovery
+//! key.
 //!
 //! The hub stores the keyset as sealed values and checks only versions: it never holds a key
 //! that opens one. Every value read back is opened here, and one that does not open fails
 //! loudly instead of being replaced.
 
-use nocterm_hub_proto::v1;
+use nocterm_hub_proto::v2;
 use nocterm_keys::{
-    AccountKey, AccountKeyPair, CollectionKey, KdfParseError, KeyError, KeysetMaterial,
-    KeysetMaterialError, OpenError, PublicKey, PublicKeyError, RecoveryKey, SealError, TrustedKey,
-    UnlockKdf, UnlockKey, UnlockSource, create_keyset, seal_keyset,
+    AccountKey, CollectionKey, KdfParseError, KeyError, KeysetMaterial, KeysetMaterialError,
+    OpenError, RecoveryKey, SealError, UnlockKdf, UnlockKey, UnlockSource, create_keyset,
+    seal_keyset,
 };
 
 use crate::{ClientError, HubClient, StatusCode};
@@ -24,8 +24,7 @@ pub enum KeysetError {
     /// The account already has a keyset (another device created it first); open that one.
     #[error("the account already has a keyset")]
     AlreadyExists,
-    /// The hub's keyset has no key pair, no recovery key or no record of how its unlock key is
-    /// derived (created by an older version).
+    /// The hub's keyset has no recovery key or no record of how its unlock key is derived.
     #[error("the keyset on the hub is incomplete")]
     Incomplete,
     /// The keyset records a way of deriving the unlock key that this client does not know.
@@ -61,9 +60,6 @@ pub enum KeysetError {
     /// A key could not be sealed.
     #[error(transparent)]
     Seal(#[from] SealError),
-    /// A public key from the hub is not 32 bytes.
-    #[error(transparent)]
-    PublicKey(#[from] PublicKeyError),
 }
 
 /// How the unlock key of a stored keyset is derived, read from the keyset itself.
@@ -83,14 +79,14 @@ impl UnlockMethod {
     /// The method a keyset records. Errors are [`KeysetError::Incomplete`] for a keyset that
     /// records none, [`KeysetError::UnsupportedUnlock`] for a value this client does not know,
     /// and [`KeysetError::Kdf`] for stored parameters it refuses.
-    pub fn of(record: &v1::AccountKeyset) -> Result<Self, KeysetError> {
-        match v1::UnlockKind::try_from(record.unlock_kind) {
-            Ok(v1::UnlockKind::LoginPassword) => Ok(Self::LoginPassword),
-            Ok(v1::UnlockKind::VaultPassword) => Ok(Self::VaultPassword(UnlockKdf::parse(
+    pub fn of(record: &v2::Keyset) -> Result<Self, KeysetError> {
+        match v2::UnlockKind::try_from(record.unlock_kind) {
+            Ok(v2::UnlockKind::LoginPassword) => Ok(Self::LoginPassword),
+            Ok(v2::UnlockKind::VaultPassword) => Ok(Self::VaultPassword(UnlockKdf::parse(
                 &record.kdf,
                 &record.salt,
             )?)),
-            Ok(v1::UnlockKind::Unspecified) => Err(KeysetError::Incomplete),
+            Ok(v2::UnlockKind::Unspecified) => Err(KeysetError::Incomplete),
             Err(_) => Err(KeysetError::UnsupportedUnlock {
                 kind: record.unlock_kind,
             }),
@@ -106,10 +102,10 @@ impl UnlockMethod {
     }
 }
 
-fn kind_of(source: UnlockSource) -> v1::UnlockKind {
+fn kind_of(source: UnlockSource) -> v2::UnlockKind {
     match source {
-        UnlockSource::LoginPassword => v1::UnlockKind::LoginPassword,
-        UnlockSource::VaultPassword => v1::UnlockKind::VaultPassword,
+        UnlockSource::LoginPassword => v2::UnlockKind::LoginPassword,
+        UnlockSource::VaultPassword => v2::UnlockKind::VaultPassword,
     }
 }
 
@@ -126,14 +122,12 @@ impl From<KeysetMaterialError> for KeysetError {
 }
 
 /// The hub write of sealed keyset material.
-fn put_request(expected_version: u64, material: KeysetMaterial) -> v1::PutAccountKeysetRequest {
-    v1::PutAccountKeysetRequest {
+fn put_request(expected_version: u64, material: KeysetMaterial) -> v2::PutKeysetRequest {
+    v2::PutKeysetRequest {
         expected_version,
         kdf: material.kdf,
         salt: material.salt,
         wrapped_account_key: material.wrapped_account_key,
-        public_key: material.public_key.to_bytes().to_vec(),
-        sealed_private_key: material.sealed_private_key,
         recovery_wrapped_account_key: material.recovery_wrapped_account_key,
         unlock_kind: kind_of(material.unlock_source).into(),
     }
@@ -145,7 +139,6 @@ pub struct Keyset {
     account_id: String,
     version: u64,
     account_key: AccountKey,
-    pair: AccountKeyPair,
 }
 
 /// A keyset created now, with the recovery key to show the user once.
@@ -173,52 +166,13 @@ impl Keyset {
         &self.account_key
     }
 
-    /// The account's X25519 pair.
-    pub fn key_pair(&self) -> &AccountKeyPair {
-        &self.pair
-    }
-
-    /// The public half, published on the hub.
-    pub fn public_key(&self) -> PublicKey {
-        self.pair.public_key()
-    }
-
-    /// Opens the envelope of a collection this account created and sealed for itself
-    /// ([`Keyset::seal_collection_key`]).
-    ///
-    /// Use it for every personal collection (`org_id` empty) and for any collection the
-    /// account itself created. A grant is refused here with [`OpenError::Malformed`]: the hub
-    /// chooses what it returns, and a grant can be made by anyone who knows the public key, so
-    /// accepting one in place of the account's own envelope would let the hub choose the key
-    /// of a personal collection.
-    pub fn open_own_collection_key(
+    /// Opens the envelope of one of the account's collections, sealed by its account key.
+    pub fn open_collection_key(
         &self,
         collection_id: &str,
         sealed: &[u8],
     ) -> Result<CollectionKey, OpenError> {
         CollectionKey::open(&self.account_key, collection_id, sealed)
-    }
-
-    /// Opens a key `granter` granted to this account for an organization collection.
-    ///
-    /// `granter` is the pinned key of the account that is expected to have granted it (the
-    /// hub names it in `CollectionKey.granted_by`, then [`nocterm_keys::PinnedKeys::trust`]
-    /// vouches for the key). A grant made with another key, such as one the hub made itself,
-    /// is [`OpenError::Rejected`]. An envelope the account sealed for itself is
-    /// [`OpenError::Malformed`].
-    pub fn open_granted_collection_key(
-        &self,
-        collection_id: &str,
-        sealed: &[u8],
-        granter: &TrustedKey,
-    ) -> Result<CollectionKey, OpenError> {
-        CollectionKey::open_from(
-            &self.pair,
-            granter.public_key(),
-            collection_id,
-            &self.account_id,
-            sealed,
-        )
     }
 
     /// Seals a collection key this account created, for `CreateCollection`.
@@ -230,19 +184,18 @@ impl Keyset {
         key.seal_for(&self.account_key, collection_id)
     }
 
-    /// A first keyset: a fresh account key, pair and recovery key, sealed for the hub.
+    /// A first keyset: a fresh account key and recovery key, sealed for the hub.
     fn build(
         account_id: &str,
         unlock: &UnlockKey,
         kdf: &UnlockKdf,
-    ) -> Result<(NewKeyset, v1::PutAccountKeysetRequest), KeysetError> {
+    ) -> Result<(NewKeyset, v2::PutKeysetRequest), KeysetError> {
         let created = create_keyset(account_id, unlock, kdf)?;
         let request = put_request(0, created.material);
         let keyset = Keyset {
             account_id: account_id.to_owned(),
             version: 0,
             account_key: created.account_key,
-            pair: created.pair,
         };
         Ok((
             NewKeyset {
@@ -257,45 +210,27 @@ impl Keyset {
         expected_version: u64,
         account_id: &str,
         account_key: &AccountKey,
-        pair: &AccountKeyPair,
         unlock: &UnlockKey,
         kdf: &UnlockKdf,
         recovery: &RecoveryKey,
-    ) -> Result<v1::PutAccountKeysetRequest, KeysetError> {
-        let material = seal_keyset(account_id, account_key, pair, unlock, kdf, recovery)?;
+    ) -> Result<v2::PutKeysetRequest, KeysetError> {
+        let material = seal_keyset(account_id, account_key, unlock, kdf, recovery)?;
         Ok(put_request(expected_version, material))
     }
 
-    /// Opens the key pair of a keyset whose account key is already open.
-    fn with_account_key(
-        record: &v1::AccountKeyset,
-        account_id: &str,
-        account_key: AccountKey,
-    ) -> Result<Self, KeysetError> {
-        if record.public_key.is_empty() || record.sealed_private_key.is_empty() {
-            return Err(KeysetError::Incomplete);
-        }
-        let public = PublicKey::from_bytes(&record.public_key)?;
-        let pair = AccountKeyPair::open(
-            &account_key,
-            account_id,
-            &record.sealed_private_key,
-            &public,
-        )
-        .map_err(KeysetError::Damaged)?;
-        Ok(Self {
+    fn with_account_key(record: &v2::Keyset, account_id: &str, account_key: AccountKey) -> Self {
+        Self {
             account_id: account_id.to_owned(),
             version: record.version,
             account_key,
-            pair,
-        })
+        }
     }
 
     /// Opens a keyset with the unlock key derived from the password. The key must come from
     /// the source the keyset records ([`UnlockMethod::of`]); another source is
     /// [`KeysetError::WrongUnlockSource`], not a wrong password.
     pub fn open(
-        record: &v1::AccountKeyset,
+        record: &v2::Keyset,
         account_id: &str,
         unlock: &UnlockKey,
     ) -> Result<Self, KeysetError> {
@@ -311,12 +246,12 @@ impl Keyset {
                 OpenError::Rejected => KeysetError::WrongUnlockKey,
                 OpenError::Malformed => KeysetError::Damaged(err),
             })?;
-        Self::with_account_key(record, account_id, account_key)
+        Ok(Self::with_account_key(record, account_id, account_key))
     }
 
     /// Opens a keyset with the recovery key.
     pub fn recover(
-        record: &v1::AccountKeyset,
+        record: &v2::Keyset,
         account_id: &str,
         recovery: &RecoveryKey,
     ) -> Result<Self, KeysetError> {
@@ -329,19 +264,15 @@ impl Keyset {
                 OpenError::Rejected => KeysetError::WrongRecoveryKey,
                 OpenError::Malformed => KeysetError::Damaged(err),
             })?;
-        Self::with_account_key(record, account_id, account_key)
+        Ok(Self::with_account_key(record, account_id, account_key))
     }
 }
 
 impl HubClient {
     /// The account's keyset record as the hub stores it; `None` before the first device
     /// created it.
-    pub async fn keyset_record(&self) -> Result<Option<v1::AccountKeyset>, ClientError> {
-        match self
-            .store()
-            .get_account_keyset(v1::GetAccountKeysetRequest {})
-            .await
-        {
+    pub async fn keyset_record(&self) -> Result<Option<v2::Keyset>, ClientError> {
+        match self.vault().get_keyset(v2::Empty {}).await {
             Ok(record) => Ok(Some(record.into_inner())),
             Err(status) => match ClientError::from(status) {
                 ClientError::Status {
@@ -375,8 +306,8 @@ impl HubClient {
     ) -> Result<NewKeyset, KeysetError> {
         let (mut created, request) = Keyset::build(account_id, unlock, kdf)?;
         let stored = self
-            .store()
-            .put_account_keyset(request)
+            .vault()
+            .put_keyset(request)
             .await
             .map_err(ClientError::from)
             .map_err(|err| {
@@ -420,56 +351,24 @@ impl HubClient {
             record.version,
             account_id,
             &keyset.account_key,
-            &keyset.pair,
             unlock,
             kdf,
             recovery,
         )?;
         let stored = self
-            .store()
-            .put_account_keyset(request)
+            .vault()
+            .put_keyset(request)
             .await
             .map_err(ClientError::from)?
             .into_inner();
         keyset.version = stored.version;
         Ok(keyset)
     }
-
-    /// Grants `key` of `collection_id` to another member: seals it from `granter`'s key pair
-    /// to the member's pinned public key, bound to the collection, the member's account and
-    /// the granter's key, and asks the hub to store it.
-    ///
-    /// `recipient` comes from [`nocterm_keys::PinnedKeys`]: a key the hub merely published is
-    /// not enough, since a hub that substitutes it receives the collection key. The hub still
-    /// checks who may grant.
-    pub async fn grant(
-        &self,
-        granter: &Keyset,
-        collection_id: &str,
-        key: &CollectionKey,
-        recipient: &TrustedKey,
-    ) -> Result<(), KeysetError> {
-        let sealed_key = key.seal_to(
-            granter.key_pair(),
-            recipient.public_key(),
-            collection_id,
-            recipient.account_id(),
-        )?;
-        self.store()
-            .grant_collection_key(v1::GrantCollectionKeyRequest {
-                collection_id: collection_id.to_owned(),
-                account_id: recipient.account_id().to_owned(),
-                sealed_key,
-            })
-            .await
-            .map_err(ClientError::from)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use nocterm_keys::{KdfParams, LoginSecrets, PinError, PinnedKeys};
+    use nocterm_keys::{KdfParams, LoginSecrets};
 
     use super::*;
 
@@ -486,15 +385,13 @@ mod tests {
     }
 
     /// The record the hub would return after storing `request`.
-    fn stored(request: &v1::PutAccountKeysetRequest, version: u64) -> v1::AccountKeyset {
-        v1::AccountKeyset {
+    fn stored(request: &v2::PutKeysetRequest, version: u64) -> v2::Keyset {
+        v2::Keyset {
             version,
             kdf: request.kdf.clone(),
             salt: request.salt.clone(),
             wrapped_account_key: request.wrapped_account_key.clone(),
             updated_at_ms: 0,
-            public_key: request.public_key.clone(),
-            sealed_private_key: request.sealed_private_key.clone(),
             recovery_wrapped_account_key: request.recovery_wrapped_account_key.clone(),
             unlock_kind: request.unlock_kind,
         }
@@ -510,7 +407,6 @@ mod tests {
         let by_unlock = Keyset::open(&record, "acc-1", &unlock()).unwrap();
         let by_recovery = Keyset::recover(&record, "acc-1", &created.recovery).unwrap();
         for opened in [&by_unlock, &by_recovery] {
-            assert_eq!(opened.public_key(), created.keyset.public_key());
             assert_eq!(opened.version(), 1);
             assert_eq!(opened.account_id(), "acc-1");
         }
@@ -541,131 +437,9 @@ mod tests {
     }
 
     #[test]
-    fn a_public_key_swapped_by_the_hub_is_an_error_not_a_silent_replacement() {
-        let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
-        let mut record = stored(&request, 1);
-        let stranger = AccountKeyPair::generate().unwrap().public_key();
-        record.public_key = stranger.to_bytes().to_vec();
-        assert!(matches!(
-            Keyset::open(&record, "acc-1", &unlock()),
-            Err(KeysetError::Damaged(OpenError::Rejected))
-        ));
-        record.public_key = vec![1; 5];
-        assert!(matches!(
-            Keyset::open(&record, "acc-1", &unlock()),
-            Err(KeysetError::PublicKey(_))
-        ));
-    }
-
-    #[test]
-    fn a_keyset_without_a_key_pair_is_incomplete() {
-        let (created, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
-        let mut record = stored(&request, 1);
-        record.public_key.clear();
-        record.sealed_private_key.clear();
-        assert!(matches!(
-            Keyset::open(&record, "acc-1", &unlock()),
-            Err(KeysetError::Incomplete)
-        ));
-        let mut record = stored(&request, 1);
-        record.recovery_wrapped_account_key.clear();
-        assert!(matches!(
-            Keyset::recover(&record, "acc-1", &created.recovery),
-            Err(KeysetError::Incomplete)
-        ));
-    }
-
-    fn trusted(account_id: &str, keyset: &Keyset) -> TrustedKey {
-        PinnedKeys::new()
-            .pin(account_id, keyset.public_key())
-            .unwrap()
-    }
-
-    #[test]
-    fn the_caller_chooses_how_an_envelope_opens_and_a_wrong_kind_is_an_error() {
-        let (alice, _) = Keyset::build("alice", &unlock(), &kdf()).unwrap();
-        let (bob, _) = Keyset::build("bob", &unlock(), &kdf()).unwrap();
-        let alice_key = trusted("alice", &alice.keyset);
-        let key = CollectionKey::generate().unwrap();
-
-        let own = alice.keyset.seal_collection_key(&key, "col").unwrap();
-        assert!(alice.keyset.open_own_collection_key("col", &own).is_ok());
-        assert!(matches!(
-            alice
-                .keyset
-                .open_granted_collection_key("col", &own, &alice_key),
-            Err(OpenError::Malformed)
-        ));
-
-        let grant = key
-            .seal_to(
-                alice.keyset.key_pair(),
-                &bob.keyset.public_key(),
-                "col",
-                "bob",
-            )
-            .unwrap();
-        let opened = bob
-            .keyset
-            .open_granted_collection_key("col", &grant, &alice_key)
-            .unwrap();
-        let name = key.seal_name("col", "Servers").unwrap();
-        assert_eq!(opened.open_name("col", &name).unwrap(), "Servers");
-        assert!(matches!(
-            bob.keyset
-                .open_granted_collection_key("other", &grant, &alice_key),
-            Err(OpenError::Rejected)
-        ));
-    }
-
-    #[test]
-    fn a_hub_cannot_put_a_grant_in_place_of_the_owners_own_envelope() {
-        let (owner, _) = Keyset::build("owner", &unlock(), &kdf()).unwrap();
-        let hub = AccountKeyPair::generate().unwrap();
-        let chosen_by_hub = CollectionKey::generate().unwrap();
-        // Anyone who knows the published public key can make this; the hub answers
-        // `GetCollectionKey` of the personal collection `vault` with it.
-        let forged = chosen_by_hub
-            .seal_to(&hub, &owner.keyset.public_key(), "vault", "owner")
-            .unwrap();
-
-        assert!(matches!(
-            owner.keyset.open_own_collection_key("vault", &forged),
-            Err(OpenError::Malformed)
-        ));
-    }
-
-    #[test]
-    fn a_grant_the_hub_made_with_its_own_key_is_refused_by_a_recipient_that_pinned_the_admin() {
-        let (admin, _) = Keyset::build("admin", &unlock(), &kdf()).unwrap();
-        let (member, _) = Keyset::build("member", &unlock(), &kdf()).unwrap();
-        let mut pins = PinnedKeys::new();
-        let admin_key = pins.pin("admin", admin.keyset.public_key()).unwrap();
-
-        // The hub invents a group collection with a key of its own and "grants" it.
-        let hub = AccountKeyPair::generate().unwrap();
-        let hub_key = CollectionKey::generate().unwrap();
-        let forged = hub_key
-            .seal_to(&hub, &member.keyset.public_key(), "team", "member")
-            .unwrap();
-        assert!(matches!(
-            member
-                .keyset
-                .open_granted_collection_key("team", &forged, &admin_key),
-            Err(OpenError::Rejected)
-        ));
-
-        // Offering its own key as the admin's is caught by the pin.
-        assert!(matches!(
-            pins.trust("admin", &hub.public_key()),
-            Err(PinError::Changed { .. })
-        ));
-    }
-
-    #[test]
     fn the_keyset_records_which_password_derives_the_unlock_key() {
         let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
-        assert_eq!(request.unlock_kind, v1::UnlockKind::VaultPassword as i32);
+        assert_eq!(request.unlock_kind, v2::UnlockKind::VaultPassword as i32);
         assert!(matches!(
             UnlockMethod::of(&stored(&request, 1)),
             Ok(UnlockMethod::VaultPassword(found)) if found == kdf()
@@ -673,7 +447,7 @@ mod tests {
 
         let login = LoginSecrets::derive("correct horse battery", "hub", "alice").unwrap();
         let (_, request) = Keyset::build("acc-1", login.unlock(), login.kdf()).unwrap();
-        assert_eq!(request.unlock_kind, v1::UnlockKind::LoginPassword as i32);
+        assert_eq!(request.unlock_kind, v2::UnlockKind::LoginPassword as i32);
         assert_eq!(
             UnlockMethod::of(&stored(&request, 1)).unwrap(),
             UnlockMethod::LoginPassword
@@ -720,7 +494,7 @@ mod tests {
     fn a_keyset_without_or_with_an_unknown_unlock_kind_is_not_guessed() {
         let (_, request) = Keyset::build("acc-1", &unlock(), &kdf()).unwrap();
         let mut record = stored(&request, 1);
-        record.unlock_kind = v1::UnlockKind::Unspecified.into();
+        record.unlock_kind = v2::UnlockKind::Unspecified.into();
         assert!(matches!(
             UnlockMethod::of(&record),
             Err(KeysetError::Incomplete)

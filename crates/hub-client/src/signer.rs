@@ -1,6 +1,6 @@
 //! Signs every authenticated call with the device key (proof of possession).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,14 +8,13 @@ use nocterm_hub_grpc::{metadata, method_path};
 use nocterm_hub_model::pop::request_message;
 use nocterm_keys::{DeviceKey, KeyError};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tonic::metadata::{AsciiMetadataValue, BinaryMetadataValue};
 use tonic::service::Interceptor;
 use tonic::{GrpcMethod, Request, Status};
 
 use crate::store::SessionStore;
 
-/// Tokens of a signed-in device; persist them next to the device key.
+/// The tokens of one signed-in device.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub account_id: String,
@@ -36,8 +35,8 @@ impl std::fmt::Debug for Session {
     }
 }
 
-impl From<nocterm_hub_proto::v1::Tokens> for Session {
-    fn from(tokens: nocterm_hub_proto::v1::Tokens) -> Self {
+impl From<nocterm_hub_proto::v2::Tokens> for Session {
+    fn from(tokens: nocterm_hub_proto::v2::Tokens) -> Self {
         Self {
             account_id: tokens.account_id,
             device_id: tokens.device_id,
@@ -49,43 +48,55 @@ impl From<nocterm_hub_proto::v1::Tokens> for Session {
     }
 }
 
-/// Unix time in milliseconds.
+/// This machine's clock in Unix milliseconds.
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// A fresh single-use nonce.
 pub(crate) fn nonce() -> Result<String, KeyError> {
     nocterm_keys::random_bytes::<16>().map(hex::encode)
 }
 
-/// Device key, hub identity and current tokens shared by every client of one hub.
+/// The device key, the current session and the hub's clock offset, shared by every service
+/// client of one [`crate::HubClient`].
 #[derive(Debug)]
 pub(crate) struct Credentials {
     pub(crate) hub_id: String,
     pub(crate) key: DeviceKey,
     session: RwLock<Option<Session>>,
+    /// Advanced by every sign-in and sign-out, so a refresh started before one is discarded.
     generation: AtomicU64,
-    /// Refreshes of this process take turns: a refresh token is single-use.
+    /// The hub's clock minus this machine's, so a skewed clock still signs fresh requests.
+    clock_offset_ms: AtomicI64,
     pub(crate) refreshing: tokio::sync::Mutex<()>,
     store: OnceLock<Arc<dyn SessionStore>>,
 }
 
 impl Credentials {
-    pub(crate) fn new(hub_id: String, key: DeviceKey, session: Option<Session>) -> Self {
+    pub(crate) fn new(
+        hub_id: String,
+        key: DeviceKey,
+        session: Option<Session>,
+        clock_offset_ms: i64,
+    ) -> Self {
         Self {
             hub_id,
             key,
             session: RwLock::new(session),
             generation: AtomicU64::new(1),
+            clock_offset_ms: AtomicI64::new(clock_offset_ms),
             refreshing: tokio::sync::Mutex::new(()),
             store: OnceLock::new(),
         }
     }
 
-    /// Persists rotations through `store`; the first store set wins.
+    /// The hub's time as this client estimates it; every proof is signed with it.
+    pub(crate) fn hub_now_ms(&self) -> i64 {
+        now_ms().saturating_add(self.clock_offset_ms.load(Ordering::Relaxed))
+    }
+
     pub(crate) fn set_store(&self, store: Arc<dyn SessionStore>) {
         let _ = self.store.set(store);
     }
@@ -103,20 +114,17 @@ impl Credentials {
 
     pub(crate) fn set_session(&self, session: Option<Session>) {
         let mut current = self.session.write().unwrap_or_else(PoisonError::into_inner);
-        let advanced = self
-            .generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                value.checked_add(1)
-            });
-        *current = if advanced.is_ok() { session } else { None };
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        *current = session;
     }
 
+    /// The session with the generation it belongs to.
     pub(crate) fn snapshot(&self) -> Option<(u64, Session)> {
         let session = self.session.read().unwrap_or_else(PoisonError::into_inner);
         Some((self.generation.load(Ordering::Acquire), session.clone()?))
     }
 
-    /// Refresh is conditional on the original login, even if an account later logs in again.
+    /// Installs a refreshed session unless a sign-in or sign-out happened since `generation`.
     pub(crate) fn rotate_session(&self, generation: u64, session: Session) -> bool {
         let mut current = self.session.write().unwrap_or_else(PoisonError::into_inner);
         if self.generation.load(Ordering::Acquire) != generation
@@ -130,137 +138,14 @@ impl Credentials {
         true
     }
 
-    pub(crate) fn capture(&self) -> Option<CredentialCapture> {
-        let session = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        let session = session.as_ref()?;
-        Some(self.capture_session(session))
-    }
-
-    /// Bounded Cloud attribution before any account/device clone, using the same
-    /// lock for metadata bounds and the captured actual session values.
-    pub(crate) fn capture_current_cloud(&self) -> Result<CredentialCapture, Status> {
+    /// Token, device, nonce, time and signature for one call of `path`.
+    fn sign(&self, path: &str) -> Result<(String, String, String, i64, [u8; 64]), Status> {
         let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
         let session = current
             .as_ref()
             .ok_or_else(|| Status::unauthenticated("not signed in"))?;
-        self.cloud_metadata(session)?;
-        Ok(self.capture_session(session))
-    }
-    pub(crate) fn require_current_cloud_metadata(&self) -> Result<(), Status> {
-        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        self.cloud_metadata(
-            current
-                .as_ref()
-                .ok_or_else(|| Status::unauthenticated("not signed in"))?,
-        )
-    }
-    /// Only bounded descriptive IDs; never copies either credential token.
-    pub(crate) fn account_subject(&self) -> Option<(String, String)> {
-        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        let session = current.as_ref()?;
-        if session.account_id.is_empty()
-            || session.device_id.is_empty()
-            || session.account_id.len() > 128
-            || session.device_id.len() > 128
-        {
-            return None;
-        }
-        Some((session.account_id.clone(), session.device_id.clone()))
-    }
-    fn capture_session(&self, session: &Session) -> CredentialCapture {
-        CredentialCapture {
-            generation: self.generation.load(Ordering::Acquire),
-            account_id: session.account_id.clone(),
-            device_id: session.device_id.clone(),
-            signing_key: self.key.public_key(),
-            access_digest: Sha256::digest(session.access_token.as_bytes()).into(),
-            refresh_expires_at_ms: session.refresh_expires_at_ms,
-        }
-    }
-
-    pub(crate) fn require_generation(&self, generation: u64) -> Result<(), Status> {
-        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        if current.is_none() || self.generation.load(Ordering::Acquire) != generation {
-            return Err(Status::unauthenticated(
-                "the original account sign-in was replaced",
-            ));
-        }
-        Ok(())
-    }
-
-    /// `(token, device, nonce, ts, signature)` for a request to `path`.
-    pub(crate) fn sign(
-        &self,
-        path: &str,
-    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
-        self.sign_scoped(path, None)
-    }
-
-    pub(crate) fn sign_scoped(
-        &self,
-        path: &str,
-        generation: Option<u64>,
-    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
-        self.sign_scoped_inner(path, generation, false)
-    }
-    pub(crate) fn sign_scoped_bounded(
-        &self,
-        path: &str,
-        generation: Option<u64>,
-    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
-        self.sign_scoped_inner(path, generation, true)
-    }
-    pub(crate) fn require_cloud_metadata(&self, generation: u64) -> Result<(), Status> {
-        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        if self.generation.load(Ordering::Acquire) != generation {
-            return Err(Status::unauthenticated(
-                "the original account sign-in was replaced",
-            ));
-        }
-        self.cloud_metadata(
-            current
-                .as_ref()
-                .ok_or_else(|| Status::unauthenticated("not signed in"))?,
-        )
-    }
-    fn cloud_metadata(&self, session: &Session) -> Result<(), Status> {
-        if session.account_id.is_empty()
-            || session.account_id.len() > 128
-            || session.access_token.is_empty()
-            || self.hub_id.is_empty()
-            || session.device_id.is_empty()
-            || session.access_token.len() > 1024
-            || self.hub_id.len() > 128
-            || session.device_id.len() > 128
-        {
-            return Err(Status::resource_exhausted(
-                "Cloud authentication metadata exceeds its bound",
-            ));
-        }
-        Ok(())
-    }
-    fn sign_scoped_inner(
-        &self,
-        path: &str,
-        generation: Option<u64>,
-        bounded: bool,
-    ) -> Result<(String, String, String, i64, [u8; 64]), Status> {
-        let current = self.session.read().unwrap_or_else(PoisonError::into_inner);
-        if generation.is_some_and(|expected| self.generation.load(Ordering::Acquire) != expected) {
-            return Err(Status::unauthenticated(
-                "the original account sign-in was replaced",
-            ));
-        }
-        let session = current
-            .as_ref()
-            .ok_or_else(|| Status::unauthenticated("not signed in"))?;
-        // The check and subsequent clone/sign use the same lock: a refresh
-        // cannot enlarge the actual input after this bound was checked.
-        if bounded {
-            self.cloud_metadata(session)?;
-        }
         let nonce = nonce().map_err(|_| Status::internal("no randomness"))?;
-        let ts = now_ms();
+        let ts = self.hub_now_ms();
         let signature = self.key.sign(&request_message(
             &self.hub_id,
             path,
@@ -276,17 +161,6 @@ impl Credentials {
             signature,
         ))
     }
-}
-
-/// Original attribution is immutable across refresh; it contains no bearer token.
-#[derive(Clone, Debug)]
-pub(crate) struct CredentialCapture {
-    pub(crate) generation: u64,
-    pub(crate) account_id: String,
-    pub(crate) device_id: String,
-    pub(crate) signing_key: [u8; 32],
-    pub(crate) access_digest: [u8; 32],
-    pub(crate) refresh_expires_at_ms: i64,
 }
 
 /// Tonic interceptor adding the device's proof to each call.
@@ -324,4 +198,56 @@ impl Interceptor for Signer {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    fn session(account: &str, token: &str) -> Session {
+        Session {
+            account_id: account.into(),
+            device_id: "device".into(),
+            access_token: token.into(),
+            access_expires_at_ms: 1_000_000,
+            refresh_token: format!("refresh-{token}"),
+            refresh_expires_at_ms: 2_000_000,
+        }
+    }
+
+    #[test]
+    fn a_refresh_started_before_a_new_sign_in_is_discarded() {
+        let credentials = Credentials::new(
+            "hub".into(),
+            DeviceKey::from_seed(&[7; 32]),
+            Some(session("A", "first")),
+            0,
+        );
+        let (generation, _) = credentials.snapshot().unwrap();
+        credentials.set_session(Some(session("A", "relogin")));
+        assert!(!credentials.rotate_session(generation, session("A", "late")));
+        assert_eq!(credentials.session().unwrap().access_token, "relogin");
+    }
+
+    #[test]
+    fn a_refresh_for_another_account_is_refused() {
+        let credentials = Credentials::new(
+            "hub".into(),
+            DeviceKey::from_seed(&[7; 32]),
+            Some(session("A", "first")),
+            0,
+        );
+        let (generation, _) = credentials.snapshot().unwrap();
+        assert!(!credentials.rotate_session(generation, session("B", "other")));
+        assert!(credentials.rotate_session(generation, session("A", "second")));
+    }
+
+    #[test]
+    fn proofs_use_the_hubs_clock() {
+        let credentials = Credentials::new(
+            "hub".into(),
+            DeviceKey::from_seed(&[7; 32]),
+            Some(session("A", "first")),
+            3_600_000,
+        );
+        let (_, _, _, ts, _) = credentials.sign("/x/y").unwrap();
+        assert!(ts - now_ms() >= 3_599_000);
+    }
+}

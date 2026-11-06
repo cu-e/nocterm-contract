@@ -1,6 +1,6 @@
 # 0011. Bound servers as session targets, the SSH journal class, boot v3 targets and summary servers
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 Extends [0009](0009-per-chat-ssh-binding-and-certificates.md) (per-chat SSH binding): a bound
 server becomes something a prompt can run against, and the formats around it (native journal,

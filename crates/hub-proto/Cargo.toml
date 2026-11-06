@@ -1,6 +1,6 @@
 [package]
 name = "nocterm-hub-proto"
-description = "Protobuf messages of the Nocterm hub protocol (hub.v1), without transport."
+description = "Protobuf messages of the Nocterm hub protocol (hub.v2), without transport."
 license = "Apache-2.0 OR MIT"
 version.workspace = true
 edition.workspace = true
@@ -11,7 +11,6 @@ repository.workspace = true
 [dependencies]
 nocterm-hub-model.workspace = true
 prost.workspace = true
-thiserror.workspace = true
 
 [build-dependencies]
 prost-build.workspace = true

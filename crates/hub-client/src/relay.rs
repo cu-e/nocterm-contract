@@ -1,4 +1,4 @@
-//! A relayed byte stream: a TCP connection the hub (or one of its nodes) opens on the
+//! A relayed byte stream: a TCP connection the hub opens on the
 //! caller's behalf, carried over one gRPC stream.
 //!
 //! Both directions are bounded: at most [`QUEUE_DEPTH`] frames of [`MAX_FRAME`] bytes wait
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use nocterm_hub_grpc::relay_service_client::RelayServiceClient;
-use nocterm_hub_proto::v1::{self, ErrorCode, relay_down, relay_up};
+use nocterm_hub_proto::v2::{self, ErrorCode, relay_down, relay_up};
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
@@ -38,8 +38,6 @@ pub struct RelayTarget {
     pub host: String,
     /// TCP port.
     pub port: u16,
-    /// Node that dials from inside its network; `None` lets the hub dial.
-    pub node: Option<String>,
 }
 
 /// A relay could not be opened or ended abnormally.
@@ -55,7 +53,7 @@ pub enum RelayError {
     /// The hub ended the stream with a reason: the target was refused or a limit was reached.
     #[error("the hub closed the relay: {message}")]
     Closed {
-        /// The hub's reason: `RELAY_DENIED`, `RELAY_LIMIT`, `NODE_UNAVAILABLE`, …
+        /// The hub's reason: `RELAY_DENIED`, `RELAY_LIMIT`, …
         code: Option<ErrorCode>,
         /// For display only.
         message: String,
@@ -102,7 +100,7 @@ pub struct RelayConn {
 }
 
 impl RelayConn {
-    /// The address the hub or node connected to.
+    /// The address the hub connected to.
     pub fn peer_ip(&self) -> IpAddr {
         self.peer_ip
     }
@@ -120,12 +118,12 @@ impl RelayConn {
 /// tasks, put one task in front of the writer and send it the buffers through a channel.
 #[derive(Debug)]
 pub struct RelayWriter {
-    up: mpsc::Sender<v1::RelayUp>,
+    up: mpsc::Sender<v2::RelayUp>,
     ended: Arc<AtomicBool>,
 }
 
 impl RelayWriter {
-    fn new(up: mpsc::Sender<v1::RelayUp>, ended: Arc<AtomicBool>) -> Self {
+    fn new(up: mpsc::Sender<v2::RelayUp>, ended: Arc<AtomicBool>) -> Self {
         Self { up, ended }
     }
 
@@ -155,7 +153,7 @@ impl RelayWriter {
             return Ok(());
         }
         self.up
-            .send(frame(relay_up::Frame::Close(v1::RelayClose {})))
+            .send(frame(relay_up::Frame::Close(v2::RelayClose {})))
             .await
             .map_err(|_| RelayError::Interrupted)
     }
@@ -165,7 +163,7 @@ impl RelayWriter {
 /// the target closed cleanly.
 #[derive(Debug)]
 pub struct RelayReader {
-    down: Streaming<v1::RelayDown>,
+    down: Streaming<v2::RelayDown>,
     done: bool,
     ended: Arc<AtomicBool>,
 }
@@ -197,13 +195,13 @@ impl Stream for RelayReader {
             };
             return match item {
                 // An empty frame is not the end of the stream: skip it.
-                Some(Ok(v1::RelayDown {
+                Some(Ok(v2::RelayDown {
                     frame: Some(relay_down::Frame::Data(data)),
                 })) if data.is_empty() => continue,
-                Some(Ok(v1::RelayDown {
+                Some(Ok(v2::RelayDown {
                     frame: Some(relay_down::Frame::Data(data)),
                 })) => Poll::Ready(Some(Ok(data))),
-                Some(Ok(v1::RelayDown {
+                Some(Ok(v2::RelayDown {
                     frame: Some(relay_down::Frame::Closed(closed)),
                 })) => {
                     self.end();
@@ -226,12 +224,12 @@ impl Stream for RelayReader {
     }
 }
 
-fn frame(frame: relay_up::Frame) -> v1::RelayUp {
-    v1::RelayUp { frame: Some(frame) }
+fn frame(frame: relay_up::Frame) -> v2::RelayUp {
+    v2::RelayUp { frame: Some(frame) }
 }
 
 /// `None` for a clean close, the reason otherwise.
-fn closed_error(closed: &v1::RelayClosed) -> Option<RelayError> {
+fn closed_error(closed: &v2::RelayClosed) -> Option<RelayError> {
     if closed.code == ErrorCode::Unspecified as i32 {
         return None;
     }
@@ -242,7 +240,7 @@ fn closed_error(closed: &v1::RelayClosed) -> Option<RelayError> {
 }
 
 impl HubClient {
-    /// Opens a relay to `target` and waits until the hub or node has connected.
+    /// Opens a relay to `target` and waits until the hub has connected.
     ///
     /// A refusal arrives as [`RelayError::Closed`] with `RELAY_DENIED` or `RELAY_LIMIT`; a hub
     /// without relays as [`RelayError::Unsupported`].
@@ -250,22 +248,21 @@ impl HubClient {
         let mut client =
             RelayServiceClient::new(self.signed()).max_decoding_message_size(MAX_FRAME + 1024);
         let (up, rx) = mpsc::channel(QUEUE_DEPTH);
-        up.send(frame(relay_up::Frame::Open(v1::RelayOpen {
+        up.send(frame(relay_up::Frame::Open(v2::RelayOpen {
             host: target.host.clone(),
             port: u32::from(target.port),
-            node: target.node.clone().unwrap_or_default(),
         })))
         .await
         .map_err(|_| RelayError::Interrupted)?;
         let mut down = client.open(ReceiverStream::new(rx)).await?.into_inner();
         let peer_ip = match down.message().await? {
-            Some(v1::RelayDown {
+            Some(v2::RelayDown {
                 frame: Some(relay_down::Frame::Opened(opened)),
             }) => opened
                 .peer_ip
                 .parse()
                 .map_err(|_| RelayError::BadPeerAddress)?,
-            Some(v1::RelayDown {
+            Some(v2::RelayDown {
                 frame: Some(relay_down::Frame::Closed(closed)),
             }) => {
                 return Err(closed_error(&closed).unwrap_or(RelayError::Interrupted));
@@ -292,7 +289,7 @@ mod tests {
 
     use super::*;
 
-    fn writer() -> (RelayWriter, mpsc::Receiver<v1::RelayUp>) {
+    fn writer() -> (RelayWriter, mpsc::Receiver<v2::RelayUp>) {
         let (up, rx) = mpsc::channel(QUEUE_DEPTH);
         (RelayWriter::new(up, Arc::default()), rx)
     }
@@ -323,7 +320,7 @@ mod tests {
 
         assert!(matches!(
             hub.recv().await,
-            Some(v1::RelayUp {
+            Some(v2::RelayUp {
                 frame: Some(relay_up::Frame::Data(_))
             })
         ));
@@ -338,7 +335,7 @@ mod tests {
 
         assert!(matches!(
             hub.recv().await,
-            Some(v1::RelayUp {
+            Some(v2::RelayUp {
                 frame: Some(relay_up::Frame::Close(_))
             })
         ));

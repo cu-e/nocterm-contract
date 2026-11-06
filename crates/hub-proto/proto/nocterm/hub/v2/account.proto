@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package nocterm.hub.v2;
+
+import "nocterm/hub/v2/common.proto";
+
+// The caller's account and devices. Requires an access token.
+service AccountService {
+  rpc WhoAmI(Empty) returns (Me);
+  rpc ListDevices(Empty) returns (DeviceList);
+  // Revokes one of the caller's devices: its tokens stop working at once.
+  rpc RevokeDevice(IdRequest) returns (Empty);
+  // Signs the calling device out: revokes it on the hub.
+  rpc Logout(Empty) returns (Empty);
+}
+
+message Me {
+  string account_id = 1;
+  string username = 2;
+  string display_name = 3;
+  string device_id = 4;
+  // Administrators manage users, server-wide providers, limits and workers.
+  bool admin = 5;
+}
+
+message Device {
+  string device_id = 1;
+  string name = 2;
+  string platform = 3;
+  Assurance assurance = 4;
+  int64 created_at_ms = 5;
+  int64 last_seen_at_ms = 6;
+  bool revoked = 7;
+  bool current = 8;
+}
+
+message DeviceList {
+  repeated Device devices = 1;
+}

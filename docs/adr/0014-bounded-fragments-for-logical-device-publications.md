@@ -1,6 +1,6 @@
 # 0014. Bounded fragments carry logical device publications
 
-Status: accepted. Extends the transport and stored-command rules of ADR 0010.
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

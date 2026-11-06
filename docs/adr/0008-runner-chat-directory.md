@@ -1,6 +1,6 @@
 # 0008. A runner chat directory of signed summaries
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 Extends [0007](0007-device-flows-resumable-reader-and-freshness.md) (its `ListChats` flow) and
 [0006](0006-cloud-chats-on-a-browser-device.md).

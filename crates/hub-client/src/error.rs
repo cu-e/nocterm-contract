@@ -3,7 +3,7 @@
 use std::fmt;
 
 use nocterm_hub_grpc::metadata;
-use nocterm_hub_proto::v1::ErrorCode;
+use nocterm_hub_proto::v2::ErrorCode;
 use nocterm_keys::{KeyError, LoginError};
 
 use crate::ConnectError;
@@ -30,7 +30,8 @@ pub enum ClientError {
     UpgradeRequired { hub: u32, client: u32 },
     #[error("not signed in")]
     NotSignedIn,
-    #[error("the original account sign-in was replaced")]
+    /// A sign-in or sign-out replaced the session while this call refreshed it.
+    #[error("the account sign-in was replaced")]
     SessionReplaced,
     /// The hub revoked this device; it must sign in again.
     #[error("this device was revoked; sign in again")]
@@ -50,14 +51,6 @@ pub enum ClientError {
     DerivationInterrupted(#[source] tokio::task::JoinError),
     #[error("sign-in through the identity provider failed")]
     Oidc(#[from] OidcError),
-    #[error("terminal link failed")]
-    Link(#[from] LinkError),
-    /// A Cloud device value names another device key than this client's.
-    #[error("the Cloud value names another device key than this device's")]
-    CloudSigner,
-    /// The signed-in device cannot be named in Cloud head queries and commands.
-    #[error("the signed-in device cannot be named for Cloud")]
-    CloudDevice(#[source] nocterm_cloud_device::CloudDeviceError),
 }
 
 /// Why a browser sign-in (OIDC loopback with PKCE) failed.
@@ -79,25 +72,6 @@ pub enum OidcError {
     NoCode,
     #[error("timed out waiting for the browser")]
     TimedOut,
-}
-
-/// Why the Link (terminal stream) failed before or while carrying a channel.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum LinkError {
-    /// The hub answered the hello with something other than `Ready`.
-    #[error("the hub did not accept the link")]
-    NotAccepted,
-    /// The outgoing frame queue closed before the hello was sent.
-    #[error("the link closed before the hello was sent")]
-    Closed,
-    /// The hub sent an error frame.
-    #[error("{message}")]
-    Rejected {
-        /// The hub's reason, when it sent a known one.
-        code: Option<ErrorCode>,
-        message: String,
-    },
 }
 
 /// gRPC status code of a failed call.
@@ -220,21 +194,6 @@ impl ClientError {
                 ..
             } => cause.metadata(metadata::CURRENT_VERSION)?.parse().ok(),
             _ => None,
-        }
-    }
-}
-
-impl LinkError {
-    /// An error frame of the Link; a revoked device ends the session for good.
-    pub(crate) fn from_frame(frame: &nocterm_hub_proto::v1::LinkError) -> ClientError {
-        let code = ErrorCode::from_str_name(&frame.code);
-        if code == Some(ErrorCode::DeviceRevoked) {
-            ClientError::Revoked
-        } else {
-            ClientError::Link(Self::Rejected {
-                code,
-                message: frame.message.clone(),
-            })
         }
     }
 }

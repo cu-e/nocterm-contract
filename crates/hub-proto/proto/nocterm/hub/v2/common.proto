@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+// Shared messages of the Nocterm hub protocol (package v2, protocol version 3).
+//
+// Compatibility: within v2 fields and enum values are only added, never renumbered or reused.
+// A breaking change gets a new package.
+package nocterm.hub.v2;
+
+message Empty {}
+
+// Identifies one object of the caller (agent, provider, server, chat, attachment, device).
+message IdRequest {
+  string id = 1;
+}
+
+// How a device protects its keys at rest.
+enum Assurance {
+  ASSURANCE_UNSPECIFIED = 0;
+  ASSURANCE_SOFTWARE = 1;
+  ASSURANCE_HARDWARE = 2;
+}
+
+// Machine-readable reason attached to errors (in the `x-nocterm-error` metadata).
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  // The hub speaks another protocol version.
+  ERROR_CODE_UPGRADE_REQUIRED = 1;
+  // The access token expired; refresh and retry.
+  ERROR_CODE_TOKEN_EXPIRED = 2;
+  // The device was revoked; its keys and tokens are useless. Sign in as a new device.
+  ERROR_CODE_DEVICE_REVOKED = 3;
+  // A conditional write lost to a newer version (`x-nocterm-current-version`).
+  ERROR_CODE_CONFLICT = 4;
+  // The egress policy refuses a relay target.
+  ERROR_CODE_RELAY_DENIED = 5;
+  // A relay limit of the hub is reached.
+  ERROR_CODE_RELAY_LIMIT = 6;
+  // The request's signing time is too far from the hub's clock (`x-nocterm-time`).
+  ERROR_CODE_CLOCK_SKEW = 7;
+  // A limit set by the administrator (concurrent runs, budget, upload size) is reached.
+  ERROR_CODE_LIMIT_REACHED = 8;
+}
+
+// Who owns a shared resource such as a model provider.
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  // The calling account only.
+  SCOPE_ACCOUNT = 1;
+  // The whole hub; managed by administrators, usable by every account.
+  SCOPE_SERVER = 2;
+}
