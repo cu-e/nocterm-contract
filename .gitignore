@@ -1,1 +1,44 @@
+# Rust / Cargo
 /target
+/target-*/
+**/*.rs.bk
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs, dumps and temporary files
+*.log
+*.tmp
+*.bak
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+
+# AI agent state (personal, per machine)
+.claude/settings.local.json
+.claude/*.local.*
+.claude/plans/
+.claude/reviews/
+.claude/worktrees/
+CLAUDE.local.md
+.playwright-mcp/
