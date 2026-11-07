@@ -3,8 +3,11 @@
 //! Owns: the browser-facing surface that derives the login value for the hub (`loginAuth`),
 //! creates the first keyset of an account (`createKeysetWithLoginPassword`,
 //! `createKeysetWithVaultPassword`), unlocks an account from its password (login or vault
-//! password) and reads the account's saved server profiles: opens a collection key
-//! (`WebAccount.openCollection`) and its profile objects (`WebCollectionKey.openObject`).
+//! password), reads the account's saved server profiles: opens a collection key
+//! (`WebAccount.openCollection`) and its profile objects (`WebCollectionKey.openObject`), and
+//! saves a server the person connected in the browser: creates a collection
+//! (`WebAccount.newCollection`) and seals its profile and the credential the person typed
+//! (`WebCollectionKey.sealObject`).
 //! All cryptography is `nocterm-keys`; this crate only converts text and bytes at the
 //! JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
@@ -12,17 +15,19 @@
 //! Invariants: secrets never cross into JavaScript, except the recovery key of a new keyset,
 //! which the page shows once, and the plaintext of profile objects (kind `profile`, which hold
 //! no secrets); the account key, collection keys and objects of any other kind (credentials)
-//! stay inside WebAssembly; errors are typed here and become strings only at the boundary.
+//! stay inside WebAssembly; a credential crosses only inward, typed by the person, to be
+//! sealed, and is never opened here; errors are typed here and become strings only at the
+//! boundary.
 
 use nocterm_keys::{
     AccountKey, CreatedKeyset, KeyError, KeysetMaterialError, LoginError, LoginSecrets, OpenError,
-    UnlockKdf, UnlockKey, UnlockSource, create_keyset,
+    SealError, UnlockKdf, UnlockKey, UnlockSource, create_keyset,
 };
 use wasm_bindgen::prelude::*;
 
 mod collection;
 
-pub use collection::WebCollectionKey;
+pub use collection::{WebCollectionKey, WebNewCollection};
 
 /// What can go wrong at the boundary.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +50,12 @@ pub enum WebError {
     /// Objects of this kind stay sealed in the browser.
     #[error("objects of kind {0:?} are not opened in the browser")]
     SealedKind(String),
+    /// Objects of this kind are not written from the browser.
+    #[error("objects of kind {0:?} are not sealed in the browser")]
+    UnsealableKind(String),
+    /// A key or object could not be sealed.
+    #[error(transparent)]
+    Seal(#[from] SealError),
 }
 
 /// An unlocked account: its account key, which opens the account's collection keys. It never
