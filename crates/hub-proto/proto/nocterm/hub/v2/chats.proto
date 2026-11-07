@@ -38,7 +38,8 @@ service ChatService {
   rpc FinishUpload(IdRequest) returns (Attachment);
   rpc Download(IdRequest) returns (stream DownloadChunk);
   // Changes of the chat list after `chats_after_rev`, and items of the open chats after their
-  // `after_seq`, then live. A client opening another chat reopens the stream.
+  // `after_seq`, then live, with the account's other lists changing (`AccountChanged`). A
+  // client opening another chat reopens the stream.
   rpc Watch(WatchRequest) returns (stream WatchEvent);
 }
 
@@ -336,7 +337,24 @@ message WatchEvent {
     Resync resync = 5;
     // The backlog was sent; everything after is live.
     WatchReady ready = 6;
+    // Another list of the account changed, here or on another device: read it again.
+    AccountChanged account = 7;
   }
+}
+
+// Live only, never replayed: a client lists what it shows when the stream opens.
+message AccountChanged {
+  AccountList list = 1;
+}
+
+enum AccountList {
+  ACCOUNT_LIST_UNSPECIFIED = 0;
+  // Agents, and the models they offer.
+  ACCOUNT_LIST_AGENTS = 1;
+  // Providers the account may use (its own or the hub's).
+  ACCOUNT_LIST_PROVIDERS = 2;
+  // Servers connected to agents, the agent key, and what agents last found on a server.
+  ACCOUNT_LIST_SERVERS = 3;
 }
 
 message ChatItemEvent {
