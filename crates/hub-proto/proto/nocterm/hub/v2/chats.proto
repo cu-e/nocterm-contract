@@ -27,6 +27,9 @@ service ChatService {
   rpc Send(SendRequest) returns (SendResult);
   // Stops the running agent of a chat (by chat id); waiting messages stay.
   rpc Stop(IdRequest) returns (Empty);
+  // Answers the chat's last message again after a failed or limited run (by chat id), without
+  // adding a message. A chat in any other state is left as it is.
+  rpc Retry(IdRequest) returns (Chat);
   rpc ResolveApproval(ResolveApprovalRequest) returns (Empty);
   rpc MarkRead(MarkReadRequest) returns (Empty);
   rpc History(HistoryRequest) returns (HistoryPage);
