@@ -96,6 +96,9 @@ message CreateChatRequest {
   string model = 3;
   // Empty: the hub names the chat after the first message.
   string title = 4;
+  // A UUID the client chose, so a chat it shows before its first message keeps its id when
+  // the message creates it; creating it again returns the chat. Empty: the hub chooses.
+  string chat_id = 5;
 }
 
 message RenameChatRequest {
