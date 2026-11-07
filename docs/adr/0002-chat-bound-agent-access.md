@@ -1,6 +1,6 @@
 # 0002. Chat-bound agent access: per-chat tokens, running leases and per-model usage
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

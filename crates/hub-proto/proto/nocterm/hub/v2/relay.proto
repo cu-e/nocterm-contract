@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package nocterm.hub.v2;
+
+import "nocterm/hub/v2/common.proto";
+
+// One TCP stream the hub dials on behalf of the caller (an SSH route step). The hub checks
+// the target against its egress policy and limits and carries bytes; it never reads them.
+service RelayService {
+  rpc Open(stream RelayUp) returns (stream RelayDown);
+}
+
+message RelayUp {
+  oneof frame {
+    // First frame.
+    RelayOpen open = 1;
+    bytes data = 2;
+    // Half-closes the target; it may still answer.
+    RelayClose close = 3;
+  }
+}
+
+message RelayDown {
+  oneof frame {
+    RelayOpened opened = 1;
+    bytes data = 2;
+    // The relay ended; no frame follows.
+    RelayClosed closed = 3;
+  }
+}
+
+message RelayOpen {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message RelayClose {}
+
+message RelayOpened {
+  // The address the hub connected to, after its checks.
+  string peer_ip = 1;
+}
+
+message RelayClosed {
+  ErrorCode code = 1;
+  string message = 2;
+}

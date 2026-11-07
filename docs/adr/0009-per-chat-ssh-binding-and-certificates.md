@@ -1,6 +1,6 @@
 # 0009. Per-chat SSH binding and certificates
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 Extends [0007](0007-device-flows-resumable-reader-and-freshness.md) (device flows) and
 [0008](0008-runner-chat-directory.md) (its bound servers). Takes over the account SSH CA of the

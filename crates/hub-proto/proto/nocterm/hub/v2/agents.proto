@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package nocterm.hub.v2;
+
+import "nocterm/hub/v2/common.proto";
+
+// Model providers and agents. Requires an access token.
+//
+// A provider is an API endpoint with a key: server-wide ones are managed by administrators and
+// usable by everyone, account ones by their owner only. Keys are write-only: the hub stores
+// them encrypted and never returns them. An agent is a named configuration (instructions,
+// provider, models, approval mode, default servers); it costs nothing while no chat runs it.
+service AgentService {
+  // Server-wide providers and the caller's own.
+  rpc ListProviders(Empty) returns (ProviderList);
+  // `SCOPE_SERVER` requires an administrator.
+  rpc CreateProvider(ProviderInput) returns (Provider);
+  rpc UpdateProvider(UpdateProviderRequest) returns (Provider);
+  rpc DeleteProvider(IdRequest) returns (Empty);
+  // Calls the provider from an agent worker and lists the models it offers.
+  rpc TestProvider(TestProviderRequest) returns (TestProviderResult);
+
+  rpc ListAgents(Empty) returns (AgentList);
+  rpc CreateAgent(AgentInput) returns (Agent);
+  rpc UpdateAgent(UpdateAgentRequest) returns (Agent);
+  // Deletes the agent and its chats.
+  rpc DeleteAgent(IdRequest) returns (Empty);
+}
+
+enum ProviderKind {
+  PROVIDER_KIND_UNSPECIFIED = 0;
+  // OpenAI-compatible chat completions (OpenAI, Gemini, OpenRouter, vLLM, Ollama, ...).
+  PROVIDER_KIND_OPENAI = 1;
+  // Anthropic messages API.
+  PROVIDER_KIND_ANTHROPIC = 2;
+}
+
+message Provider {
+  string id = 1;
+  Scope scope = 2;
+  ProviderKind kind = 3;
+  string name = 4;
+  // Base URL of the API, for example `https://api.openai.com/v1`.
+  string base_url = 5;
+  // Models agents may use through this provider.
+  repeated string models = 6;
+  bool has_key = 7;
+  // Whether the caller may change or delete it.
+  bool editable = 8;
+  int64 created_at_ms = 9;
+  int64 updated_at_ms = 10;
+}
+
+message ProviderInput {
+  Scope scope = 1;
+  ProviderKind kind = 2;
+  string name = 3;
+  string base_url = 4;
+  repeated string models = 5;
+  // Write-only. On update, empty keeps the stored key.
+  string api_key = 6;
+}
+
+message UpdateProviderRequest {
+  string id = 1;
+  // `scope` cannot change.
+  ProviderInput provider = 2;
+}
+
+message ProviderList {
+  repeated Provider providers = 1;
+}
+
+message TestProviderRequest {
+  oneof target {
+    string provider_id = 1;
+    // A provider not saved yet.
+    ProviderInput draft = 2;
+  }
+}
+
+message TestProviderResult {
+  bool ok = 1;
+  // What went wrong, readable by a person.
+  string message = 2;
+  // Models the endpoint lists, when it lists any.
+  repeated string models = 3;
+}
+
+// When the agent waits for a person before using a tool.
+enum ApprovalMode {
+  APPROVAL_MODE_UNSPECIFIED = 0;
+  // Every tool runs at once.
+  APPROVAL_MODE_AUTO = 1;
+  // Tools that change something wait for an approval; read-only tools run at once.
+  APPROVAL_MODE_ASK = 2;
+}
+
+message Agent {
+  string id = 1;
+  string name = 2;
+  string instructions = 3;
+  string provider_id = 4;
+  // Default model of new chats.
+  string model = 5;
+  // Models a chat may switch to; always contains `model`.
+  repeated string models = 6;
+  ApprovalMode approval = 7;
+  // Servers new chats start with.
+  repeated string server_ids = 8;
+  // Most model calls one run may make; 0 means the hub's default.
+  uint32 max_steps = 9;
+  int64 created_at_ms = 10;
+  int64 updated_at_ms = 11;
+}
+
+message AgentInput {
+  string name = 1;
+  string instructions = 2;
+  string provider_id = 3;
+  string model = 4;
+  repeated string models = 5;
+  ApprovalMode approval = 6;
+  repeated string server_ids = 7;
+  uint32 max_steps = 8;
+}
+
+message UpdateAgentRequest {
+  string id = 1;
+  AgentInput agent = 2;
+}
+
+message AgentList {
+  repeated Agent agents = 1;
+}

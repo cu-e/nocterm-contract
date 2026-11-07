@@ -5,7 +5,7 @@
 mod support;
 
 use nocterm_hub_client::ClientError;
-use nocterm_hub_proto::v1;
+use nocterm_hub_proto::v2;
 use nocterm_keys::{LoginError, LoginSecrets};
 use support::{FakeHub, HUB_ID, device};
 
@@ -25,26 +25,25 @@ async fn password_login_sends_the_derived_value_and_returns_the_secrets() {
     let sent = hub.seen.password_logins();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].username, "alice");
-    assert_eq!(sent[0].password, expected.auth());
-    assert_ne!(sent[0].password, PASSWORD);
+    assert_eq!(sent[0].auth, expected.auth());
+    assert_ne!(sent[0].auth, PASSWORD);
     assert_eq!(signed_in.secrets.auth(), expected.auth());
     assert_eq!(signed_in.session.account_id, "acc-1");
     assert!(client.session().is_some());
 }
 
 #[tokio::test]
-async fn bootstrap_and_invites_replace_the_typed_password_too() {
+async fn setup_and_invites_replace_the_typed_password_too() {
     let hub = FakeHub::start(false).await;
     let client = hub.client().await;
 
     client
-        .bootstrap(
-            v1::BootstrapRequest {
-                setup_token: "setup".into(),
+        .setup(
+            v2::SetupRequest {
+                setup_code: "setup".into(),
                 username: "owner".into(),
-                password: PASSWORD.into(),
+                auth: PASSWORD.into(),
                 display_name: "Owner".into(),
-                org_name: "Org".into(),
             },
             &device(),
         )
@@ -52,10 +51,10 @@ async fn bootstrap_and_invites_replace_the_typed_password_too() {
         .unwrap();
     client
         .redeem_invite(
-            v1::RedeemInviteRequest {
+            v2::RedeemInviteRequest {
                 invite_code: "invite".into(),
                 username: "bob".into(),
-                password: PASSWORD.into(),
+                auth: PASSWORD.into(),
                 display_name: "Bob".into(),
             },
             &device(),
@@ -65,8 +64,8 @@ async fn bootstrap_and_invites_replace_the_typed_password_too() {
 
     let owner = LoginSecrets::derive(PASSWORD, HUB_ID, "owner").unwrap();
     let bob = LoginSecrets::derive(PASSWORD, HUB_ID, "bob").unwrap();
-    assert_eq!(hub.seen.bootstraps()[0].password, owner.auth());
-    assert_eq!(hub.seen.invites()[0].password, bob.auth());
+    assert_eq!(hub.seen.setups()[0].auth, owner.auth());
+    assert_eq!(hub.seen.invites()[0].auth, bob.auth());
     assert_ne!(owner.auth(), bob.auth());
 }
 

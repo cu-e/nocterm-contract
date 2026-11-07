@@ -1,6 +1,6 @@
 # 0003. Host-to-runner chat access frames
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

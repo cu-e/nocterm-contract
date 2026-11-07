@@ -1,0 +1,362 @@
+syntax = "proto3";
+
+package nocterm.hub.v2;
+
+import "nocterm/hub/v2/agents.proto";
+import "nocterm/hub/v2/common.proto";
+
+// Chats with agents. Requires an access token.
+//
+// The hub keeps every chat and runs its agent on a worker; clients only show and steer.
+// A chat is an ordered log of items numbered by `seq`. Clients read pages with `History` and
+// follow changes with one `Watch` stream, which also carries the text an agent is still
+// writing (`Draft`). Closing every client does not stop an agent.
+service ChatService {
+  // Newest first; pinned chats first.
+  rpc ListChats(ListChatsRequest) returns (ChatPage);
+  rpc GetChat(IdRequest) returns (Chat);
+  rpc CreateChat(CreateChatRequest) returns (Chat);
+  rpc RenameChat(RenameChatRequest) returns (Chat);
+  rpc PinChat(PinChatRequest) returns (Chat);
+  // Deletes the chat, its items and its attachments; stops a running agent.
+  rpc DeleteChat(IdRequest) returns (Empty);
+  rpc SetChatServers(SetChatServersRequest) returns (Chat);
+  rpc SetChatModel(SetChatModelRequest) returns (Chat);
+  // Adds a message. It starts a run at once, or waits until the running one ends.
+  // Idempotent on `client_message_id`.
+  rpc Send(SendRequest) returns (SendResult);
+  // Stops the running agent of a chat (by chat id); waiting messages stay.
+  rpc Stop(IdRequest) returns (Empty);
+  // Answers the chat's last message again after a failed or limited run (by chat id), without
+  // adding a message. A chat in any other state is left as it is.
+  rpc Retry(IdRequest) returns (Chat);
+  rpc ResolveApproval(ResolveApprovalRequest) returns (Empty);
+  rpc MarkRead(MarkReadRequest) returns (Empty);
+  rpc History(HistoryRequest) returns (HistoryPage);
+  rpc BeginUpload(BeginUploadRequest) returns (Upload);
+  rpc UploadPart(UploadPartRequest) returns (Upload);
+  rpc FinishUpload(IdRequest) returns (Attachment);
+  rpc Download(IdRequest) returns (stream DownloadChunk);
+  // Changes of the chat list after `chats_after_rev`, and items of the open chats after their
+  // `after_seq`, then live. A client opening another chat reopens the stream.
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+}
+
+enum ChatState {
+  CHAT_STATE_UNSPECIFIED = 0;
+  CHAT_STATE_IDLE = 1;
+  // A run waits for a free worker or for the account's limit.
+  CHAT_STATE_QUEUED = 2;
+  CHAT_STATE_RUNNING = 3;
+  CHAT_STATE_WAITING_APPROVAL = 4;
+  // The last run failed; the chat accepts messages.
+  CHAT_STATE_FAILED = 5;
+}
+
+message Chat {
+  string id = 1;
+  string agent_id = 2;
+  string agent_name = 3;
+  string title = 4;
+  bool pinned = 5;
+  string model = 6;
+  repeated string server_ids = 7;
+  ChatState state = 8;
+  // Highest item number.
+  uint64 last_seq = 9;
+  // Highest item number any device of the account marked read.
+  uint64 read_seq = 10;
+  // Position in the account's change order of chats.
+  uint64 rev = 11;
+  int64 created_at_ms = 12;
+  int64 updated_at_ms = 13;
+  ApprovalMode approval = 14;
+}
+
+message ListChatsRequest {
+  // Empty starts from the newest.
+  string cursor = 1;
+  uint32 limit = 2;
+}
+
+message ChatPage {
+  repeated Chat chats = 1;
+  // Empty on the last page.
+  string next_cursor = 2;
+  // The account's chat revision when the page was read; watch after it.
+  uint64 rev = 3;
+}
+
+message CreateChatRequest {
+  string agent_id = 1;
+  // Empty uses the agent's default servers.
+  repeated string server_ids = 2;
+  // Empty uses the agent's default model.
+  string model = 3;
+  // Empty: the hub names the chat after the first message.
+  string title = 4;
+}
+
+message RenameChatRequest {
+  string id = 1;
+  string title = 2;
+}
+
+message PinChatRequest {
+  string id = 1;
+  bool pinned = 2;
+}
+
+message SetChatServersRequest {
+  string id = 1;
+  repeated string server_ids = 2;
+}
+
+message SetChatModelRequest {
+  string id = 1;
+  string model = 2;
+  ApprovalMode approval = 3;
+}
+
+message SendRequest {
+  string chat_id = 1;
+  // Chosen by the client; repeating it returns the first result.
+  string client_message_id = 2;
+  string text = 3;
+  // Finished uploads of this chat.
+  repeated string attachment_ids = 4;
+}
+
+message SendResult {
+  uint64 seq = 1;
+  // The message waits for the running agent to finish.
+  bool queued = 2;
+}
+
+enum ApprovalDecision {
+  APPROVAL_DECISION_UNSPECIFIED = 0;
+  APPROVAL_DECISION_ALLOW_ONCE = 1;
+  // Allows this and later calls of the same tool in the chat.
+  APPROVAL_DECISION_ALLOW_CHAT = 2;
+  APPROVAL_DECISION_DENY = 3;
+}
+
+message ResolveApprovalRequest {
+  string chat_id = 1;
+  string approval_id = 2;
+  ApprovalDecision decision = 3;
+}
+
+message MarkReadRequest {
+  string chat_id = 1;
+  uint64 seq = 2;
+}
+
+message HistoryRequest {
+  string chat_id = 1;
+  // Items before this number; 0 reads the newest.
+  uint64 before_seq = 2;
+  uint32 limit = 3;
+}
+
+message HistoryPage {
+  // Oldest first.
+  repeated ChatItem items = 1;
+  // Older items exist.
+  bool more = 2;
+}
+
+message Attachment {
+  string id = 1;
+  string name = 2;
+  string mime = 3;
+  uint64 size = 4;
+  // Lowercase hex SHA-256 of the content.
+  string sha256 = 5;
+}
+
+message ChatItem {
+  uint64 seq = 1;
+  int64 at_ms = 2;
+  // The run that produced it; empty for a person's message.
+  string run_id = 3;
+  oneof body {
+    UserMessage user = 10;
+    AgentText agent = 11;
+    ToolCall tool_call = 12;
+    ToolResult tool_result = 13;
+    ApprovalRequest approval_request = 14;
+    ApprovalResolution approval_resolution = 15;
+    RunEnded run_ended = 16;
+    ChatChange change = 17;
+  }
+}
+
+message UserMessage {
+  string text = 1;
+  repeated Attachment attachments = 2;
+  string client_message_id = 3;
+  // Device that sent it.
+  string device_id = 4;
+}
+
+message AgentText {
+  string text = 1;
+}
+
+// A tool the agent called. `tool` is namespaced by its source, for example `server.run`.
+message ToolCall {
+  string call_id = 1;
+  string tool = 2;
+  // Short description for display, for example `prod-1 · systemctl status nginx`.
+  string title = 3;
+  // Arguments as a JSON object.
+  string arguments_json = 4;
+  // The server the call targets, when it targets one.
+  string server_id = 5;
+  bool read_only = 6;
+}
+
+message ContentPart {
+  oneof part {
+    string text = 1;
+    Attachment file = 2;
+  }
+}
+
+message ToolResult {
+  string call_id = 1;
+  bool is_error = 2;
+  repeated ContentPart content = 3;
+  // The output was cut to the hub's limit.
+  bool truncated = 4;
+  // Exit status of a command, when the tool ran one.
+  optional int32 exit_code = 5;
+  // The run was interrupted while the tool ran; whether it took effect is unknown.
+  bool unknown_outcome = 6;
+}
+
+message ApprovalRequest {
+  string approval_id = 1;
+  string call_id = 2;
+}
+
+message ApprovalResolution {
+  string approval_id = 1;
+  ApprovalDecision decision = 2;
+  string device_id = 3;
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_COMPLETED = 1;
+  RUN_STATUS_STOPPED = 2;
+  RUN_STATUS_FAILED = 3;
+  // The worker was lost; the run continues as a new run.
+  RUN_STATUS_INTERRUPTED = 4;
+  // The run reached its step limit or the account's budget.
+  RUN_STATUS_LIMIT = 5;
+}
+
+message Usage {
+  uint64 input_tokens = 1;
+  uint64 output_tokens = 2;
+  // Cost in millionths of the provider's currency, when known.
+  uint64 cost_micros = 3;
+}
+
+message RunEnded {
+  RunStatus status = 1;
+  Usage usage = 2;
+  // Readable by a person; empty unless failed or limited.
+  string error = 3;
+  string model = 4;
+}
+
+// A change of the chat's settings, recorded so the agent and the transcript see it.
+message ChatChange {
+  repeated string server_ids = 1;
+  string model = 2;
+  ApprovalMode approval = 3;
+}
+
+message BeginUploadRequest {
+  string chat_id = 1;
+  string name = 2;
+  string mime = 3;
+  uint64 size = 4;
+  string sha256 = 5;
+}
+
+message Upload {
+  string upload_id = 1;
+  // Largest part the hub accepts.
+  uint32 part_size = 2;
+  // Bytes received so far; a resumed upload continues here.
+  uint64 received = 3;
+}
+
+message UploadPartRequest {
+  string upload_id = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message DownloadChunk {
+  uint64 offset = 1;
+  bytes data = 2;
+  // Size of the whole file, set on the first chunk.
+  uint64 size = 3;
+}
+
+message WatchRequest {
+  // 0 sends no backlog of chat changes; clients pass the `rev` of their last `ChatPage`.
+  uint64 chats_after_rev = 1;
+  // At most 8.
+  repeated OpenChat open = 2;
+}
+
+message OpenChat {
+  string chat_id = 1;
+  uint64 after_seq = 2;
+}
+
+message WatchEvent {
+  oneof event {
+    // A chat was created or changed (title, state, servers, new items).
+    Chat chat = 1;
+    // A chat was deleted.
+    string chat_deleted = 2;
+    // An item of an open chat.
+    ChatItemEvent item = 3;
+    // Text an agent of an open chat is writing; replaced by an `AgentText` item.
+    Draft draft = 4;
+    // The client fell behind: reload the chat list (empty `chat_id`) or the chat, then
+    // reopen the stream.
+    Resync resync = 5;
+    // The backlog was sent; everything after is live.
+    WatchReady ready = 6;
+  }
+}
+
+message ChatItemEvent {
+  string chat_id = 1;
+  ChatItem item = 2;
+}
+
+message Draft {
+  string chat_id = 1;
+  string run_id = 2;
+  // Parts of the draft sent so far, including this one. A client appends a part only when it
+  // holds the previous `part - 1` parts; otherwise it waits for the next snapshot or item.
+  uint32 part = 3;
+  string text = 4;
+  // `text` is the whole draft so far (sent when a stream opens).
+  bool snapshot = 5;
+}
+
+message Resync {
+  string chat_id = 1;
+}
+
+message WatchReady {}

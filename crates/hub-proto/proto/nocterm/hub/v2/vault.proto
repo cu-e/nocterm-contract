@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package nocterm.hub.v2;
+
+import "nocterm/hub/v2/common.proto";
+
+// End-to-end encrypted storage of the caller: the account keyset and collections of sealed
+// objects (saved connections, passwords, keys). The hub stores ciphertext only and never sees
+// a key that opens it. Requires an access token.
+service VaultService {
+  rpc GetKeyset(Empty) returns (Keyset);
+  // Compare-and-swap on `expected_version` (0 creates the keyset).
+  rpc PutKeyset(PutKeysetRequest) returns (Keyset);
+
+  rpc CreateCollection(CreateCollectionRequest) returns (Collection);
+  rpc ListCollections(ListCollectionsRequest) returns (CollectionList);
+  rpc DeleteCollection(IdRequest) returns (Collection);
+  rpc GetCollectionKey(IdRequest) returns (CollectionKey);
+
+  rpc PutObject(PutObjectRequest) returns (ObjectVersion);
+  rpc DeleteObject(DeleteObjectRequest) returns (ObjectVersion);
+  rpc GetObject(GetObjectRequest) returns (StoredObject);
+  // Changes of one collection after a stream version, oldest first.
+  rpc ListChanges(ListChangesRequest) returns (ChangeBatch);
+  // Hints (no data) that collections changed; clients pull with `ListChanges`.
+  rpc WatchChanges(WatchChangesRequest) returns (stream ChangeHint);
+}
+
+// Which password derives the key that opens the account key.
+enum UnlockKind {
+  UNLOCK_KIND_UNSPECIFIED = 0;
+  UNLOCK_KIND_LOGIN_PASSWORD = 1;
+  // A separate vault passphrase, for accounts that sign in with single sign-on.
+  UNLOCK_KIND_VAULT_PASSWORD = 2;
+}
+
+message Keyset {
+  uint64 version = 1;
+  string kdf = 2;
+  bytes salt = 3;
+  bytes wrapped_account_key = 4;
+  int64 updated_at_ms = 5;
+  bytes recovery_wrapped_account_key = 6;
+  UnlockKind unlock_kind = 7;
+}
+
+message PutKeysetRequest {
+  uint64 expected_version = 1;
+  string kdf = 2;
+  bytes salt = 3;
+  bytes wrapped_account_key = 4;
+  bytes recovery_wrapped_account_key = 5;
+  UnlockKind unlock_kind = 6;
+}
+
+message Collection {
+  string collection_id = 1;
+  string kind = 2;
+  bytes sealed_name = 3;
+  uint64 head = 4;
+  int64 created_at_ms = 5;
+  bool deleted = 6;
+}
+
+message CreateCollectionRequest {
+  // Chosen by the client so a retry is idempotent.
+  string collection_id = 1;
+  string kind = 2;
+  bytes sealed_name = 3;
+  // The collection key wrapped by the account key.
+  bytes wrapped_key = 4;
+}
+
+message ListCollectionsRequest {
+  // Empty lists every kind.
+  string kind = 1;
+}
+
+message CollectionList {
+  repeated Collection collections = 1;
+}
+
+message CollectionKey {
+  string collection_id = 1;
+  uint64 key_version = 2;
+  bytes wrapped_key = 3;
+}
+
+message PutObjectRequest {
+  string collection_id = 1;
+  string object_id = 2;
+  // 0 creates the object.
+  uint64 expected_version = 3;
+  string kind = 4;
+  bytes ciphertext = 5;
+}
+
+message DeleteObjectRequest {
+  string collection_id = 1;
+  string object_id = 2;
+  uint64 expected_version = 3;
+}
+
+message GetObjectRequest {
+  string collection_id = 1;
+  string object_id = 2;
+}
+
+message ObjectVersion {
+  string collection_id = 1;
+  string object_id = 2;
+  uint64 version = 3;
+  uint64 stream_version = 4;
+}
+
+message StoredObject {
+  string collection_id = 1;
+  string object_id = 2;
+  uint64 version = 3;
+  string kind = 4;
+  bytes ciphertext = 5;
+  bool deleted = 6;
+  int64 updated_at_ms = 7;
+  string updated_by_device = 8;
+  uint64 stream_version = 9;
+}
+
+message ListChangesRequest {
+  string collection_id = 1;
+  uint64 after = 2;
+  uint32 limit = 3;
+}
+
+message ChangeBatch {
+  repeated StoredObject changes = 1;
+  uint64 head = 2;
+  bool more = 3;
+}
+
+message WatchChangesRequest {
+  repeated string collection_ids = 1;
+}
+
+message ChangeHint {
+  string collection_id = 1;
+  uint64 head = 2;
+}

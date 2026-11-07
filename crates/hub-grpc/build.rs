@@ -8,10 +8,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_client(true)
         .build_server(true)
-        // Clients build their own channel (pinned TLS), and `NodeService.Connect` would
-        // collide with the generated `connect` constructor.
+        // Clients build their own channel (pinned TLS).
         .build_transport(false)
-        .extern_path(".nocterm.hub.v1", "::nocterm_hub_proto::v1")
+        .extern_path(".nocterm.hub.v2", "::nocterm_hub_proto::v2")
         .compile_fds(fds)?;
     Ok(())
 }

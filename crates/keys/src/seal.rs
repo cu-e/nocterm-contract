@@ -20,25 +20,7 @@ pub(crate) enum Purpose {
     CollectionKey = 2,
     CollectionName = 3,
     Object = 4,
-    AccountPrivateKey = 5,
     RecoveredAccountKey = 6,
-    CollectionGrant = 7,
-    /// Uses the dedicated account-authenticated Cloud framing and associated data.
-    CloudCommand = 8,
-    CloudChatAccountKey = 9,
-    CloudChatRunnerKey = 10,
-    CloudEvent = 11,
-    CloudSnapshot = 12,
-    CloudJournal = 13,
-    CloudProviderLease = 14,
-    CloudAccountCatalog = 15,
-    CloudHeadQuery = 16,
-    CloudHeadWitness = 17,
-    CloudNativeChatHead = 18,
-    AgentDefinition = 19,
-    BrokerSecret = 20,
-    CloudDeviceCheckpoint = 21,
-    CloudChatSummary = 22,
 }
 
 impl Purpose {
@@ -48,24 +30,7 @@ impl Purpose {
             Purpose::CollectionKey => b"collection-key",
             Purpose::CollectionName => b"collection-name",
             Purpose::Object => b"object",
-            Purpose::AccountPrivateKey => b"account-private-key",
             Purpose::RecoveredAccountKey => b"recovery-account-key",
-            Purpose::CollectionGrant => b"collection-grant",
-            Purpose::CloudCommand => b"cloud-command-box",
-            Purpose::CloudChatAccountKey => b"cloud-chat-account-key",
-            Purpose::CloudChatRunnerKey => b"cloud-chat-runner-key",
-            Purpose::CloudEvent => b"cloud-runner-event",
-            Purpose::CloudSnapshot => b"cloud-runner-snapshot",
-            Purpose::CloudJournal => b"cloud-native-journal",
-            Purpose::CloudProviderLease => b"cloud-provider-lease",
-            Purpose::CloudAccountCatalog => b"cloud-native-account-catalog",
-            Purpose::CloudHeadQuery => b"cloud-read-only-head-query",
-            Purpose::CloudHeadWitness => b"cloud-read-only-head-witness",
-            Purpose::CloudNativeChatHead => b"cloud-native-chat-head",
-            Purpose::AgentDefinition => b"agent-definition",
-            Purpose::BrokerSecret => b"agent-broker-secret",
-            Purpose::CloudDeviceCheckpoint => b"cloud-device-checkpoint",
-            Purpose::CloudChatSummary => b"cloud-chat-summary",
         }
     }
 }
@@ -79,9 +44,6 @@ pub enum SealError {
     /// The cipher rejected the input (too large).
     #[error("encryption failed")]
     Encrypt,
-    /// The recipient's public key is not a usable X25519 key (a small-order point).
-    #[error("the recipient's public key is not usable")]
-    UnusableRecipientKey,
 }
 
 /// A sealed value could not be opened.

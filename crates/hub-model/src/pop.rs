@@ -1,4 +1,4 @@
-//! Canonical messages signed by device and node keys (proof of possession).
+//! Canonical messages signed by device keys (proof of possession).
 //!
 //! Every message starts with a purpose tag and encodes its fields with a length prefix, so a
 //! signature made for one purpose or one hub never verifies for another. Tokens are never
@@ -89,25 +89,6 @@ pub fn request_message(
         .finish()
 }
 
-/// Signed by a node when it connects to the hub.
-pub fn node_message(hub_id: &str, node_id: &str, nonce: &str, signed_at_ms: i64) -> Vec<u8> {
-    Message::new("node")
-        .text(hub_id)
-        .text(node_id)
-        .text(nonce)
-        .int(signed_at_ms)
-        .finish()
-}
-
-/// Signed by a node when it redeems an enrollment token.
-pub fn enroll_message(hub_id: &str, enrollment_token: &str, identity_key: &[u8]) -> Vec<u8> {
-    Message::new("enroll")
-        .text(hub_id)
-        .text(&token_digest(enrollment_token))
-        .field(identity_key)
-        .finish()
-}
-
 /// A signature or public key that does not verify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SignatureError {
@@ -150,8 +131,8 @@ mod tests {
     #[test]
     fn fields_are_length_prefixed() {
         // Moving a byte between adjacent fields must change the message.
-        let a = node_message("hub", "ab", "c", 1);
-        let b = node_message("hub", "a", "bc", 1);
+        let a = request_message("hub", "/ab", "t", "c", 1);
+        let b = request_message("hub", "/a", "t", "bc", 1);
         assert_ne!(a, b);
     }
 

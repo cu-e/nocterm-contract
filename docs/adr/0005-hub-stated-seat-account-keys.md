@@ -1,6 +1,6 @@
 # 0005. Hub-stated seat account keys
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

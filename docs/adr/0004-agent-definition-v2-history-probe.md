@@ -1,6 +1,6 @@
 # 0004. Agent definition v2, listing history and provider probes
 
-Status: accepted
+Status: superseded by [0015](0015-trusted-hub-runs-agents.md).
 
 ## Context
 

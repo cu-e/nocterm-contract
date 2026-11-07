@@ -1,6 +1,6 @@
 [package]
 name = "nocterm-keys-wasm"
-description = "WebAssembly bindings of the Nocterm agent and Cloud device formats for the web panel: sealing a definition to a pool key, and one CloudDevice that runs the Cloud device flows, SSH bindings and certificate answers included."
+description = "WebAssembly bindings of the Nocterm vault for the web panel: login derivation, keyset and collections."
 license = "Apache-2.0 OR MIT"
 version.workspace = true
 edition.workspace = true
@@ -12,31 +12,15 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-hex.workspace = true
-nocterm-cloud-device.workspace = true
-nocterm-hub-model.workspace = true
 nocterm-keys.workspace = true
-serde.workspace = true
-serde_bytes.workspace = true
-serde-wasm-bindgen.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
-tsify-next.workspace = true
-uuid.workspace = true
 wasm-bindgen.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
+# `nocterm-hub-model` makes identifiers with `Uuid::new_v4`, which needs a randomness source here.
 uuid = { workspace = true, features = ["js"] }
 
-[features]
-# `CloudDevice.connectSeeded`: probe nonces from a seed, for recorded test sessions of the
-# panel. Never in a shipped build.
-testing = ["nocterm-cloud-device/testing"]
-
-[dev-dependencies]
-nocterm-cloud-device = { workspace = true, features = ["testing"] }
-sha2.workspace = true
 
 [lints]
 workspace = true

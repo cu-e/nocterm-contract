@@ -10,14 +10,10 @@ publish = false
 repository = "https://github.com/cu-e/nocterm-contract"
 
 [workspace.dependencies]
-nocterm-cloud-device = { path = "crates/cloud-device" }
 nocterm-hub-model = { path = "crates/hub-model" }
 nocterm-hub-proto = { path = "crates/hub-proto" }
 nocterm-hub-grpc = { path = "crates/hub-grpc" }
-nocterm-hub-client = { path = "crates/hub-client" }
 nocterm-keys = { path = "crates/keys" }
-nocterm-keys-wasm = { path = "crates/keys-wasm" }
-nocterm-link = { path = "crates/link" }
 
 argon2 = { version = "0.6", features = ["zeroize"] }
 base64 = "0.22"
@@ -25,11 +21,8 @@ chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 ed25519-dalek = { version = "3", features = ["zeroize"] }
 getrandom = "0.4"
 hex = "0.4"
-hmac = "0.13"
 hkdf = "0.13"
 hyper-util = { version = "0.1", features = ["tokio"] }
-http-body = "1"
-postcard = { version = "1", default-features = false, features = ["use-std"] }
 prost = "0.14"
 prost-build = "0.14"
 prost-types = "0.14"
@@ -37,12 +30,7 @@ protox = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
-serde_bytes = "0.11"
-serde-wasm-bindgen = "0.6"
 sha2 = "0.11"
-# OpenSSH user certificates of the agent SSH CA (`nocterm-keys::agents::ssh_ca`); the same exact
-# version the native client pins, built without the RSA/ECDSA/encryption features.
-ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["alloc", "ed25519"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros", "net", "time", "sync", "io-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
@@ -52,11 +40,9 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
-tsify-next = { version = "0.5", default-features = false, features = ["js"] }
 wasm-bindgen = "0.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 webpki-roots = "1"
-x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
 zeroize = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]

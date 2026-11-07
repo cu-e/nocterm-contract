@@ -1,10 +1,7 @@
-//! A fake hub on a loopback port: just enough of the auth, store and relay services to drive
+//! A fake hub on a loopback port: just enough of the auth, vault and relay services to drive
 //! the client the way a real hub would, and to record what the client sent.
 
 #![allow(clippy::expect_used, dead_code)]
-
-pub mod agents;
-pub mod cloud;
 
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -14,9 +11,9 @@ use nocterm_hub_client::{DeviceInfo, HubClient, HubEndpoint, Session};
 use nocterm_hub_grpc::auth_service_server::{AuthService, AuthServiceServer};
 use nocterm_hub_grpc::metadata;
 use nocterm_hub_grpc::relay_service_server::{RelayService, RelayServiceServer};
-use nocterm_hub_grpc::store_service_server::{StoreService, StoreServiceServer};
+use nocterm_hub_grpc::vault_service_server::{VaultService, VaultServiceServer};
 use nocterm_hub_model::PROTOCOL_VERSION;
-use nocterm_hub_proto::v1::{self, ErrorCode, relay_down, relay_up};
+use nocterm_hub_proto::v2::{self, ErrorCode, relay_down, relay_up};
 use nocterm_keys::DeviceKey;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -38,15 +35,14 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// What the fake hub has been asked to do.
 #[derive(Default)]
 pub struct Seen {
-    pub password_logins: Mutex<Vec<v1::PasswordLoginRequest>>,
-    pub bootstraps: Mutex<Vec<v1::BootstrapRequest>>,
-    pub invites: Mutex<Vec<v1::RedeemInviteRequest>>,
-    pub keyset: Mutex<Option<v1::AccountKeyset>>,
-    pub grants: Mutex<Vec<v1::GrantCollectionKeyRequest>>,
+    pub password_logins: Mutex<Vec<v2::PasswordLoginRequest>>,
+    pub setups: Mutex<Vec<v2::SetupRequest>>,
+    pub invites: Mutex<Vec<v2::RedeemInviteRequest>>,
+    pub keyset: Mutex<Option<v2::Keyset>>,
     /// Sizes of the data frames the relay received, in order.
     pub relayed_frame_sizes: Mutex<Vec<usize>>,
     /// The `open` frames of relays, in order.
-    pub relay_opens: Mutex<Vec<v1::RelayOpen>>,
+    pub relay_opens: Mutex<Vec<v2::RelayOpen>>,
     /// How each relay's request stream ended, in order.
     pub relay_ends: Mutex<Vec<RelayEnd>>,
     relay_ended: Notify,
@@ -83,25 +79,22 @@ impl Seen {
             .store(false, std::sync::atomic::Ordering::Release);
         self.store_control.release.notify_one();
     }
-    pub fn password_logins(&self) -> Vec<v1::PasswordLoginRequest> {
+    pub fn password_logins(&self) -> Vec<v2::PasswordLoginRequest> {
         lock(&self.password_logins).clone()
     }
-    pub fn bootstraps(&self) -> Vec<v1::BootstrapRequest> {
-        lock(&self.bootstraps).clone()
+    pub fn setups(&self) -> Vec<v2::SetupRequest> {
+        lock(&self.setups).clone()
     }
-    pub fn invites(&self) -> Vec<v1::RedeemInviteRequest> {
+    pub fn invites(&self) -> Vec<v2::RedeemInviteRequest> {
         lock(&self.invites).clone()
     }
-    pub fn keyset(&self) -> Option<v1::AccountKeyset> {
+    pub fn keyset(&self) -> Option<v2::Keyset> {
         lock(&self.keyset).clone()
-    }
-    pub fn grants(&self) -> Vec<v1::GrantCollectionKeyRequest> {
-        lock(&self.grants).clone()
     }
     pub fn relayed_frame_sizes(&self) -> Vec<usize> {
         lock(&self.relayed_frame_sizes).clone()
     }
-    pub fn relay_opens(&self) -> Vec<v1::RelayOpen> {
+    pub fn relay_opens(&self) -> Vec<v2::RelayOpen> {
         lock(&self.relay_opens).clone()
     }
 
@@ -127,8 +120,8 @@ impl Seen {
 
 struct Auth(Arc<Seen>);
 
-fn grant(name: &str) -> Response<v1::LoginGrant> {
-    Response::new(v1::LoginGrant {
+fn grant(name: &str) -> Response<v2::LoginGrant> {
+    Response::new(v2::LoginGrant {
         grant: name.to_owned(),
         expires_at_ms: i64::MAX,
     })
@@ -136,47 +129,46 @@ fn grant(name: &str) -> Response<v1::LoginGrant> {
 
 #[tonic::async_trait]
 impl AuthService for Auth {
-    async fn get_hub_info(&self, _: Request<v1::Empty>) -> Reply<v1::HubInfo> {
-        Ok(Response::new(v1::HubInfo {
+    async fn get_hub_info(&self, _: Request<v2::Empty>) -> Reply<v2::HubInfo> {
+        Ok(Response::new(v2::HubInfo {
             hub_id: HUB_ID.to_owned(),
             protocol_version: PROTOCOL_VERSION,
-            bootstrapped: true,
             password_login: true,
             web_url: WEB_URL.to_owned(),
-            ..v1::HubInfo::default()
+            ..v2::HubInfo::default()
         }))
     }
 
-    async fn bootstrap(&self, request: Request<v1::BootstrapRequest>) -> Reply<v1::LoginGrant> {
-        lock(&self.0.bootstraps).push(request.into_inner());
-        Ok(grant("bootstrap-grant"))
+    async fn setup(&self, request: Request<v2::SetupRequest>) -> Reply<v2::LoginGrant> {
+        lock(&self.0.setups).push(request.into_inner());
+        Ok(grant("setup-grant"))
     }
 
     async fn password_login(
         &self,
-        request: Request<v1::PasswordLoginRequest>,
-    ) -> Reply<v1::LoginGrant> {
+        request: Request<v2::PasswordLoginRequest>,
+    ) -> Reply<v2::LoginGrant> {
         lock(&self.0.password_logins).push(request.into_inner());
         Ok(grant("login-grant"))
     }
 
     async fn redeem_invite(
         &self,
-        request: Request<v1::RedeemInviteRequest>,
-    ) -> Reply<v1::LoginGrant> {
+        request: Request<v2::RedeemInviteRequest>,
+    ) -> Reply<v2::LoginGrant> {
         lock(&self.0.invites).push(request.into_inner());
         Ok(grant("invite-grant"))
     }
 
     async fn start_oidc_login(
         &self,
-        _: Request<v1::StartOidcLoginRequest>,
-    ) -> Reply<v1::StartOidcLoginResponse> {
+        _: Request<v2::StartOidcLoginRequest>,
+    ) -> Reply<v2::StartOidcLoginResponse> {
         Err(Status::unimplemented("oidc"))
     }
 
-    async fn complete_login(&self, _: Request<v1::CompleteLoginRequest>) -> Reply<v1::Tokens> {
-        Ok(Response::new(v1::Tokens {
+    async fn complete_login(&self, _: Request<v2::CompleteLoginRequest>) -> Reply<v2::Tokens> {
+        Ok(Response::new(v2::Tokens {
             access_token: "access".into(),
             access_expires_at_ms: i64::MAX,
             refresh_token: "refresh".into(),
@@ -186,7 +178,7 @@ impl AuthService for Auth {
         }))
     }
 
-    async fn refresh(&self, _: Request<v1::RefreshRequest>) -> Reply<v1::Tokens> {
+    async fn refresh(&self, _: Request<v2::RefreshRequest>) -> Reply<v2::Tokens> {
         Err(Status::unimplemented("refresh"))
     }
 }
@@ -211,13 +203,10 @@ fn no<T>() -> Reply<T> {
 }
 
 #[tonic::async_trait]
-impl StoreService for Store {
-    type WatchChangesStream = Pin<Box<dyn Stream<Item = Result<v1::ChangeHint, Status>> + Send>>;
+impl VaultService for Store {
+    type WatchChangesStream = Pin<Box<dyn Stream<Item = Result<v2::ChangeHint, Status>> + Send>>;
 
-    async fn get_account_keyset(
-        &self,
-        _: Request<v1::GetAccountKeysetRequest>,
-    ) -> Reply<v1::AccountKeyset> {
+    async fn get_keyset(&self, _: Request<v2::Empty>) -> Reply<v2::Keyset> {
         if self
             .0
             .store_control
@@ -234,24 +223,19 @@ impl StoreService for Store {
             .ok_or_else(|| Status::not_found("no keyset yet"))
     }
 
-    async fn put_account_keyset(
-        &self,
-        request: Request<v1::PutAccountKeysetRequest>,
-    ) -> Reply<v1::AccountKeyset> {
+    async fn put_keyset(&self, request: Request<v2::PutKeysetRequest>) -> Reply<v2::Keyset> {
         let r = request.into_inner();
         let mut slot = lock(&self.0.keyset);
         let current = slot.as_ref().map_or(0, |k| k.version);
         if r.expected_version != current {
             return Err(conflict(current));
         }
-        let stored = v1::AccountKeyset {
+        let stored = v2::Keyset {
             version: current + 1,
             kdf: r.kdf,
             salt: r.salt,
             wrapped_account_key: r.wrapped_account_key,
             updated_at_ms: 0,
-            public_key: r.public_key,
-            sealed_private_key: r.sealed_private_key,
             recovery_wrapped_account_key: r.recovery_wrapped_account_key,
             unlock_kind: r.unlock_kind,
         };
@@ -259,59 +243,39 @@ impl StoreService for Store {
         Ok(Response::new(stored))
     }
 
-    async fn grant_collection_key(
-        &self,
-        request: Request<v1::GrantCollectionKeyRequest>,
-    ) -> Reply<v1::Empty> {
-        lock(&self.0.grants).push(request.into_inner());
-        Ok(Response::new(v1::Empty {}))
-    }
-
     async fn create_collection(
         &self,
-        _: Request<v1::CreateCollectionRequest>,
-    ) -> Reply<v1::Collection> {
+        _: Request<v2::CreateCollectionRequest>,
+    ) -> Reply<v2::Collection> {
         no()
     }
     async fn list_collections(
         &self,
-        _: Request<v1::ListCollectionsRequest>,
-    ) -> Reply<v1::CollectionList> {
+        _: Request<v2::ListCollectionsRequest>,
+    ) -> Reply<v2::CollectionList> {
         no()
     }
-    async fn delete_collection(
-        &self,
-        _: Request<v1::DeleteCollectionRequest>,
-    ) -> Reply<v1::Collection> {
+    async fn delete_collection(&self, _: Request<v2::IdRequest>) -> Reply<v2::Collection> {
         no()
     }
-    async fn get_collection_key(
-        &self,
-        _: Request<v1::GetCollectionKeyRequest>,
-    ) -> Reply<v1::CollectionKey> {
+    async fn get_collection_key(&self, _: Request<v2::IdRequest>) -> Reply<v2::CollectionKey> {
         no()
     }
-    async fn list_collection_members(
-        &self,
-        _: Request<v1::ListCollectionMembersRequest>,
-    ) -> Reply<v1::CollectionMemberList> {
+    async fn put_object(&self, _: Request<v2::PutObjectRequest>) -> Reply<v2::ObjectVersion> {
         no()
     }
-    async fn put_object(&self, _: Request<v1::PutObjectRequest>) -> Reply<v1::ObjectVersion> {
+    async fn delete_object(&self, _: Request<v2::DeleteObjectRequest>) -> Reply<v2::ObjectVersion> {
         no()
     }
-    async fn delete_object(&self, _: Request<v1::DeleteObjectRequest>) -> Reply<v1::ObjectVersion> {
+    async fn get_object(&self, _: Request<v2::GetObjectRequest>) -> Reply<v2::StoredObject> {
         no()
     }
-    async fn get_object(&self, _: Request<v1::GetObjectRequest>) -> Reply<v1::StoredObject> {
-        no()
-    }
-    async fn list_changes(&self, _: Request<v1::ListChangesRequest>) -> Reply<v1::ChangeBatch> {
+    async fn list_changes(&self, _: Request<v2::ListChangesRequest>) -> Reply<v2::ChangeBatch> {
         no()
     }
     async fn watch_changes(
         &self,
-        _: Request<v1::WatchChangesRequest>,
+        _: Request<v2::WatchChangesRequest>,
     ) -> Reply<Self::WatchChangesStream> {
         no()
     }
@@ -324,25 +288,25 @@ impl StoreService for Store {
 struct Relay(Arc<Seen>);
 
 #[allow(clippy::unnecessary_wraps)]
-fn down(frame: relay_down::Frame) -> Result<v1::RelayDown, Status> {
-    Ok(v1::RelayDown { frame: Some(frame) })
+fn down(frame: relay_down::Frame) -> Result<v2::RelayDown, Status> {
+    Ok(v2::RelayDown { frame: Some(frame) })
 }
 
-fn data(bytes: &[u8]) -> Result<v1::RelayDown, Status> {
+fn data(bytes: &[u8]) -> Result<v2::RelayDown, Status> {
     down(relay_down::Frame::Data(bytes.to_vec()))
 }
 
-fn closed() -> Result<v1::RelayDown, Status> {
-    down(relay_down::Frame::Closed(v1::RelayClosed::default()))
+fn closed() -> Result<v2::RelayDown, Status> {
+    down(relay_down::Frame::Closed(v2::RelayClosed::default()))
 }
 
 #[tonic::async_trait]
 impl RelayService for Relay {
-    type OpenStream = ReceiverStream<Result<v1::RelayDown, Status>>;
+    type OpenStream = ReceiverStream<Result<v2::RelayDown, Status>>;
 
-    async fn open(&self, request: Request<Streaming<v1::RelayUp>>) -> Reply<Self::OpenStream> {
+    async fn open(&self, request: Request<Streaming<v2::RelayUp>>) -> Reply<Self::OpenStream> {
         let mut up = request.into_inner();
-        let Some(v1::RelayUp {
+        let Some(v2::RelayUp {
             frame: Some(relay_up::Frame::Open(open)),
         }) = up.message().await?
         else {
@@ -354,14 +318,14 @@ impl RelayService for Relay {
         tokio::spawn(async move {
             if open.host == "denied.test" {
                 let _ = tx
-                    .send(down(relay_down::Frame::Closed(v1::RelayClosed {
+                    .send(down(relay_down::Frame::Closed(v2::RelayClosed {
                         code: ErrorCode::RelayDenied.into(),
                         message: "the target is not allowed".into(),
                     })))
                     .await;
                 return;
             }
-            let opened = v1::RelayOpened {
+            let opened = v2::RelayOpened {
                 peer_ip: "192.0.2.7".into(),
             };
             let _ = tx.send(down(relay_down::Frame::Opened(opened))).await;
@@ -405,50 +369,21 @@ pub struct FakeHub {
     pub seen: Arc<Seen>,
     addr: SocketAddr,
     _stop: oneshot::Sender<()>,
-    cloud: Option<cloud::CloudHarness>,
-    pub agents: Arc<agents::AgentState>,
 }
 
 impl FakeHub {
-    /// A hub with the auth and store services, and the relay service when `relay` is set (one
-    /// without it answers `UNIMPLEMENTED`, like an older hub).
+    /// A hub with the auth and vault services, and the relay service when `relay` is set (one
+    /// without it answers `UNIMPLEMENTED`).
     pub async fn start(relay: bool) -> Self {
-        Self::start_services(relay, None, false).await
-    }
-
-    /// A hub that also offers the agents service.
-    pub async fn start_agents() -> Self {
-        Self::start_services(false, None, true).await
-    }
-
-    pub async fn start_cloud() -> Self {
-        Self::start_services(false, Some(cloud::CloudHarness::new()), false).await
-    }
-
-    pub fn cloud(&self) -> Option<&cloud::CloudHarness> {
-        self.cloud.as_ref()
-    }
-
-    async fn start_services(
-        relay: bool,
-        cloud: Option<cloud::CloudHarness>,
-        with_agents: bool,
-    ) -> Self {
         let seen = Arc::new(Seen::default());
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("address");
         let (stop, stopped) = oneshot::channel::<()>();
-        let server = Server::builder()
-            .add_service(AuthServiceServer::new(Auth(Arc::clone(&seen))))
-            .add_service(StoreServiceServer::new(Store(Arc::clone(&seen))));
         let relay_service = relay.then(|| RelayServiceServer::new(Relay(Arc::clone(&seen))));
-        let cloud_service = cloud.clone().map(cloud::service);
-        let agents = Arc::new(agents::AgentState::default());
-        let agent_service = with_agents.then(|| agents::service(Arc::clone(&agents)));
-        let router = server
-            .add_optional_service(relay_service)
-            .add_optional_service(cloud_service)
-            .add_optional_service(agent_service);
+        let router = Server::builder()
+            .add_service(AuthServiceServer::new(Auth(Arc::clone(&seen))))
+            .add_service(VaultServiceServer::new(Store(Arc::clone(&seen))))
+            .add_optional_service(relay_service);
         tokio::spawn(async move {
             let _ = router
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
@@ -460,8 +395,6 @@ impl FakeHub {
             seen,
             addr,
             _stop: stop,
-            cloud,
-            agents,
         }
     }
 

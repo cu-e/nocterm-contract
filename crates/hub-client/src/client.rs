@@ -3,31 +3,28 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use nocterm_hub_grpc::LINK_PATH;
-use nocterm_hub_grpc::audit_service_client::AuditServiceClient;
+use nocterm_hub_grpc::account_service_client::AccountServiceClient;
+use nocterm_hub_grpc::agent_service_client::AgentServiceClient;
 use nocterm_hub_grpc::auth_service_client::AuthServiceClient;
-use nocterm_hub_grpc::directory_service_client::DirectoryServiceClient;
-use nocterm_hub_grpc::fleet_service_client::FleetServiceClient;
-use nocterm_hub_grpc::link_service_client::LinkServiceClient;
-use nocterm_hub_grpc::session_service_client::SessionServiceClient;
-use nocterm_hub_grpc::store_service_client::StoreServiceClient;
+use nocterm_hub_grpc::chat_service_client::ChatServiceClient;
+use nocterm_hub_grpc::server_service_client::ServerServiceClient;
+use nocterm_hub_grpc::vault_service_client::VaultServiceClient;
 use nocterm_hub_model::PROTOCOL_VERSION;
-use nocterm_hub_model::pop::{login_message, refresh_message, request_message};
-use nocterm_hub_proto::v1::{self, LoginGrant, complete_login_request};
+use nocterm_hub_model::pop::{login_message, refresh_message};
+use nocterm_hub_proto::v2::{self, LoginGrant, complete_login_request};
 use nocterm_keys::{DeviceKey, LoginSecrets};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use zeroize::Zeroizing;
 
-use crate::cloud_calls::{Calls, CloudCallError, CloudFrames};
 use crate::signer::{Credentials, Session, Signer, now_ms};
 use crate::store::SessionStore;
 use crate::{ClientError, HubEndpoint};
-use nocterm_cloud_device::command::Publication;
-use nocterm_cloud_device::flow::{Input, ProbeRequest, StreamSelector};
 
 /// Refresh the access token when it expires within this window.
 const REFRESH_MARGIN_MS: i64 = 60_000;
+/// Largest message a vault or chat answer may carry (a page of history, a vault batch).
+const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 pub type Signed = InterceptedService<Channel, Signer>;
 
@@ -37,7 +34,7 @@ pub type Signed = InterceptedService<Channel, Signer>;
 pub struct DeviceInfo {
     /// The machine as the user knows it (a host name, "Work laptop").
     pub device: String,
-    /// The application signing in ("hubctl", "Nocterm").
+    /// The application signing in ("Nocterm").
     pub app: String,
     /// The operating system; [`DeviceInfo::new`] uses the one this build targets.
     pub platform: String,
@@ -79,7 +76,7 @@ pub struct SignedIn {
 #[derive(Debug, Clone)]
 pub struct HubClient {
     channel: Channel,
-    info: Arc<v1::HubInfo>,
+    info: Arc<v2::HubInfo>,
     credentials: Arc<Credentials>,
 }
 
@@ -92,7 +89,7 @@ impl HubClient {
     ) -> Result<Self, ClientError> {
         let channel = endpoint.connect().await?;
         let info = AuthServiceClient::new(channel.clone())
-            .get_hub_info(v1::Empty {})
+            .get_hub_info(v2::Empty {})
             .await?
             .into_inner();
         if info.protocol_version != PROTOCOL_VERSION {
@@ -101,7 +98,19 @@ impl HubClient {
                 client: PROTOCOL_VERSION,
             });
         }
-        let credentials = Arc::new(Credentials::new(info.hub_id.clone(), key, session));
+        // The offset is estimated without the round trip: it only has to stay well inside the
+        // hub's freshness window.
+        let clock_offset_ms = if info.server_time_ms > 0 {
+            info.server_time_ms - now_ms()
+        } else {
+            0
+        };
+        let credentials = Arc::new(Credentials::new(
+            info.hub_id.clone(),
+            key,
+            session,
+            clock_offset_ms,
+        ));
         Ok(Self {
             channel,
             info: Arc::new(info),
@@ -109,7 +118,7 @@ impl HubClient {
         })
     }
 
-    pub fn info(&self) -> &v1::HubInfo {
+    pub fn info(&self) -> &v2::HubInfo {
         &self.info
     }
 
@@ -123,43 +132,6 @@ impl HubClient {
         self.channel.clone()
     }
 
-    /// A fresh self-signed authority offer, requiring an independent retained pin to accept.
-    pub async fn cloud_offer(&self) -> Result<crate::cloud::CloudOffer, crate::cloud::CloudError> {
-        crate::cloud::CloudOffer::fetch(
-            self.channel.clone(),
-            self.credentials.clone(),
-            &self.info.hub_id,
-        )
-        .await
-    }
-
-    /// Guarded capability acquisition. The same owner follows actual request/
-    /// response bodies and the offer; acceptance can select a smaller resident owner.
-    pub async fn cloud_offer_with_residency(
-        &self,
-        residency: Arc<dyn Send + Sync>,
-    ) -> Result<crate::cloud::CloudOffer, crate::cloud::CloudError> {
-        crate::cloud::CloudOffer::fetch_with_residency(
-            self.channel.clone(),
-            self.credentials.clone(),
-            &self.info.hub_id,
-            residency,
-        )
-        .await
-    }
-    /// No token or HubInfo copy. This is a bounded metadata check, not a current
-    /// authorization/pin proof or an extension of the captured native membership.
-    pub fn require_cloud_metadata(&self) -> Result<(), ClientError> {
-        self.credentials
-            .require_current_cloud_metadata()
-            .map_err(Into::into)
-    }
-    /// Descriptive account/device IDs cloned under one credential read lock.
-    /// No bearer/refresh token is copied; invalid-sized identities are absent.
-    pub fn account_subject(&self) -> Option<(String, String)> {
-        self.credentials.account_subject()
-    }
-
     /// Current tokens, to persist after sign-in or refresh.
     pub fn session(&self) -> Option<Session> {
         self.credentials.session()
@@ -167,82 +139,6 @@ impl HubClient {
 
     pub fn sign_out(&self) {
         self.credentials.set_session(None);
-    }
-
-    /// The signed-in device as Cloud device flows name it: device id, device key, the current
-    /// access token's digest and the refresh expiry that caps every signed deadline.
-    pub fn cloud_device(&self) -> Result<nocterm_cloud_device::DeviceIdentity, ClientError> {
-        let session = self.credentials.session().ok_or(ClientError::NotSignedIn)?;
-        nocterm_cloud_device::DeviceIdentity::new(
-            &session.device_id,
-            self.credentials.key.public_key(),
-            &session.access_token,
-            session.refresh_expires_at_ms,
-        )
-        .map_err(ClientError::CloudDevice)
-    }
-
-    /// Signs a value a Cloud device flow asked for (`Effect::Sign`) with this device's key.
-    /// Only `nocterm-cloud-device` makes such values, from the canonical bytes of a head query
-    /// or command header it built, so this is no generic signing oracle; a value that names
-    /// another device key is refused.
-    pub fn sign_cloud(
-        &self,
-        value: &impl nocterm_cloud_device::flow::CloudSignable,
-    ) -> Result<[u8; 64], ClientError> {
-        if value.signer() != self.credentials.key.public_key() {
-            return Err(ClientError::CloudSigner);
-        }
-        Ok(self.credentials.key.sign(value.signing_message()))
-    }
-
-    /// `CloudService.Capabilities { nonce }` for `Effect::Capabilities`: the hub's claim and
-    /// signature as `Input::Capabilities`, for `TrustedHub::verify_capabilities` (bounded only).
-    pub async fn capabilities(&self, nonce: [u8; 16]) -> Result<Input, CloudCallError> {
-        Calls::of(self).await?.capabilities(nonce).await
-    }
-
-    /// `CloudService.ProbeHead` with the core's sealed query (`Effect::Probe`): the runner's
-    /// reply as `Input::ProbeReply`. Waits until the probe expires, at most
-    /// [`crate::MAX_PROBE_WAIT_MS`]; nobody answering is [`CloudCallError::Unanswered`].
-    pub async fn probe_head(&self, request: &ProbeRequest) -> Result<Input, CloudCallError> {
-        Calls::of(self).await?.probe_head(request, now_ms()).await
-    }
-
-    /// `CloudService.PublishOne` with exactly the publication's bytes (`Effect::Publish`): the
-    /// hub's receipt as `Input::Receipt`. A lost answer after sending is
-    /// `EffectFailure::Unknown`, so the core retries the same bytes or probes for a receipt.
-    pub async fn publish_one(&self, publication: &Publication) -> Result<Input, CloudCallError> {
-        Calls::of(self).await?.publish_one(publication).await
-    }
-
-    /// `CloudService.Replay` (`Effect::Replay`): the frames to hand to `Flow::frame`.
-    pub async fn replay(
-        &self,
-        selector: StreamSelector,
-        after_cursor: u64,
-        max_records: u32,
-        max_bytes: u32,
-    ) -> Result<CloudFrames, CloudCallError> {
-        Calls::of(self)
-            .await?
-            .replay(&selector, after_cursor, max_records, max_bytes)
-            .await
-    }
-
-    /// `CloudService.Watch` (`Effect::Watch`): `Frame::Hint`s until the hub ends the stream.
-    pub async fn watch(
-        &self,
-        selector: StreamSelector,
-        after_cursor: u64,
-    ) -> Result<CloudFrames, CloudCallError> {
-        Calls::of(self).await?.watch(&selector, after_cursor).await
-    }
-
-    /// `CloudService.RunnerStatus` (`Effect::RunnerStatus`): the runner's signed status as
-    /// `Input::RunnerStatus`, verified by the core.
-    pub async fn runner_status(&self, runner: [u8; 16]) -> Result<Input, CloudCallError> {
-        Calls::of(self).await?.runner_status(runner).await
     }
 
     /// Unauthenticated sign-in service.
@@ -257,66 +153,31 @@ impl HubClient {
         )
     }
 
-    pub fn directory(&self) -> DirectoryServiceClient<Signed> {
-        DirectoryServiceClient::new(self.signed())
+    pub fn account(&self) -> AccountServiceClient<Signed> {
+        AccountServiceClient::new(self.signed())
     }
 
-    pub fn store(&self) -> StoreServiceClient<Signed> {
-        StoreServiceClient::new(self.signed()).max_decoding_message_size(4 * 1024 * 1024)
+    pub fn vault(&self) -> VaultServiceClient<Signed> {
+        VaultServiceClient::new(self.signed()).max_decoding_message_size(MAX_MESSAGE_BYTES)
     }
 
-    /// A purpose-bound captured Store service. Caller request/decoded DTOs are
-    /// separately admitted and must retain the same owner through publication.
-    pub fn store_with_residency(
-        &self,
-        residency: Arc<dyn Send + Sync>,
-        max_message_bytes: usize,
-    ) -> Result<crate::ResidentStoreClient, ClientError> {
-        crate::resident_store::create(
-            self.channel.clone(),
-            self.credentials.clone(),
-            residency,
-            max_message_bytes,
-        )
+    pub fn agents(&self) -> AgentServiceClient<Signed> {
+        AgentServiceClient::new(self.signed())
     }
 
-    pub fn sessions(&self) -> SessionServiceClient<Signed> {
-        SessionServiceClient::new(self.signed())
+    pub fn servers(&self) -> ServerServiceClient<Signed> {
+        ServerServiceClient::new(self.signed())
     }
 
-    pub fn fleet(&self) -> FleetServiceClient<Signed> {
-        FleetServiceClient::new(self.signed())
+    pub fn chats(&self) -> ChatServiceClient<Signed> {
+        ChatServiceClient::new(self.signed()).max_decoding_message_size(MAX_MESSAGE_BYTES)
     }
 
-    pub fn audit(&self) -> AuditServiceClient<Signed> {
-        AuditServiceClient::new(self.signed())
-    }
-
-    /// The Link service; the stream authenticates with [`HubClient::link_hello`].
-    pub fn link(&self) -> LinkServiceClient<Channel> {
-        LinkServiceClient::new(self.channel.clone())
-    }
-
-    /// A signed first frame for a new Link.
-    pub fn link_hello(&self) -> Result<v1::LinkHello, ClientError> {
-        let session = self.credentials.session().ok_or(ClientError::NotSignedIn)?;
-        let nonce = crate::signer::nonce().map_err(ClientError::Randomness)?;
-        let ts = now_ms();
-        let message = request_message(
-            &self.info.hub_id,
-            LINK_PATH,
-            &session.access_token,
-            &nonce,
-            ts,
-        );
-        Ok(v1::LinkHello {
-            access_token: session.access_token,
-            device_id: session.device_id,
-            signed_at_ms: ts,
-            nonce,
-            proof: self.credentials.key.sign(&message).to_vec(),
-            protocol_version: PROTOCOL_VERSION,
-        })
+    /// Signs this device out on the hub (it is revoked there) and forgets its tokens.
+    pub async fn logout(&self) -> Result<(), ClientError> {
+        let result = self.account().logout(v2::Empty {}).await;
+        self.sign_out();
+        result.map(|_| ()).map_err(ClientError::from)
     }
 
     /// Redeems a login grant (or an OIDC code) and registers or re-binds this device.
@@ -330,16 +191,16 @@ impl HubClient {
             complete_login_request::Grant::Oidc(oidc) => oidc.code.clone(),
         };
         let public_key = self.credentials.key.public_key();
-        let ts = now_ms();
+        let ts = self.credentials.hub_now_ms();
         let proof = self.credentials.key.sign(&login_message(
             &self.info.hub_id,
             &signed_value,
             &public_key,
             ts,
         ));
-        let request = v1::CompleteLoginRequest {
+        let request = v2::CompleteLoginRequest {
             grant: Some(grant),
-            device: Some(v1::DeviceRegistration {
+            device: Some(v2::DeviceRegistration {
                 device_id: self
                     .credentials
                     .session()
@@ -348,7 +209,7 @@ impl HubClient {
                 name: device.display_name(),
                 platform: device.platform.clone(),
                 signing_public_key: public_key.to_vec(),
-                assurance: v1::Assurance::Software.into(),
+                assurance: v2::Assurance::Software.into(),
             }),
             proof: proof.to_vec(),
             signed_at_ms: ts,
@@ -388,20 +249,20 @@ impl HubClient {
         Ok(SignedIn { session, secrets })
     }
 
-    /// Creates the hub's first owner with the setup token and signs this device in.
+    /// Creates the hub's first administrator with the setup code and signs this device in.
     ///
-    /// `request.password` is the password the user typed. It is replaced by the derived
-    /// login value before anything is sent, and the user name is trimmed.
-    pub async fn bootstrap(
+    /// `request.auth` is the password the user typed. It is replaced by the derived login
+    /// value before anything is sent, and the user name is trimmed.
+    pub async fn setup(
         &self,
-        mut request: v1::BootstrapRequest,
+        mut request: v2::SetupRequest,
         device: &DeviceInfo,
     ) -> Result<SignedIn, ClientError> {
-        let password = Zeroizing::new(std::mem::take(&mut request.password));
+        let password = Zeroizing::new(std::mem::take(&mut request.auth));
         request.username = request.username.trim().to_owned();
         let secrets = self.derive_secrets(password, &request.username).await?;
-        request.password = secrets.auth().to_owned();
-        let grant = self.auth().bootstrap(request).await?.into_inner();
+        request.auth = secrets.auth().to_owned();
+        let grant = self.auth().setup(request).await?.into_inner();
         self.redeem(grant, secrets, device).await
     }
 
@@ -416,9 +277,9 @@ impl HubClient {
         let secrets = self
             .derive_secrets(Zeroizing::new(password.to_owned()), username)
             .await?;
-        let request = v1::PasswordLoginRequest {
+        let request = v2::PasswordLoginRequest {
             username: username.to_owned(),
-            password: secrets.auth().to_owned(),
+            auth: secrets.auth().to_owned(),
         };
         let grant = self.auth().password_login(request).await?.into_inner();
         self.redeem(grant, secrets, device).await
@@ -426,17 +287,17 @@ impl HubClient {
 
     /// Creates a local account from an invite and signs this device in.
     ///
-    /// `request.password` is the password the user typed; like [`HubClient::bootstrap`], it
-    /// is replaced by the derived login value before anything is sent.
+    /// `request.auth` is the password the user typed; like [`HubClient::setup`], it is
+    /// replaced by the derived login value before anything is sent.
     pub async fn redeem_invite(
         &self,
-        mut request: v1::RedeemInviteRequest,
+        mut request: v2::RedeemInviteRequest,
         device: &DeviceInfo,
     ) -> Result<SignedIn, ClientError> {
-        let password = Zeroizing::new(std::mem::take(&mut request.password));
+        let password = Zeroizing::new(std::mem::take(&mut request.auth));
         request.username = request.username.trim().to_owned();
         let secrets = self.derive_secrets(password, &request.username).await?;
-        request.password = secrets.auth().to_owned();
+        request.auth = secrets.auth().to_owned();
         let grant = self.auth().redeem_invite(request).await?.into_inner();
         self.redeem(grant, secrets, device).await
     }
@@ -489,9 +350,9 @@ impl HubClient {
         {
             return Err(ClientError::SessionReplaced);
         }
-        self.credentials
-            .require_generation(generation)
-            .map_err(|_| ClientError::SessionReplaced)?;
+        if self.credentials.snapshot().map(|(current, _)| current) != Some(generation) {
+            return Err(ClientError::SessionReplaced);
+        }
         Ok(Some(lock))
     }
 
@@ -501,13 +362,13 @@ impl HubClient {
             .credentials
             .snapshot()
             .ok_or(ClientError::NotSignedIn)?;
-        let ts = now_ms();
+        let ts = self.credentials.hub_now_ms();
         let proof = self.credentials.key.sign(&refresh_message(
             &self.info.hub_id,
             &session.refresh_token,
             ts,
         ));
-        let request = v1::RefreshRequest {
+        let request = v2::RefreshRequest {
             refresh_token: session.refresh_token,
             device_id: session.device_id,
             proof: proof.to_vec(),
@@ -530,8 +391,8 @@ mod tests {
 
     #[test]
     fn a_device_is_named_by_its_caller() {
-        let device = DeviceInfo::new("laptop", "hubctl");
-        assert_eq!(device.display_name(), "hubctl on laptop");
+        let device = DeviceInfo::new("laptop", "Nocterm");
+        assert_eq!(device.display_name(), "Nocterm on laptop");
         assert_eq!(device.platform, std::env::consts::OS);
         assert_eq!(DeviceInfo::new("", "Nocterm").display_name(), "Nocterm");
         assert_eq!(DeviceInfo::new("laptop", " ").display_name(), "laptop");

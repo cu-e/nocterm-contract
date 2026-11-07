@@ -71,7 +71,7 @@ macro_rules! uuid_id {
 }
 
 uuid_id!(
-    /// A person (or service account) known to one hub.
+    /// A person known to one hub.
     AccountId,
     "account"
 );
@@ -79,26 +79,6 @@ uuid_id!(
     /// One installation of a client registered to an account.
     DeviceId,
     "device"
-);
-uuid_id!(
-    /// An organization: the unit of membership, nodes and shared data.
-    OrgId,
-    "org"
-);
-uuid_id!(
-    /// An execution node that runs terminal sessions and agents.
-    NodeId,
-    "node"
-);
-uuid_id!(
-    /// A terminal session owned by a node.
-    SessionId,
-    "session"
-);
-uuid_id!(
-    /// A stable attachment of one client view to a session; survives reconnects.
-    AttachId,
-    "attach"
 );
 uuid_id!(
     /// A collection of end-to-end encrypted objects.
@@ -110,26 +90,40 @@ uuid_id!(
     ObjectId,
     "object"
 );
-
 uuid_id!(
-    /// A managed agent definition shown to accounts (personal, organization or server scope).
+    /// A model provider: an API endpoint with its key.
+    ProviderId,
+    "provider"
+);
+uuid_id!(
+    /// An agent configuration of an account.
     AgentId,
     "agent"
 );
 uuid_id!(
-    /// A pool of agent hosts with one pinned key pair.
-    PoolId,
-    "pool"
+    /// An SSH server connected to an account's agents.
+    ServerId,
+    "server"
 );
 uuid_id!(
-    /// One agent host (a node with the agents capability) inside a pool.
-    HostId,
-    "host"
+    /// A chat with an agent.
+    ChatId,
+    "chat"
 );
 uuid_id!(
-    /// One seat: the persistent runner identity of one account for one agent.
-    InstanceId,
-    "instance"
+    /// One run of an agent in a chat.
+    RunId,
+    "run"
+);
+uuid_id!(
+    /// A file attached to a chat.
+    AttachmentId,
+    "attachment"
+);
+uuid_id!(
+    /// An agent worker registered to the hub.
+    WorkerId,
+    "worker"
 );
 
 #[cfg(test)]
@@ -138,8 +132,8 @@ mod tests {
 
     #[test]
     fn identifiers_round_trip_through_text() {
-        let id = SessionId::new();
-        let parsed: SessionId = id.to_string().parse().unwrap();
+        let id = ChatId::new();
+        let parsed: ChatId = id.to_string().parse().unwrap();
         assert_eq!(id, parsed);
     }
 

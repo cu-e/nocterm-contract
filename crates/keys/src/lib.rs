@@ -2,74 +2,40 @@
 //!
 //! Owns: device signing keys (Ed25519) used for proof of possession; the derivation of the
 //! login value the hub verifies and of the unlock key it never sees (`login-v1`, from one
-//! password); the recovery key; the key hierarchy unlock key → account key → collection key
-//! and the sealed material of a first account keyset (`create_keyset`, shared by native and
-//! web clients);
-//! the account's X25519 pair with collection key grants authenticated by the granter's key; the
-//! pins (trust on first use) of the public keys of other accounts; account-authenticated,
-//! device-signed Cloud command boxes with a pinned runner, its separately
-//! restorable encryption identity; and the sealed
-//! formats of keys, names and objects (XChaCha20-Poly1305 with purpose-bound associated data).
-//! Also owns per-chat key wraps/grants, runner-signed encrypted events/snapshots,
-//! and purpose-separated encryption of native journal slots. Read-only head probes
-//! have separate signed purposes and account-key replies, independent of ChatKey.
-//! Chat summaries are runner-signed and sealed to the account key (purpose 22), so a device
-//! lists chats without a chat key or replay.
-//! Native head cells use a distinct runner-derived key and finite purpose18 blob.
-//! Provider credentials use a separate non-restorable boot recipient with finite
-//! stable-runner attestation; opening returns a zeroizing secret owner.
-//! Also owns the managed-agent formats ([`agents`]): definitions sealed to a pool key, broker
-//! virtual tokens and broker-sealed secrets, SSH CA grants and the `agent_ssh_trust` rules, and
-//! the account SSH CA ([`agents::ssh_ca`]): its `agent_ssh_trust` CA document, per-server
-//! principals and `authorized_keys` lines, CA-signed chat bindings and the OpenSSH user
-//! certificates it issues (at most 24 hours, `source-address` mandatory, `permit-pty` only).
+//! password); the recovery key; the key hierarchy unlock key → account key → collection key,
+//! the sealed material of a first account keyset (`create_keyset`, shared by native and web
+//! clients) and the sealed formats of keys, names and objects (XChaCha20-Poly1305 with
+//! purpose-bound associated data).
 //! Does not own: storage of keys on the device, the network, or any user interface.
 //! Ports used/provided: none. Settings: none. Globals: none.
 //! Invariants:
-//! - the hub never receives a key that opens user data: only sealed keys and ciphertext;
+//! - the hub never receives a key that opens vault data: only sealed keys and ciphertext;
 //! - every sealed value binds its purpose and owner identifiers as associated data, so a
 //!   ciphertext moved to another object, collection or account fails to open;
 //! - KDF parameters outside [`KdfParams::MINIMUM`]..=[`KdfParams::MAXIMUM`] are rejected, so a
 //!   hostile hub can neither downgrade them nor make the client allocate or compute without
 //!   bound;
 //! - the unlock key and the master key behind it never leave the device: the hub gets only the
-//!   independent `auth` output, and each HKDF output has its own `info` label. `auth` still lets
-//!   the hub test password guesses offline, so the unlock key is as strong against the hub as
-//!   the password is: see [`LoginSecrets`];
-//! - a grant opens only under the public key of the account that made it, and that key is one the
-//!   client pinned: the hub can swap a key only before the first pin;
+//!   independent `auth` output (see [`LoginSecrets`] for what that still allows);
 //! - the recovery key is 128 random bits shown once and used only through HKDF;
-//! - secrets are zeroized on drop and never printed by `Debug`;
-//! - the SSH CA signs only chat bindings that name it and certificates that pass
-//!   [`agents::ssh_ca::CertificateSpec::validate`]; a hub never holds its seed;
-//! - a Cloud command binds its exact expected account/runner keys and route; its opaque
-//!   payload still requires semantic validation and durable admission before effects.
-//!
-//! The control plane must never depend on this crate (blindness hygiene, checked by xtask).
+//! - secrets are zeroized on drop and never printed by `Debug`.
 
-pub mod agents;
-mod authenticated_box;
-pub mod cloud;
 mod device;
 mod kdf;
 mod keyset;
 mod login;
-mod pins;
 mod random;
 mod recovery;
 mod seal;
-mod sealed;
 
 pub use device::DeviceKey;
 pub use kdf::{KdfParams, KdfParseError};
 pub use keyset::{CreatedKeyset, KeysetMaterial, KeysetMaterialError, create_keyset, seal_keyset};
 pub use login::{LoginError, LoginSecrets, MIN_PASSWORD_CHARS, UnlockKdf, UnlockKey, UnlockSource};
 pub use nocterm_hub_model::pop::{SignatureError, verify as verify_signature};
-pub use pins::{PinError, PinnedKeys, TrustedKey};
 pub use random::{random_bytes, random_token};
 pub use recovery::{RecoveryKey, RecoveryKeyParseError};
 pub use seal::{AccountKey, CollectionKey, OpenError, SealError};
-pub use sealed::{AccountKeyPair, PublicKey, PublicKeyError};
 
 /// Errors from key derivation and sealing.
 #[derive(Debug, thiserror::Error)]
