@@ -6,8 +6,9 @@
 //! password), reads the account's saved server profiles: opens a collection key
 //! (`WebAccount.openCollection`) and its profile objects (`WebCollectionKey.openObject`), and
 //! saves a server the person connected in the browser: creates a collection
-//! (`WebAccount.newCollection`) and seals its profile and the credential the person typed
-//! (`WebCollectionKey.sealObject`).
+//! (`WebAccount.newCollection`), seals its profile (`WebCollectionKey.sealObject`) and the
+//! password or private key the person typed as a native vault record
+//! (`WebCollectionKey.sealPassword`, `WebCollectionKey.sealSshKey`).
 //! All cryptography is `nocterm-keys`; this crate only converts text and bytes at the
 //! JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
@@ -15,9 +16,10 @@
 //! Invariants: secrets never cross into JavaScript, except the recovery key of a new keyset,
 //! which the page shows once, and the plaintext of profile objects (kind `profile`, which hold
 //! no secrets); the account key, collection keys and objects of any other kind (credentials)
-//! stay inside WebAssembly; a credential crosses only inward, typed by the person, to be
-//! sealed, and is never opened here; errors are typed here and become strings only at the
-//! boundary.
+//! stay inside WebAssembly; a credential crosses only inward, typed by the person, and its
+//! record is built and sealed here, so its secret (a private key without its passphrase
+//! included) never returns to JavaScript and is never opened here; errors are typed here and
+//! become strings only at the boundary.
 
 use nocterm_keys::{
     AccountKey, CreatedKeyset, KeyError, KeysetMaterialError, LoginError, LoginSecrets, OpenError,
@@ -26,8 +28,10 @@ use nocterm_keys::{
 use wasm_bindgen::prelude::*;
 
 mod collection;
+mod credential;
 
 pub use collection::{WebCollectionKey, WebNewCollection};
+pub use credential::{KeyRefused, WebSealedKey};
 
 /// What can go wrong at the boundary.
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +60,12 @@ pub enum WebError {
     /// A key or object could not be sealed.
     #[error(transparent)]
     Seal(#[from] SealError),
+    /// A private key the person pasted is not one native clients sign in with.
+    #[error(transparent)]
+    SshKey(#[from] KeyRefused),
+    /// A credential record could not be encoded.
+    #[error("the credential could not be encoded")]
+    Encode(#[from] serde_json::Error),
 }
 
 /// An unlocked account: its account key, which opens the account's collection keys. It never

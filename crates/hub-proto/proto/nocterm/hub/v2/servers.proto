@@ -9,8 +9,9 @@ import "nocterm/hub/v2/common.proto";
 // Every account has one agent key (Ed25519). A server is connected to agents when its
 // `authorized_keys` holds the key's line: the desktop app writes it over its own session and
 // calls `AddServer`; the web panel lets a worker write it once with credentials the person
-// types (`ProbeServer`, then `ConnectServer`), which the hub never stores. Agents verify the
-// recorded host key on every connection.
+// types (`ProbeServer`, then `ConnectServer`), which the hub never stores. Clients keep that
+// credential for the person in the account's vault, sealed end to end, as for any saved server.
+// Agents verify the recorded host key on every connection.
 service ServerService {
   // The account's agent key; created on first use.
   rpc GetAgentKey(Empty) returns (AgentKey);

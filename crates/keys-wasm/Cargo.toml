@@ -13,8 +13,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 nocterm-keys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ssh-key.workspace = true
 thiserror.workspace = true
 wasm-bindgen.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }

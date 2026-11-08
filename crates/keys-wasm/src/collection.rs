@@ -1,7 +1,7 @@
 //! The account's collections as the web panel uses them: collection keys opened or created
-//! inside WebAssembly, the profile objects sealed with them, and new objects the browser seals.
-//! The collection key never crosses into JavaScript; only objects of a readable kind are
-//! opened, and only objects of a sealable kind are sealed.
+//! inside WebAssembly, the profile objects sealed with them, and the profiles the browser seals.
+//! The collection key never crosses into JavaScript; only profiles are opened or sealed from
+//! plaintext JavaScript gives, and credentials are built and sealed in `credential`.
 
 use nocterm_keys::CollectionKey;
 use wasm_bindgen::prelude::*;
@@ -12,9 +12,9 @@ use crate::{WebAccount, WebError};
 /// Credentials and every other kind stay sealed.
 const READABLE_KINDS: &[&str] = &["profile"];
 
-/// Kinds of object the browser seals: a saved server's profile, and the credential the person
-/// typed in this browser for it. A credential is sealed here and never opened here.
-const SEALABLE_KINDS: &[&str] = &["profile", "credential"];
+/// Kinds of object the browser seals from plaintext JavaScript gives: a saved server's profile.
+/// A credential's record is built inside WebAssembly (`sealPassword`, `sealSshKey`).
+const SEALABLE_KINDS: &[&str] = &["profile"];
 
 /// A collection the browser creates: the values `CreateCollection` stores. Open its key with
 /// `WebAccount.openCollection` to seal objects into it.
@@ -44,8 +44,8 @@ impl WebNewCollection {
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct WebCollectionKey {
-    collection_id: String,
-    key: CollectionKey,
+    pub(crate) collection_id: String,
+    pub(crate) key: CollectionKey,
 }
 
 #[wasm_bindgen]
@@ -106,7 +106,7 @@ impl WebCollectionKey {
     }
 
     /// Seals a new version of one object of the collection, bound to its identifier and kind,
-    /// for `PutObject`. Only profiles and credentials (`kind = "credential"`) are sealed.
+    /// for `PutObject`. Only profiles (`kind = "profile"`) are sealed this way.
     #[wasm_bindgen(js_name = sealObject)]
     pub fn seal_object(
         &self,
@@ -186,19 +186,22 @@ mod tests {
             collection_id: "col".into(),
             key: CollectionKey::open(&web.account, "col", &created.wrapped_key).unwrap(),
         };
-        let sealed = collection.sealed("sec", "credential", b"pw").unwrap();
-        let opened = native
-            .open_object("col", "sec", "credential", &sealed)
+        let sealed = collection.sealed("p", "profile", b"{}").unwrap();
+        let opened = native.open_object("col", "p", "profile", &sealed).unwrap();
+        assert_eq!(opened.as_slice(), b"{}");
+        let credential = collection
+            .password("sec", "h.example", 22, "u", "pw")
             .unwrap();
-        assert_eq!(opened.as_slice(), b"pw");
-        // The browser still never opens the credential it sealed.
+        // The browser never opens the credential it sealed, nor seals one JavaScript wrote.
         assert!(matches!(
-            collection.object("sec", "credential", &sealed),
+            collection.object("sec", "credential", &credential),
             Err(WebError::SealedKind(_))
         ));
-        assert!(matches!(
-            collection.sealed("x", "device", b"{}"),
-            Err(WebError::UnsealableKind(_))
-        ));
+        for kind in ["credential", "device"] {
+            assert!(matches!(
+                collection.sealed("x", kind, b"{}"),
+                Err(WebError::UnsealableKind(_))
+            ));
+        }
     }
 }
