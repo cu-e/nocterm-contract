@@ -120,3 +120,71 @@ fn a_key_native_clients_refuse_is_not_kept() {
         KeyRefused::Malformed(_)
     ));
 }
+
+#[test]
+fn a_records_name_and_binding_are_read_and_changed_while_its_secret_stays() {
+    let (web, native) = collection();
+    let sealed = web.named("c1", " Office ", "shared").unwrap();
+    let info: Value = serde_json::from_str(&web.info("c1", &sealed).unwrap()).unwrap();
+    assert_eq!(
+        info,
+        json!({"label": "Office", "binding": {"kind": "password", "targets": []}}),
+        "the secret is not part of it"
+    );
+
+    let one = r#"[{"host": "a.example", "user": "ops"}]"#;
+    let attached = web.updated("c1", &sealed, None, Some(one)).unwrap();
+    let record = opened(&native, "c1", &attached);
+    assert_eq!(
+        record["binding"],
+        json!({"kind": "password", "target": {"host": "a.example", "user": "ops"}}),
+        "one address is written as native clients always did"
+    );
+    assert_eq!(record["secret"], "shared");
+
+    let two = r#"[{"host": "a.example", "user": "ops"}, {"host": "b.example", "port": 2222, "user": "ops"}, {"host": "a.example", "user": "ops"}]"#;
+    let shared = web
+        .updated("c1", &attached, Some("Office VPN"), Some(two))
+        .unwrap();
+    let record = opened(&native, "c1", &shared);
+    assert_eq!(record["label"], "Office VPN");
+    assert_eq!(record["binding"]["targets"].as_array().unwrap().len(), 2);
+    assert_eq!(record["secret"], "shared");
+    let renamed = web.updated("c1", &shared, Some("VPN"), None).unwrap();
+    assert_eq!(
+        opened(&native, "c1", &renamed)["binding"],
+        record["binding"]
+    );
+}
+
+#[test]
+fn a_key_keeps_its_binding_and_a_name_or_address_must_make_sense() {
+    let (web, _) = collection();
+    let key = web.ssh_key("k1", "prod", ED25519, None).unwrap();
+    let one = r#"[{"host": "a.example", "user": "ops"}]"#;
+    assert!(matches!(
+        web.updated("k1", &key.ciphertext, None, Some(one)),
+        Err(WebError::Credential(CredentialRefused::NotAPassword))
+    ));
+    assert!(
+        web.updated("k1", &key.ciphertext, Some("laptop"), None)
+            .is_ok()
+    );
+    assert!(matches!(
+        web.updated("k1", &key.ciphertext, Some("  "), None),
+        Err(WebError::Credential(CredentialRefused::InvalidName))
+    ));
+    let sealed = web.named("c1", "Office", "pw").unwrap();
+    assert!(matches!(
+        web.updated(
+            "c1",
+            &sealed,
+            None,
+            Some(r#"[{"host": "", "user": "ops"}]"#)
+        ),
+        Err(WebError::Credential(CredentialRefused::InvalidAddress))
+    ));
+    assert!(web.updated("c1", &sealed, None, Some("[]")).is_ok());
+    // A record of another object does not open as this one.
+    assert!(web.info("other", &sealed).is_err());
+}

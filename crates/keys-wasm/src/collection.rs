@@ -8,8 +8,9 @@ use wasm_bindgen::prelude::*;
 
 use crate::{WebAccount, WebError};
 
-/// Kinds of object the browser opens: saved server profiles, which hold no secrets.
-/// Credentials and every other kind stay sealed.
+/// Kinds of object the browser opens for JavaScript: saved server profiles, which hold no
+/// secrets. A credential is opened only inside WebAssembly (`credential`), which gives its name
+/// and binding and never its secret; every other kind stays sealed.
 const READABLE_KINDS: &[&str] = &["profile"];
 
 /// Kinds of object the browser seals from plaintext JavaScript gives: a saved server's profile.

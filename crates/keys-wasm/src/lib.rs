@@ -8,7 +8,10 @@
 //! saves a server the person connected in the browser: creates a collection
 //! (`WebAccount.newCollection`), seals its profile (`WebCollectionKey.sealObject`) and the
 //! password or private key the person typed as a native vault record
-//! (`WebCollectionKey.sealPassword`, `WebCollectionKey.sealSshKey`).
+//! (`WebCollectionKey.sealPassword`, `WebCollectionKey.sealSshKey`); and manages the account's
+//! saved credentials: reads a record's name and binding without its secret
+//! (`openCredentialInfo`), saves a password under a name (`sealNamedPassword`) and renames a
+//! record or gives a password other addresses with the same secret (`updateCredential`).
 //! All cryptography is `nocterm-keys`; this crate only converts text and bytes at the
 //! JavaScript boundary.
 //! Does not own: key storage, the network, or any user interface.
@@ -18,7 +21,8 @@
 //! no secrets); the account key, collection keys and objects of any other kind (credentials)
 //! stay inside WebAssembly; a credential crosses only inward, typed by the person, and its
 //! record is built and sealed here, so its secret (a private key without its passphrase
-//! included) never returns to JavaScript and is never opened here; errors are typed here and
+//! included) never returns to JavaScript; a stored record is opened here only to give its name
+//! and binding or to seal it again, and its secret never leaves WebAssembly; errors are typed here and
 //! become strings only at the boundary.
 
 use nocterm_keys::{
@@ -31,7 +35,7 @@ mod collection;
 mod credential;
 
 pub use collection::{WebCollectionKey, WebNewCollection};
-pub use credential::{KeyRefused, WebSealedKey};
+pub use credential::{CredentialRefused, KeyRefused, WebSealedKey};
 
 /// What can go wrong at the boundary.
 #[derive(Debug, thiserror::Error)]
@@ -63,8 +67,11 @@ pub enum WebError {
     /// A private key the person pasted is not one native clients sign in with.
     #[error(transparent)]
     SshKey(#[from] KeyRefused),
-    /// A credential record could not be encoded.
-    #[error("the credential could not be encoded")]
+    /// A credential cannot be changed so.
+    #[error(transparent)]
+    Credential(#[from] CredentialRefused),
+    /// A credential record could not be encoded or read.
+    #[error("the credential could not be encoded or read")]
     Encode(#[from] serde_json::Error),
 }
 

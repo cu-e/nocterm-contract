@@ -8,7 +8,10 @@
 //! 22); a private key to the canonical text of its public half
 //! (`{"kind":"private_key","public_key":"<algorithm> <base64>"}`), and its secret is the key's
 //! OpenSSH text without a passphrase, which the vault's encryption replaces. Keys follow the
-//! native rules (`nocterm-ssh-keys`): Ed25519, ECDSA, and RSA of at least 2048 bits.
+//! native rules (`nocterm-ssh-keys`): Ed25519, ECDSA, and RSA of at least 2048 bits. A password
+//! saved under a name may sign in to several addresses, or none yet
+//! (`{"kind":"password","targets":[…]}`); [`edit`] reads a record's name and binding and changes
+//! them while its secret stays inside WebAssembly.
 
 use serde::Serialize;
 use ssh_key::{Algorithm, HashAlg, LineEnding, PrivateKey};
@@ -51,8 +54,18 @@ struct Record<'a> {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Binding<'a> {
-    Password { target: Target<'a> },
-    PrivateKey { public_key: &'a str },
+    /// A password for one address, written as native clients write it.
+    Password {
+        target: Target<'a>,
+    },
+    /// A password saved under a name for no address or several.
+    #[serde(rename = "password")]
+    Shared {
+        targets: Vec<Target<'a>>,
+    },
+    PrivateKey {
+        public_key: &'a str,
+    },
 }
 
 #[derive(Serialize)]
@@ -233,6 +246,9 @@ fn accepted(text: &str, passphrase: Option<&str>) -> Result<PrivateKey, KeyRefus
         }),
     }
 }
+
+mod edit;
+pub use edit::CredentialRefused;
 
 #[cfg(test)]
 mod tests;
