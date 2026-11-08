@@ -263,10 +263,22 @@ enum RunStatus {
 }
 
 message Usage {
+  // Prompt tokens of every model call of the run, cached ones included.
   uint64 input_tokens = 1;
   uint64 output_tokens = 2;
   // Cost in millionths of the provider's currency, when known.
   uint64 cost_micros = 3;
+  // Of `input_tokens`, those read from the provider's prompt cache.
+  uint64 cache_read_tokens = 4;
+  // Of `input_tokens`, those written to the provider's prompt cache.
+  uint64 cache_write_tokens = 5;
+  // Of `output_tokens`, those the model spent reasoning.
+  uint64 reasoning_tokens = 6;
+  // What the latest model call of the chat held: its prompt and its answer. How full the
+  // context is; 0 before the first call.
+  uint64 context_tokens = 7;
+  // The model's context window, when its provider lists it; 0 when unknown.
+  uint64 context_window = 8;
 }
 
 message RunEnded {
